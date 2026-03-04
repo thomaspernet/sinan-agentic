@@ -1,4 +1,4 @@
-"""Shared instructions and templates.
+"""Shared instruction templates.
 
 Store reusable instruction templates here.
 """
