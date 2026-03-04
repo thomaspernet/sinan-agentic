@@ -12,6 +12,7 @@ A framework for building AI agents using the OpenAI Agents SDK. Fork this reposi
 - **RunHooks** - Track tool calls in real time via `StreamingRunHooks`
 - **Session** - In-memory or SQLite-backed conversation history
 - **Dynamic Context** - Pass runtime data to instructions and tools
+- **InstructionBuilder** - Base class for section-based instruction assembly (persona, context, steps, rules, output)
 - **Output Models** - `ToolOutput` and `ChatResponse` dataclasses
 
 ## Installation
@@ -130,6 +131,42 @@ result = await Runner.run(agent, "Hello!", context=UserContext(user_name="Thomas
 result = await chat("Hello!", "my_agent", session, context=UserContext(user_name="Thomas"))
 ```
 
+## InstructionBuilder
+
+Build agent system instructions with a consistent section pattern instead of ad-hoc string concatenation. Subclass `InstructionBuilder`, override the sections you need, and skip the rest.
+
+```python
+from agents_core import InstructionBuilder, AgentDefinition, register_agent
+
+class MyAgentBuilder(InstructionBuilder):
+    def __init__(self, context, agent_def):
+        super().__init__(context, agent_def)
+        self._config = self._ctx_attr("my_config", {})
+
+    def persona(self):
+        return self.format_persona("data analyst", self._config.get("persona"))
+
+    def steps(self):
+        return self.format_steps(["Load the dataset.", "Analyze trends.", "Produce output."])
+
+    def rules(self):
+        return self.format_rules(["Do not fabricate data.", "Cite sources."])
+
+    def output_format(self):
+        return 'Output: {"analysis": "...", "confidence": 0.95}'
+
+register_agent(AgentDefinition(
+    name="analyst",
+    description="Analyzes data",
+    instructions=MyAgentBuilder.callable(),  # (context, agent_def) -> str
+    tools=["read_data"],
+))
+```
+
+`build()` assembles sections in order (persona → context → steps → rules → output), skips any that return `None`, and joins with double newlines. Override `sections()` to reorder, or `extra_sections()` to append additional `(header, body)` blocks.
+
+For agents with fundamentally different instruction paths (e.g., surface vs deep extraction), use a shared private base with concrete subclasses and a dispatcher function — see `agents_core/instructions/builder.py` docstring for details.
+
 ## Session Persistence
 
 ```python
@@ -167,6 +204,8 @@ response.to_dict()  # {"success": True, "response": "...", ...}
 agents_core/
 ├── __init__.py              # Main exports
 ├── orchestrator.py          # Multi-agent orchestration
+├── instructions/
+│   └── builder.py           # InstructionBuilder base class
 ├── registry/
 │   ├── agent_registry.py    # AgentDefinition + registry
 │   ├── agent_factory.py     # create_agent_from_registry()
