@@ -16,6 +16,7 @@ A framework for building AI agents using the OpenAI Agents SDK. Fork this reposi
 - **Output Models** - `ToolOutput` and `ChatResponse` dataclasses
 - **Agent Catalog** - Load agent definitions (model, description, tools) from a YAML file
 - **Knowledge Store** - Inject domain knowledge from YAML files into agent system prompts
+- **Structured Agent-as-Tool** - Typed input schemas and structured error handling for sub-agent calls
 
 ## Installation
 
@@ -357,6 +358,65 @@ register_agent(AgentDefinition(
 
 Override `domain_knowledge()` in your builder subclass for custom behavior.
 
+## Structured Agent-as-Tool
+
+When using sub-agents via the SDK's `as_tool()` pattern, you can enforce structured input and get structured error responses instead of freeform text.
+
+### Structured input parameters
+
+Define a dataclass for the sub-agent's input schema. The parent LLM is forced to fill in the required fields before calling the sub-agent.
+
+```python
+from dataclasses import dataclass
+from agents_core import AgentDefinition, register_agent
+
+@dataclass
+class ActionRequest:
+    action: str        # exact tool name to execute
+    target_uuid: str   # primary target UUID
+    payload: str = ""  # additional params as JSON
+
+register_agent(AgentDefinition(
+    name="action_agent",
+    description="Execute write actions on the knowledge base.",
+    instructions="You are a write-action executor.",
+    tools=["create_page", "update_page", "delete_page"],
+    as_tool_parameters=ActionRequest,  # enforced input schema
+))
+```
+
+When the parent agent calls `action_agent`, the LLM must provide `action`, `target_uuid`, and optionally `payload` — no more ambiguous freeform text.
+
+### Structured error handling
+
+Sub-agent failures automatically return structured JSON instead of generic error strings:
+
+```json
+{
+    "status": "error",
+    "error_type": "ValueError",
+    "message": "page_uuid is required",
+    "retry_hint": "A required parameter is missing. Check your context for available UUIDs and provide all required fields."
+}
+```
+
+This is handled by `structured_tool_error()`, which is automatically wired into all agent-as-tool calls via `BaseAgentRunner`. Retry hints are generated based on error type:
+
+| Error pattern | Retry hint |
+|---------------|------------|
+| "Max turns" in message | Simplify the request or break into smaller steps |
+| "not found" in message | Verify the UUID exists in your context |
+| "required" in message | Check context for available UUIDs and provide all required fields |
+| Other | Review the error message and retry with corrected input |
+
+### How it works
+
+`BaseAgentRunner._build_tools()` automatically:
+1. Passes `as_tool_parameters` to `agent.as_tool(parameters=...)` when defined
+2. Passes `structured_tool_error` as `failure_error_function` for all agent-as-tool calls
+
+No manual wiring needed — just set `as_tool_parameters` on your `AgentDefinition`.
+
 ## Session Persistence
 
 ```python
@@ -394,6 +454,9 @@ response.to_dict()  # {"success": True, "response": "...", ...}
 agents_core/
 ├── __init__.py              # Main exports
 ├── orchestrator.py          # Multi-agent orchestration
+├── core/
+│   ├── base_runner.py       # BaseAgentRunner
+│   └── errors.py            # structured_tool_error for agent-as-tool failures
 ├── instructions/
 │   └── builder.py           # InstructionBuilder base class
 ├── registry/
