@@ -438,19 +438,64 @@ TurnBudget(default_turns=10)
   |-- If truly exhausted: error handler provides graceful fallback
 ```
 
-### Quick start
+### YAML configuration
+
+Define turn budgets per agent in `agents.yaml`. The `max_turns` field becomes the hard ceiling (`absolute_max`), and `turn_budget` controls the soft budget:
+
+```yaml
+agents:
+  research_agent:
+    model: gpt-4o
+    max_turns: 25            # hard ceiling (SDK safety net)
+    description: Deep research
+    tools: [think, search, read]
+    turn_budget:
+      default_turns: 10      # soft limit the agent perceives
+      reminder_at: 2         # warn when 2 turns remain
+      max_extensions: 3      # agent can self-extend up to 3 times
+      extension_size: 5      # turns added per extension
+
+  simple_agent:
+    model: gpt-4o-mini
+    max_turns: 10
+    description: Quick tasks
+    tools: [think]
+    # No turn_budget -- uses plain max_turns cutoff
+```
+
+Then use `build_turn_budget()` to create a `TurnBudget` from the catalog entry:
+
+```python
+from agents_core import load_agent_catalog, BaseAgentRunner
+
+catalog = load_agent_catalog("agents.yaml")
+cfg = catalog.get("research_agent")
+budget = cfg.build_turn_budget()  # TurnBudget or None if not configured
+
+runner = BaseAgentRunner()
+output = await runner.execute(
+    agent_name="research_agent",
+    context=context,
+    session=session,
+    input_text="Analyze these 10 papers",
+    max_turns=cfg.max_turns,
+    turn_budget=budget,
+)
+```
+
+### Programmatic usage
+
+You can also create a `TurnBudget` directly:
 
 ```python
 from agents_core import BaseAgentRunner, TurnBudget
 
-runner = BaseAgentRunner()
-
 budget = TurnBudget(
-    default_turns=10,      # what the agent perceives
-    reminder_at=2,         # warn when 2 turns remain
-    max_extensions=3,      # agent can self-extend up to 3 times
-    extension_size=5,      # 5 extra turns per extension
-    absolute_max=25,       # hard ceiling (SDK max_turns)
+    default_turns=10,
+    reminder_at=2,
+    max_extensions=3,
+    extension_size=5,
+    absolute_max=25,
 )
 
 output = await runner.execute(

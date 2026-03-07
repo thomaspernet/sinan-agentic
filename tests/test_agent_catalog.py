@@ -9,6 +9,7 @@ import pytest
 from agents_core.registry.agent_catalog import (
     AgentCatalog,
     AgentYamlEntry,
+    TurnBudgetConfig,
     _check_condition,
     _load_knowledge_dir,
     _resolve_dot_path,
@@ -301,6 +302,43 @@ class TestAgentYamlEntry:
         )
         assert entry.knowledge_text == "Domain knowledge."
 
+    def test_no_turn_budget_by_default(self):
+        entry = AgentYamlEntry(model="fast", description="test")
+        assert entry.turn_budget is None
+
+    def test_build_turn_budget_none_when_not_configured(self):
+        entry = AgentYamlEntry(model="fast", description="test")
+        assert entry.build_turn_budget() is None
+
+    def test_build_turn_budget_creates_budget(self):
+        entry = AgentYamlEntry(
+            model="fast",
+            description="test",
+            max_turns=30,
+            turn_budget=TurnBudgetConfig(
+                default_turns=15,
+                reminder_at=3,
+                max_extensions=2,
+                extension_size=5,
+            ),
+        )
+        budget = entry.build_turn_budget()
+        assert budget is not None
+        assert budget.default_turns == 15
+        assert budget.reminder_at == 3
+        assert budget.max_extensions == 2
+        assert budget.extension_size == 5
+        assert budget.absolute_max == 30
+
+    def test_build_turn_budget_defaults_absolute_max(self):
+        entry = AgentYamlEntry(
+            model="fast",
+            description="test",
+            turn_budget=TurnBudgetConfig(default_turns=8),
+        )
+        budget = entry.build_turn_budget()
+        assert budget.absolute_max == 25  # fallback when max_turns is None
+
 
 # ---------------------------------------------------------------------------
 # _resolve_knowledge
@@ -489,3 +527,74 @@ class TestLoadAgentCatalogWithKnowledge:
         catalog = load_agent_catalog(tmp_path / "agents.yaml")
         entry = catalog.get("agent")
         assert entry.knowledge_text == ""
+
+
+# ---------------------------------------------------------------------------
+# TurnBudgetConfig + catalog integration
+# ---------------------------------------------------------------------------
+
+
+class TestCatalogTurnBudget:
+    def test_load_turn_budget_from_yaml(self, tmp_path):
+        yaml_content = textwrap.dedent("""\
+            agents:
+              chatbot:
+                model: reasoning
+                max_turns: 30
+                description: Main agent
+                tools: []
+                turn_budget:
+                  default_turns: 15
+                  reminder_at: 3
+                  max_extensions: 2
+                  extension_size: 5
+        """)
+        (tmp_path / "agents.yaml").write_text(yaml_content)
+        catalog = load_agent_catalog(tmp_path / "agents.yaml")
+        entry = catalog.get("chatbot")
+
+        assert entry.turn_budget is not None
+        assert entry.turn_budget.default_turns == 15
+        assert entry.turn_budget.reminder_at == 3
+        assert entry.turn_budget.max_extensions == 2
+        assert entry.turn_budget.extension_size == 5
+
+        budget = entry.build_turn_budget()
+        assert budget.absolute_max == 30
+        assert budget.default_turns == 15
+
+    def test_no_turn_budget_in_yaml(self, tmp_path):
+        yaml_content = textwrap.dedent("""\
+            agents:
+              simple:
+                model: fast
+                max_turns: 10
+                description: Simple agent
+                tools: []
+        """)
+        (tmp_path / "agents.yaml").write_text(yaml_content)
+        catalog = load_agent_catalog(tmp_path / "agents.yaml")
+        entry = catalog.get("simple")
+
+        assert entry.turn_budget is None
+        assert entry.build_turn_budget() is None
+
+    def test_turn_budget_defaults_in_yaml(self, tmp_path):
+        yaml_content = textwrap.dedent("""\
+            agents:
+              agent:
+                model: fast
+                max_turns: 25
+                description: Test
+                tools: []
+                turn_budget:
+                  default_turns: 12
+        """)
+        (tmp_path / "agents.yaml").write_text(yaml_content)
+        catalog = load_agent_catalog(tmp_path / "agents.yaml")
+        entry = catalog.get("agent")
+
+        assert entry.turn_budget.default_turns == 12
+        assert entry.turn_budget.reminder_at == 2  # default
+        assert entry.turn_budget.max_extensions == 3  # default
+        assert entry.turn_budget.extension_size == 5  # default

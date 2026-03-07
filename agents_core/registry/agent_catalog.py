@@ -42,6 +42,15 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+class TurnBudgetConfig(BaseModel):
+    """Turn budget configuration from agents.yaml."""
+
+    default_turns: int = 10
+    reminder_at: int = 2
+    max_extensions: int = 3
+    extension_size: int = 5
+
+
 class AgentYamlEntry(BaseModel):
     """Resolved agent entry — tools are plain strings."""
 
@@ -50,6 +59,21 @@ class AgentYamlEntry(BaseModel):
     tools: list[str] = []
     knowledge_text: str = ""
     max_turns: int | None = None
+    turn_budget: TurnBudgetConfig | None = None
+
+    def build_turn_budget(self) -> "TurnBudget | None":
+        """Create a TurnBudget from config, or None if not configured."""
+        if self.turn_budget is None:
+            return None
+        from ..core.turn_budget import TurnBudget
+
+        return TurnBudget(
+            default_turns=self.turn_budget.default_turns,
+            reminder_at=self.turn_budget.reminder_at,
+            max_extensions=self.turn_budget.max_extensions,
+            extension_size=self.turn_budget.extension_size,
+            absolute_max=self.max_turns or 25,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +182,9 @@ class AgentCatalog:
                 f"Available: {available}"
             )
         raw = self._raw_agents[name]
+        raw_budget = raw.get("turn_budget")
+        budget_cfg = TurnBudgetConfig(**raw_budget) if raw_budget else None
+
         return AgentYamlEntry(
             model=raw["model"],
             description=raw["description"],
@@ -168,6 +195,7 @@ class AgentCatalog:
                 raw.get("knowledge", []), self._knowledge
             ),
             max_turns=raw.get("max_turns"),
+            turn_budget=budget_cfg,
         )
 
     def is_enabled(
