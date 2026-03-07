@@ -61,6 +61,7 @@ from .services import (
 )
 
 from .orchestrator import AgentOrchestrator
+from .utils import tool_error, tool_response, unwrap_context
 
 __all__ = [
     # Core
@@ -92,4 +93,8 @@ __all__ = [
     "chat_streamed",
     # Orchestrator
     "AgentOrchestrator",
+    # Utils
+    "unwrap_context",
+    "tool_response",
+    "tool_error",
 ]
