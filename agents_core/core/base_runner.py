@@ -547,6 +547,8 @@ class BaseAgentRunner:
                 }
                 if agent_def.as_tool_parameters is not None:
                     as_tool_kwargs["parameters"] = agent_def.as_tool_parameters
+                if agent_def.as_tool_max_turns is not None:
+                    as_tool_kwargs["max_turns"] = agent_def.as_tool_max_turns
                 agent_tools.append(tool_agent.as_tool(**as_tool_kwargs))
             else:
                 logger.warning(f"Tool '{tool_name}' not found in tool or agent registry")

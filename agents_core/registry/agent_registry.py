@@ -23,6 +23,7 @@ class AgentDefinition:
     requires_schema_injection: bool = False  # If True, inject {schema} dynamically
     knowledge_text: str = ""  # Domain knowledge from catalog (injected via domain_knowledge())
     as_tool_parameters: Optional[Any] = None  # Dataclass/Pydantic model for structured agent-as-tool input
+    as_tool_max_turns: Optional[int] = None  # Max turns when running as sub-agent via as_tool()
     
     def __post_init__(self):
         """Ensure either instructions_template or instructions is provided."""
