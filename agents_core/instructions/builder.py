@@ -77,6 +77,17 @@ class InstructionBuilder:
         """Expected output structure (JSON template, etc.)."""
         return None
 
+    def turn_budget_section(self) -> str | None:
+        """Turn budget awareness injected into instructions.
+
+        Reads ``_turn_budget`` from context (set by BaseAgentRunner when
+        a TurnBudget is configured). Returns None if no budget is active.
+        """
+        budget = self._ctx_attr("_turn_budget")
+        if budget is None:
+            return None
+        return budget.build_instruction_section()
+
     def extra_sections(self) -> list[tuple[str, str]]:
         """Additional named sections appended after the main sections.
 
@@ -95,7 +106,7 @@ class InstructionBuilder:
         Override to reorder, add, or remove sections.
         Extra sections from extra_sections() are always appended after these.
         """
-        return ["persona", "domain_knowledge", "context_section", "steps", "rules", "output_format"]
+        return ["persona", "domain_knowledge", "context_section", "steps", "rules", "output_format", "turn_budget_section"]
 
     # ------------------------------------------------------------------ #
     # Assembly

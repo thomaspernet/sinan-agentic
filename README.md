@@ -417,6 +417,78 @@ This is handled by `structured_tool_error()`, which is automatically wired into 
 
 No manual wiring needed — just set `as_tool_parameters` on your `AgentDefinition`.
 
+## Turn Budget (Soft Turn Management)
+
+The OpenAI Agents SDK enforces `max_turns` as a hard cutoff -- when hit, everything stops with no graceful handling. `TurnBudget` adds a soft budget layer where the agent self-manages its turns:
+
+- **Default budget** -- the agent perceives a soft turn limit (e.g., 10 turns)
+- **Hard ceiling** -- the SDK's `max_turns` is set to a higher absolute maximum (safety net)
+- **Warnings** -- the agent gets notified when running low on turns
+- **Self-extension** -- the agent can call `request_extension()` to approve more turns for itself
+
+### Concept
+
+```text
+TurnBudget(default_turns=10)
+  |
+  |-- Agent perceives 10 turns (soft limit)
+  |-- SDK gets max_turns=25 (hard ceiling, invisible to agent)
+  |-- At turn 8: "2 turns remaining, wrap up or request_extension()"
+  |-- Agent calls request_extension("processing remaining docs") -> budget extends to 15
+  |-- If truly exhausted: error handler provides graceful fallback
+```
+
+### Quick start
+
+```python
+from agents_core import BaseAgentRunner, TurnBudget
+
+runner = BaseAgentRunner()
+
+budget = TurnBudget(
+    default_turns=10,      # what the agent perceives
+    reminder_at=2,         # warn when 2 turns remain
+    max_extensions=3,      # agent can self-extend up to 3 times
+    extension_size=5,      # 5 extra turns per extension
+    absolute_max=25,       # hard ceiling (SDK max_turns)
+)
+
+output = await runner.execute(
+    agent_name="research_agent",
+    context=context,
+    session=session,
+    input_text="Analyze these 10 papers",
+    turn_budget=budget,
+)
+
+# After execution, inspect budget state:
+print(budget.turns_used)        # 14
+print(budget.extensions_used)   # 1
+print(budget.extension_reasons) # ["Need to process 5 remaining papers"]
+```
+
+### How instructions are injected
+
+When a `TurnBudget` is provided, the runner:
+
+1. Sets the SDK's `max_turns` to `budget.absolute_max` (hard safety ceiling)
+2. Attaches `budget` to the context as `_turn_budget`
+3. Adds the `request_extension` tool to the agent
+4. Wraps agent instructions as a dynamic callable that appends budget status each turn
+5. Uses `TurnBudgetHooks` (a `RunHooks` subclass) to count turns via `on_llm_start`
+
+If using `InstructionBuilder`, the `turn_budget_section()` method is included in the default section order and automatically reads the budget from context.
+
+### Configuration reference
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `default_turns` | 10 | Soft budget the agent perceives |
+| `reminder_at` | 2 | Warn when this many turns remain |
+| `max_extensions` | 3 | Max self-approved extensions |
+| `extension_size` | 5 | Turns added per extension |
+| `absolute_max` | 25 | Hard ceiling passed to SDK |
+
 ## Session Persistence
 
 ```python
@@ -456,7 +528,9 @@ agents_core/
 ├── orchestrator.py          # Multi-agent orchestration
 ├── core/
 │   ├── base_runner.py       # BaseAgentRunner
-│   └── errors.py            # structured_tool_error for agent-as-tool failures
+│   ├── errors.py            # structured_tool_error for agent-as-tool failures
+│   ├── turn_budget.py       # TurnBudget + TurnBudgetHooks (soft turn management)
+│   └── turn_budget_tool.py  # request_extension tool (agent self-approval)
 ├── instructions/
 │   └── builder.py           # InstructionBuilder base class
 ├── registry/

@@ -18,6 +18,8 @@ from ..models.context import AgentContext
 from ..models import outputs as output_models
 from ..registry import get_agent_registry, get_tool_registry, get_guardrail_registry
 from .errors import structured_tool_error
+from .turn_budget import TurnBudget, TurnBudgetHooks
+from .turn_budget_tool import request_extension_tool
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +146,7 @@ class BaseAgentRunner:
         fallback_prompt_builder: Optional[Callable] = None,
         max_turns: int = 10,
         input_text: str = "",
+        turn_budget: Optional[TurnBudget] = None,
     ) -> Any:
         """Run an agent and return its final_output directly.
 
@@ -165,22 +168,35 @@ class BaseAgentRunner:
                 prompt. If None, uses a default builder that concatenates tool outputs.
             max_turns: Maximum agent turns before stopping
             input_text: Input message for the agent (added to session automatically)
+            turn_budget: Optional soft turn budget with self-extension. When provided,
+                the SDK's max_turns is set to budget.absolute_max (hard ceiling) and
+                the agent perceives budget.effective_max (soft limit) via dynamic
+                instructions. The agent can call request_extension() to get more turns.
 
         Returns:
             Agent's final_output (dataclass, dict, or string)
         """
+        # When turn budget is active, override max_turns with absolute ceiling
+        sdk_max_turns = turn_budget.absolute_max if turn_budget else max_turns
+
+        if turn_budget:
+            turn_budget.reset()
+            context._turn_budget = turn_budget
+
         if streaming:
             return await self._execute_streamed(
-                agent_name, context, session, on_event, max_turns, input_text,
+                agent_name, context, session, on_event, sdk_max_turns, input_text,
+                turn_budget=turn_budget,
             )
         elif fallback_on_overflow:
             return await self._execute_with_fallback(
-                agent_name, context, session, max_turns, input_text,
+                agent_name, context, session, sdk_max_turns, input_text,
                 fallback_prompt_builder,
             )
         else:
             return await self._execute_basic(
-                agent_name, context, session, max_turns, input_text,
+                agent_name, context, session, sdk_max_turns, input_text,
+                turn_budget=turn_budget,
             )
 
     async def _execute_basic(
@@ -190,18 +206,28 @@ class BaseAgentRunner:
         session: AgentSession,
         max_turns: int,
         input_text: str,
+        turn_budget: Optional[TurnBudget] = None,
     ) -> Any:
         """Run agent via Runner.run() and return final_output."""
         agent = await self.create_agent(agent_name=agent_name, context=context)
+
+        if turn_budget:
+            agent.tools.append(request_extension_tool)
+            self._make_instructions_dynamic(agent, turn_budget)
+
         logger.info(f"Running agent: {agent_name}")
 
-        result = await Runner.run(
-            starting_agent=agent,
-            input=input_text,
-            session=session,
-            context=context,
-            max_turns=max_turns,
-        )
+        run_kwargs: Dict[str, Any] = {
+            "starting_agent": agent,
+            "input": input_text,
+            "session": session,
+            "context": context,
+            "max_turns": max_turns,
+        }
+        if turn_budget:
+            run_kwargs["hooks"] = TurnBudgetHooks(turn_budget)
+
+        result = await Runner.run(**run_kwargs)
 
         logger.info(f"Agent '{agent_name}' completed successfully")
         return result.final_output
@@ -304,6 +330,7 @@ class BaseAgentRunner:
         on_event: Optional[Callable],
         max_turns: int,
         input_text: str,
+        turn_budget: Optional[TurnBudget] = None,
     ) -> Any:
         """Run agent with token-level streaming via Runner.run_streamed().
 
@@ -311,6 +338,10 @@ class BaseAgentRunner:
         and returns final_output.
         """
         agent = await self.create_agent(agent_name=agent_name, context=context)
+
+        if turn_budget:
+            agent.tools.append(request_extension_tool)
+            self._make_instructions_dynamic(agent, turn_budget)
 
         if input_text:
             await session.add_items([{"role": "user", "content": input_text}])
@@ -324,6 +355,9 @@ class BaseAgentRunner:
             "context": context,
             "max_turns": max_turns,
         }
+        if turn_budget:
+            run_kwargs["hooks"] = TurnBudgetHooks(turn_budget)
+
         result = Runner.run_streamed(**run_kwargs)
 
         tools_called: List[str] = []
@@ -707,6 +741,37 @@ class BaseAgentRunner:
             agent_kwargs["model_settings"] = model_settings
 
         return agent_kwargs
+
+    # ------------------------------------------------------------------ #
+    # Turn budget helpers
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _make_instructions_dynamic(agent: Agent, budget: TurnBudget) -> None:
+        """Replace static instructions with a callable that appends budget status.
+
+        The SDK evaluates callable instructions before each LLM call, so the
+        budget section updates dynamically as turns are consumed.
+        """
+        base_instructions = agent.instructions
+
+        if callable(base_instructions):
+            original_fn = base_instructions
+
+            def dynamic_with_budget(ctx_wrapper, agent_obj):
+                base = original_fn(ctx_wrapper, agent_obj)
+                section = budget.build_instruction_section()
+                return f"{base}\n\n{section}" if section else base
+
+            agent.instructions = dynamic_with_budget
+        else:
+            static_text = base_instructions or ""
+
+            def dynamic_from_static(ctx_wrapper, agent_obj):
+                section = budget.build_instruction_section()
+                return f"{static_text}\n\n{section}" if section else static_text
+
+            agent.instructions = dynamic_from_static
 
     # ------------------------------------------------------------------ #
     # Fallback prompt builder
