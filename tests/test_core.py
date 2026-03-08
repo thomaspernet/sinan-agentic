@@ -826,6 +826,67 @@ class TestStructuredAgentAsTool:
         assert agent_def.as_tool_parameters is None
 
 
+class TestBudgetAwareAgentAsTool:
+    async def test_build_tools_with_turn_budget(self, runner):
+        """Agent-as-tool with turn_budget gets hooks and max_turns from budget."""
+        from agents_core.core.turn_budget import TurnBudget
+
+        budget = TurnBudget(default_turns=5, max_extensions=1, extension_size=3, absolute_max=10)
+        runner.agent_registry.register(
+            AgentDefinition(
+                name="budget_sub_agent",
+                description="sub with budget",
+                instructions="sub",
+                as_tool_turn_budget=budget,
+            )
+        )
+        ctx = AgentContext(database_connector=Mock())
+        tools = await runner._build_tools(["budget_sub_agent"], ctx)
+        assert len(tools) == 1
+        assert tools[0].name == "budget_sub_agent"
+        # Budget should have been reset
+        assert budget.turns_used == 0
+
+    async def test_budget_takes_precedence_over_max_turns(self, runner):
+        """When both as_tool_turn_budget and as_tool_max_turns are set, budget wins."""
+        from agents_core.core.turn_budget import TurnBudget
+
+        budget = TurnBudget(default_turns=5, absolute_max=10)
+        runner.agent_registry.register(
+            AgentDefinition(
+                name="dual_config_agent",
+                description="has both",
+                instructions="sub",
+                as_tool_max_turns=25,
+                as_tool_turn_budget=budget,
+            )
+        )
+        ctx = AgentContext(database_connector=Mock())
+        tools = await runner._build_tools(["dual_config_agent"], ctx)
+        assert len(tools) == 1
+
+    async def test_no_budget_falls_back_to_max_turns(self, runner):
+        """Without turn_budget, as_tool_max_turns is used as before."""
+        runner.agent_registry.register(
+            AgentDefinition(
+                name="max_turns_agent",
+                description="max turns only",
+                instructions="sub",
+                as_tool_max_turns=8,
+            )
+        )
+        ctx = AgentContext(database_connector=Mock())
+        tools = await runner._build_tools(["max_turns_agent"], ctx)
+        assert len(tools) == 1
+
+    async def test_agent_def_as_tool_turn_budget_default_none(self):
+        """AgentDefinition.as_tool_turn_budget defaults to None."""
+        agent_def = AgentDefinition(
+            name="test", description="test", instructions="test"
+        )
+        assert agent_def.as_tool_turn_budget is None
+
+
 # ------------------------------------------------------------------ #
 # Structured error function
 # ------------------------------------------------------------------ #

@@ -581,8 +581,17 @@ class BaseAgentRunner:
                 }
                 if agent_def.as_tool_parameters is not None:
                     as_tool_kwargs["parameters"] = agent_def.as_tool_parameters
-                if agent_def.as_tool_max_turns is not None:
+
+                budget = agent_def.as_tool_turn_budget
+                if budget:
+                    budget.reset()
+                    self._make_instructions_dynamic(tool_agent, budget)
+                    tool_agent.tools.append(request_extension_tool)
+                    as_tool_kwargs["hooks"] = TurnBudgetHooks(budget)
+                    as_tool_kwargs["max_turns"] = budget.absolute_max
+                elif agent_def.as_tool_max_turns is not None:
                     as_tool_kwargs["max_turns"] = agent_def.as_tool_max_turns
+
                 agent_tools.append(tool_agent.as_tool(**as_tool_kwargs))
             else:
                 logger.warning(f"Tool '{tool_name}' not found in tool or agent registry")

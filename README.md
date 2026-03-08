@@ -371,21 +371,21 @@ from dataclasses import dataclass
 from agents_core import AgentDefinition, register_agent
 
 @dataclass
-class ActionRequest:
-    action: str        # exact tool name to execute
-    target_uuid: str   # primary target UUID
-    payload: str = ""  # additional params as JSON
+class WriterRequest:
+    operation: str      # exact tool name to execute
+    target_id: str      # primary target identifier
+    payload: str = ""   # additional params as JSON
 
 register_agent(AgentDefinition(
-    name="action_agent",
-    description="Execute write actions on the knowledge base.",
-    instructions="You are a write-action executor.",
-    tools=["create_page", "update_page", "delete_page"],
-    as_tool_parameters=ActionRequest,  # enforced input schema
+    name="writer_agent",
+    description="Execute write operations on the database.",
+    instructions="You are a write-operation executor.",
+    tools=["create_record", "update_record", "delete_record"],
+    as_tool_parameters=WriterRequest,  # enforced input schema
 ))
 ```
 
-When the parent agent calls `action_agent`, the LLM must provide `action`, `target_uuid`, and optionally `payload` — no more ambiguous freeform text.
+When the parent agent calls `writer_agent`, the LLM must provide `operation`, `target_id`, and optionally `payload` — no more ambiguous freeform text.
 
 ### Structured error handling
 
@@ -395,8 +395,8 @@ Sub-agent failures automatically return structured JSON instead of generic error
 {
     "status": "error",
     "error_type": "ValueError",
-    "message": "page_uuid is required",
-    "retry_hint": "A required parameter is missing. Check your context for available UUIDs and provide all required fields."
+    "message": "target_id is required",
+    "retry_hint": "A required parameter is missing. Check your context for available IDs and provide all required fields."
 }
 ```
 
@@ -405,8 +405,8 @@ This is handled by `structured_tool_error()`, which is automatically wired into 
 | Error pattern | Retry hint |
 |---------------|------------|
 | "Max turns" in message | Simplify the request or break into smaller steps |
-| "not found" in message | Verify the UUID exists in your context |
-| "required" in message | Check context for available UUIDs and provide all required fields |
+| "not found" in message | Verify the ID exists in your context |
+| "required" in message | Check context for available IDs and provide all required fields |
 | Other | Review the error message and retry with corrected input |
 
 ### How it works
@@ -414,6 +414,7 @@ This is handled by `structured_tool_error()`, which is automatically wired into 
 `BaseAgentRunner._build_tools()` automatically:
 1. Passes `as_tool_parameters` to `agent.as_tool(parameters=...)` when defined
 2. Passes `structured_tool_error` as `failure_error_function` for all agent-as-tool calls
+3. If `as_tool_turn_budget` is set, wires up `TurnBudgetHooks` and dynamic instructions (see [Turn budget for sub-agents](#turn-budget-for-sub-agents-agent-as-tool))
 
 No manual wiring needed — just set `as_tool_parameters` on your `AgentDefinition`.
 
@@ -523,6 +524,43 @@ When a `TurnBudget` is provided, the runner:
 5. Uses `TurnBudgetHooks` (a `RunHooks` subclass) to count turns via `on_llm_start`
 
 If using `InstructionBuilder`, the `turn_budget_section()` method is included in the default section order and automatically reads the budget from context.
+
+### Turn budget for sub-agents (agent-as-tool)
+
+Sub-agents running via `.as_tool()` can have their own independent turn budget. Set `as_tool_turn_budget` on the `AgentDefinition` instead of `as_tool_max_turns`:
+
+```yaml
+agents:
+  writer_agent:
+    model: gpt-4o-mini
+    max_turns: 10
+    turn_budget:
+      default_turns: 5
+      reminder_at: 1
+      max_extensions: 1
+      extension_size: 3
+```
+
+```python
+cfg = catalog.get("writer_agent")
+
+register_agent(AgentDefinition(
+    name="writer_agent",
+    description="Execute write operations on the database.",
+    instructions="You are a write-operation executor.",
+    tools=["create_record", "update_record", "delete_record"],
+    as_tool_turn_budget=cfg.build_turn_budget(),  # budget instead of as_tool_max_turns
+))
+```
+
+When `as_tool_turn_budget` is set, `_build_tools()` automatically:
+1. Resets the budget for each parent agent creation
+2. Makes the sub-agent's instructions dynamic (budget status injected each turn)
+3. Adds the `request_extension` tool to the sub-agent
+4. Passes `TurnBudgetHooks` to `.as_tool(hooks=...)` for turn tracking
+5. Sets `max_turns` to `budget.absolute_max` (overrides `as_tool_max_turns`)
+
+If `as_tool_turn_budget` is not set, the runner falls back to `as_tool_max_turns` (plain hard cap).
 
 ### Configuration reference
 
