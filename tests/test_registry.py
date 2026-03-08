@@ -118,7 +118,7 @@ class TestToolRegistry:
     def test_get_tool_functions(self):
         reg = ToolRegistry()
         fn = lambda: "hello"
-        reg.register(ToolDefinition("t", "d", fn, "c", "p", "r"))
+        reg.register(ToolDefinition(name="t", function=fn, description="d", category="c", parameters_description="p", returns_description="r"))
         funcs = reg.get_tool_functions(["t", "missing"])
         assert len(funcs) == 1
         assert funcs[0] is fn
@@ -258,7 +258,7 @@ class TestAgentFactory:
         tool_reg = get_tool_registry()
         tool_fn = lambda: None
         tool_reg.register(
-            ToolDefinition("_factory_tool", "desc", tool_fn, "cat", "p", "r")
+            ToolDefinition(name="_factory_tool", function=tool_fn, description="desc", category="cat", parameters_description="p", returns_description="r")
         )
 
         get_agent_registry().register(

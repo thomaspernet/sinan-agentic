@@ -22,7 +22,7 @@ def _registries():
     guardrail_reg = GuardrailRegistry()
 
     tool_fn = lambda: "result"
-    tool_reg.register(ToolDefinition("test_tool", "desc", tool_fn, "cat", "p", "r"))
+    tool_reg.register(ToolDefinition(name="test_tool", function=tool_fn, description="desc", category="cat", parameters_description="p", returns_description="r"))
 
     guardrail_fn = lambda: True
     guardrail_reg.register(GuardrailDefinition("test_guard", "desc", guardrail_fn, "output"))
