@@ -60,6 +60,7 @@ class AgentYamlEntry(BaseModel):
     knowledge_text: str = ""
     max_turns: int | None = None
     turn_budget: TurnBudgetConfig | None = None
+    error_recovery: bool = True
 
     def build_turn_budget(self) -> "TurnBudget | None":
         """Create a TurnBudget from config, or None if not configured."""
@@ -74,6 +75,15 @@ class AgentYamlEntry(BaseModel):
             extension_size=self.turn_budget.extension_size,
             absolute_max=self.max_turns or 25,
         )
+
+    def build_error_recovery(self) -> "ToolErrorRecovery | None":
+        """Create a ToolErrorRecovery if enabled, or None if disabled."""
+        if not self.error_recovery:
+            return None
+        from ..core.tool_error_recovery import ToolErrorRecovery
+        from ..registry import get_tool_registry
+
+        return ToolErrorRecovery(tool_registry=get_tool_registry())
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +206,7 @@ class AgentCatalog:
             ),
             max_turns=raw.get("max_turns"),
             turn_budget=budget_cfg,
+            error_recovery=raw.get("error_recovery", True),
         )
 
     def is_enabled(
