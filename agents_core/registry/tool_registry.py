@@ -13,6 +13,7 @@ class ToolDefinition:
     category: str  # "search", "analysis", "refinement"
     parameters_description: str
     returns_description: str
+    recovery_hint: str = ""  # Guidance shown to agent when this tool errors
 
 
 @dataclass
@@ -88,16 +89,18 @@ def register_tool(
     category: str,
     parameters_description: str,
     returns_description: str,
+    recovery_hint: str = "",
 ):
     """Decorator to register a tool.
-    
+
     Usage:
         @register_tool(
             name="execute_cypher",
             description="Execute Cypher query",
             category="search",
             parameters_description="query (str): Cypher query",
-            returns_description="Dict with success and results"
+            returns_description="Dict with success and results",
+            recovery_hint="Check that the query is valid Cypher syntax.",
         )
         @function_tool
         async def execute_cypher(ctx, query: str) -> dict:
@@ -111,6 +114,7 @@ def register_tool(
             category=category,
             parameters_description=parameters_description,
             returns_description=returns_description,
+            recovery_hint=recovery_hint,
         )
         _global_registry.register(tool_def)
         return func

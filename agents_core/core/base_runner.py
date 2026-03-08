@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Optional, Dict, Any, List, Callable
 
-from agents import Agent, Runner, RunContextWrapper, ItemHelpers, Usage
+from agents import Agent, Runner, RunContextWrapper, RunHooks, ItemHelpers, Usage
 from openai.types.responses import ResponseCompletedEvent, ResponseTextDeltaEvent
 
 from ..session import AgentSession
@@ -18,6 +18,7 @@ from ..models.context import AgentContext
 from ..models import outputs as output_models
 from ..registry import get_agent_registry, get_tool_registry, get_guardrail_registry
 from .errors import structured_tool_error
+from .tool_error_recovery import ToolErrorRecovery, ToolErrorRecoveryHooks
 from .turn_budget import TurnBudget, TurnBudgetHooks
 from .turn_budget_tool import request_extension_tool
 
@@ -147,6 +148,7 @@ class BaseAgentRunner:
         max_turns: int = 10,
         input_text: str = "",
         turn_budget: Optional[TurnBudget] = None,
+        error_recovery: Optional[ToolErrorRecovery] = None,
     ) -> Any:
         """Run an agent and return its final_output directly.
 
@@ -172,6 +174,10 @@ class BaseAgentRunner:
                 the SDK's max_turns is set to budget.absolute_max (hard ceiling) and
                 the agent perceives budget.effective_max (soft limit) via dynamic
                 instructions. The agent can call request_extension() to get more turns.
+            error_recovery: Optional tool error recovery. When provided, tool errors
+                are tracked and progressive recovery guidance is injected into the
+                agent's instructions before each LLM call. Pass True to auto-create
+                with defaults.
 
         Returns:
             Agent's final_output (dataclass, dict, or string)
@@ -183,10 +189,17 @@ class BaseAgentRunner:
             turn_budget.reset()
             context._turn_budget = turn_budget
 
+        # Auto-create error recovery if True was passed
+        if error_recovery is True:
+            error_recovery = ToolErrorRecovery(tool_registry=self.tool_registry)
+        if error_recovery:
+            error_recovery.reset()
+
         if streaming:
             return await self._execute_streamed(
                 agent_name, context, session, on_event, sdk_max_turns, input_text,
                 turn_budget=turn_budget,
+                error_recovery=error_recovery,
             )
         elif fallback_on_overflow:
             return await self._execute_with_fallback(
@@ -197,6 +210,7 @@ class BaseAgentRunner:
             return await self._execute_basic(
                 agent_name, context, session, sdk_max_turns, input_text,
                 turn_budget=turn_budget,
+                error_recovery=error_recovery,
             )
 
     async def _execute_basic(
@@ -207,13 +221,15 @@ class BaseAgentRunner:
         max_turns: int,
         input_text: str,
         turn_budget: Optional[TurnBudget] = None,
+        error_recovery: Optional[ToolErrorRecovery] = None,
     ) -> Any:
         """Run agent via Runner.run() and return final_output."""
         agent = await self.create_agent(agent_name=agent_name, context=context)
 
         if turn_budget:
             agent.tools.append(request_extension_tool)
-            self._make_instructions_dynamic(agent, turn_budget)
+
+        self._apply_dynamic_instructions(agent, turn_budget, error_recovery)
 
         logger.info(f"Running agent: {agent_name}")
 
@@ -224,8 +240,10 @@ class BaseAgentRunner:
             "context": context,
             "max_turns": max_turns,
         }
-        if turn_budget:
-            run_kwargs["hooks"] = TurnBudgetHooks(turn_budget)
+
+        hooks = self._build_hooks(turn_budget, error_recovery)
+        if hooks:
+            run_kwargs["hooks"] = hooks
 
         result = await Runner.run(**run_kwargs)
 
@@ -331,6 +349,7 @@ class BaseAgentRunner:
         max_turns: int,
         input_text: str,
         turn_budget: Optional[TurnBudget] = None,
+        error_recovery: Optional[ToolErrorRecovery] = None,
     ) -> Any:
         """Run agent with token-level streaming via Runner.run_streamed().
 
@@ -341,7 +360,8 @@ class BaseAgentRunner:
 
         if turn_budget:
             agent.tools.append(request_extension_tool)
-            self._make_instructions_dynamic(agent, turn_budget)
+
+        self._apply_dynamic_instructions(agent, turn_budget, error_recovery)
 
         if input_text:
             await session.add_items([{"role": "user", "content": input_text}])
@@ -355,8 +375,10 @@ class BaseAgentRunner:
             "context": context,
             "max_turns": max_turns,
         }
-        if turn_budget:
-            run_kwargs["hooks"] = TurnBudgetHooks(turn_budget, on_event=on_event)
+
+        hooks = self._build_hooks(turn_budget, error_recovery, on_event=on_event)
+        if hooks:
+            run_kwargs["hooks"] = hooks
 
         result = Runner.run_streamed(**run_kwargs)
 
@@ -752,35 +774,76 @@ class BaseAgentRunner:
         return agent_kwargs
 
     # ------------------------------------------------------------------ #
-    # Turn budget helpers
+    # Dynamic instructions and hooks composition
     # ------------------------------------------------------------------ #
 
     @staticmethod
-    def _make_instructions_dynamic(agent: Agent, budget: TurnBudget) -> None:
-        """Replace static instructions with a callable that appends budget status.
+    def _apply_dynamic_instructions(
+        agent: Agent,
+        budget: Optional[TurnBudget] = None,
+        recovery: Optional[ToolErrorRecovery] = None,
+    ) -> None:
+        """Replace static instructions with a callable that appends dynamic sections.
 
-        The SDK evaluates callable instructions before each LLM call, so the
-        budget section updates dynamically as turns are consumed.
+        The SDK evaluates callable instructions before each LLM call, so
+        budget and error recovery sections update dynamically.
+
+        Composes all active dynamic sections (turn budget, error recovery)
+        into a single callable.
         """
+        if not budget and not recovery:
+            return
+
         base_instructions = agent.instructions
 
         if callable(base_instructions):
             original_fn = base_instructions
 
-            def dynamic_with_budget(ctx_wrapper, agent_obj):
+            def dynamic_instructions(ctx_wrapper, agent_obj):
                 base = original_fn(ctx_wrapper, agent_obj)
-                section = budget.build_instruction_section()
-                return f"{base}\n\n{section}" if section else base
+                return _append_dynamic_sections(base, budget, recovery)
 
-            agent.instructions = dynamic_with_budget
+            agent.instructions = dynamic_instructions
         else:
             static_text = base_instructions or ""
 
             def dynamic_from_static(ctx_wrapper, agent_obj):
-                section = budget.build_instruction_section()
-                return f"{static_text}\n\n{section}" if section else static_text
+                return _append_dynamic_sections(static_text, budget, recovery)
 
             agent.instructions = dynamic_from_static
+
+    @staticmethod
+    def _make_instructions_dynamic(agent: Agent, budget: TurnBudget) -> None:
+        """Replace static instructions with a callable that appends budget status.
+
+        .. deprecated::
+            Use _apply_dynamic_instructions() for new code. This method is
+            kept for backward compatibility (agent-as-tool budget wiring).
+        """
+        BaseAgentRunner._apply_dynamic_instructions(agent, budget=budget)
+
+    @staticmethod
+    def _build_hooks(
+        budget: Optional[TurnBudget] = None,
+        recovery: Optional[ToolErrorRecovery] = None,
+        on_event: Optional[Callable] = None,
+    ) -> Optional[RunHooks]:
+        """Build a composite RunHooks from active features.
+
+        Returns None if no features are active, a single hooks instance
+        if only one is active, or a _CompositeHooks if multiple are.
+        """
+        hooks_list: list[RunHooks] = []
+        if budget:
+            hooks_list.append(TurnBudgetHooks(budget, on_event=on_event))
+        if recovery:
+            hooks_list.append(ToolErrorRecoveryHooks(recovery, on_event=on_event))
+
+        if not hooks_list:
+            return None
+        if len(hooks_list) == 1:
+            return hooks_list[0]
+        return _CompositeHooks(hooks_list)
 
     # ------------------------------------------------------------------ #
     # Fallback prompt builder
@@ -866,3 +929,65 @@ class _CollectingSessionWrapper:
     async def clear_session(self) -> None:
         self.raw_items.clear()
         await self._real.clear_session()
+
+
+# ------------------------------------------------------------------ #
+# Module-level helpers
+# ------------------------------------------------------------------ #
+
+
+def _append_dynamic_sections(
+    base: str,
+    budget: Optional[TurnBudget],
+    recovery: Optional[ToolErrorRecovery],
+) -> str:
+    """Append active dynamic sections to base instructions."""
+    parts = [base]
+    if budget:
+        section = budget.build_instruction_section()
+        if section:
+            parts.append(section)
+    if recovery:
+        section = recovery.build_instruction_section()
+        if section:
+            parts.append(section)
+    return "\n\n".join(parts)
+
+
+class _CompositeHooks(RunHooks):
+    """Compose multiple RunHooks into a single instance.
+
+    The SDK accepts one hooks object per run. This class delegates each
+    lifecycle event to all wrapped hooks in order.
+    """
+
+    def __init__(self, hooks: List[RunHooks]) -> None:
+        self._hooks = hooks
+
+    async def on_agent_start(self, context, agent):
+        for h in self._hooks:
+            await h.on_agent_start(context, agent)
+
+    async def on_agent_end(self, context, agent, output):
+        for h in self._hooks:
+            await h.on_agent_end(context, agent, output)
+
+    async def on_handoff(self, context, from_agent, to_agent):
+        for h in self._hooks:
+            await h.on_handoff(context, from_agent, to_agent)
+
+    async def on_tool_start(self, context, agent, tool):
+        for h in self._hooks:
+            await h.on_tool_start(context, agent, tool)
+
+    async def on_tool_end(self, context, agent, tool, result):
+        for h in self._hooks:
+            await h.on_tool_end(context, agent, tool, result)
+
+    async def on_llm_start(self, context, agent, system_prompt, input_items):
+        for h in self._hooks:
+            await h.on_llm_start(context, agent, system_prompt, input_items)
+
+    async def on_llm_end(self, context, agent, response):
+        for h in self._hooks:
+            await h.on_llm_end(context, agent, response)

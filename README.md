@@ -418,6 +418,124 @@ This is handled by `structured_tool_error()`, which is automatically wired into 
 
 No manual wiring needed — just set `as_tool_parameters` on your `AgentDefinition`.
 
+## Tool Error Recovery
+
+When a tool returns an error, agents often retry with identical parameters, wasting turns in a loop. `ToolErrorRecovery` solves this by tracking tool errors and injecting progressive recovery guidance into the agent's instructions — the same dynamic-instructions pattern used by `TurnBudget`.
+
+### How it works
+
+1. **`on_tool_end` hook** tracks tool results. When a result contains `{"error": "..."}`, the tool name, arguments, and error are recorded.
+2. **Dynamic instructions** inject a `## Tool Error Recovery` section before each LLM call, telling the agent what failed and how to recover.
+3. **Progressive escalation** — guidance gets more directive with each repeated failure:
+   - **1st failure**: Show the error and recovery hint
+   - **2nd failure (same args)**: Warn that the agent is repeating the same failing call
+   - **3rd failure (same args)**: Tell the agent to stop retrying and move on
+
+### Registering recovery hints
+
+Add a `recovery_hint` to your tool registration. This static hint is shown to the agent whenever the tool errors — no need to handle each error case individually:
+
+```python
+@register_tool(
+    name="search_database",
+    description="Search the database by query",
+    category="search",
+    parameters_description="query (str): Search query. scope (str): 'local' or 'global'.",
+    returns_description="JSON with results",
+    recovery_hint="Requires a non-empty query. Use scope='local' for fast search, 'global' for external APIs.",
+)
+@function_tool
+async def search_database(ctx, query: str, scope: str = "local") -> str:
+    ...
+```
+
+For MCP tools (where you don't control the code), pass hints via config:
+
+```python
+recovery = ToolErrorRecovery(
+    tool_registry=registry,
+    mcp_hints={
+        "mcp_arxiv_search": "Query must be at least 2 characters.",
+        "mcp_slack_post": "Channel ID is required, not channel name.",
+    },
+)
+```
+
+### Usage with BaseAgentRunner
+
+Pass `error_recovery` to `execute()`:
+
+```python
+from agents_core import BaseAgentRunner, ToolErrorRecovery
+
+runner = BaseAgentRunner()
+recovery = ToolErrorRecovery(tool_registry=runner.tool_registry)
+
+output = await runner.execute(
+    agent_name="my_agent",
+    context=context,
+    session=session,
+    input_text="Find recent papers on transformers",
+    error_recovery=recovery,
+)
+
+# After execution, inspect error state:
+if recovery.has_errors:
+    print(recovery.get_error_summary())
+```
+
+### Combining with Turn Budget
+
+Both features compose automatically. When both are active, the agent sees both sections in its instructions:
+
+```python
+from agents_core import BaseAgentRunner, TurnBudget, ToolErrorRecovery
+
+runner = BaseAgentRunner()
+budget = TurnBudget(default_turns=15)
+recovery = ToolErrorRecovery(tool_registry=runner.tool_registry)
+
+output = await runner.execute(
+    agent_name="research_agent",
+    context=context,
+    session=session,
+    input_text="Analyze recent publications",
+    turn_budget=budget,
+    error_recovery=recovery,
+)
+```
+
+The runner composes both hook sets into a single `_CompositeHooks` and chains both dynamic instruction sections.
+
+### What the agent sees
+
+After a tool error, the agent's system prompt includes:
+
+```text
+## Tool Error Recovery
+- search_database returned error: "No results found" (called with: query=transformrs, scope=local)
+  Recovery hint: Requires a non-empty query. Use scope='local' for fast search, 'global' for external APIs.
+
+General rule: Never retry a tool call with identical parameters. If a tool fails, read the error and choose a different approach.
+```
+
+After repeated identical failures:
+
+```text
+## Tool Error Recovery
+- STOP: search_database has failed 3 times with the same arguments. Do NOT call this tool again.
+  Error was: "Connection timeout"
+  Move on to your next task, try a completely different approach, or return your partial results.
+```
+
+### Configuration reference
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `tool_registry` | None | ToolRegistry for looking up `recovery_hint` |
+| `mcp_hints` | `{}` | Dict mapping MCP tool names to hint strings |
+| `max_identical_before_stop` | 3 | Stop threshold for identical-argument retries |
+
 ## Turn Budget (Soft Turn Management)
 
 The OpenAI Agents SDK enforces `max_turns` as a hard cutoff -- when hit, everything stops with no graceful handling. `TurnBudget` adds a soft budget layer where the agent self-manages its turns:
