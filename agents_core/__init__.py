@@ -69,6 +69,10 @@ from .services import (
 from .orchestrator import AgentOrchestrator
 from .utils import tool_error, tool_response, unwrap_context
 
+# MCP support (optional — requires 'agents-core[mcp]')
+# Lazy import to avoid requiring FastMCP for non-MCP users.
+# Usage: from agents_core.mcp import build_mcp_server, MCPContextFactory
+
 __all__ = [
     # Core
     "BaseAgentRunner",

@@ -31,6 +31,23 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+class ToolMCPConfig(BaseModel):
+    """Per-tool MCP config from the ``mcp`` section in tools.yaml.
+
+    Example YAML::
+
+        discover:
+          description: ...
+          mcp:
+            expose: true
+            annotations:
+              readOnlyHint: true
+    """
+
+    expose: bool = False
+    annotations: dict[str, Any] = {}
+
+
 class ToolYamlEntry(BaseModel):
     """Resolved tool entry from tools.yaml."""
 
@@ -39,6 +56,7 @@ class ToolYamlEntry(BaseModel):
     parameters_description: str = ""
     returns_description: str = ""
     recovery_hint: str = ""
+    mcp: ToolMCPConfig | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +94,15 @@ class ToolCatalog:
     def list_tools(self) -> list[str]:
         """List all tool names in the catalog."""
         return list(self._raw_tools.keys())
+
+    def get_mcp_tools(self) -> list[str]:
+        """List tool names that have ``mcp.expose: true`` in their config."""
+        result: list[str] = []
+        for name, raw in self._raw_tools.items():
+            mcp_raw = raw.get("mcp")
+            if mcp_raw and mcp_raw.get("expose", False):
+                result.append(name)
+        return result
 
     def enrich_registry(self, registry: ToolRegistry) -> None:
         """Patch registry ToolDefinitions with YAML metadata.

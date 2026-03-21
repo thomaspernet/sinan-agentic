@@ -161,6 +161,7 @@ class AgentCatalog:
 
     Holds raw YAML data and resolves tool groups / conditions on ``get()``.
     Knowledge scopes are pre-loaded from YAML files and cached.
+    Also stores ``mcp_servers`` definitions for MCP server building.
     """
 
     def __init__(
@@ -168,10 +169,12 @@ class AgentCatalog:
         tool_groups: dict[str, list[str]],
         raw_agents: dict[str, dict[str, Any]],
         knowledge: dict[str, str] | None = None,
+        raw_mcp_servers: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self._tool_groups = tool_groups
         self._raw_agents = raw_agents
         self._knowledge: dict[str, str] = knowledge or {}
+        self._raw_mcp_servers: dict[str, dict[str, Any]] = raw_mcp_servers or {}
 
     def get(
         self,
@@ -229,6 +232,63 @@ class AgentCatalog:
     def list_agents(self) -> list[str]:
         """List all agent names in the catalog."""
         return list(self._raw_agents.keys())
+
+    def get_mcp_server(
+        self,
+        name: str,
+        config: object | None = None,
+    ) -> "MCPServerConfig":
+        """Get a resolved MCP server definition.
+
+        Tool groups are expanded and conditional tools evaluated, same as
+        agent tool resolution.
+
+        Raises:
+            KeyError: If the MCP server is not defined in agents.yaml.
+        """
+        from ..mcp.yaml_schema import MCPServerConfig, MCPResourceConfig, MCPPromptConfig
+
+        if name not in self._raw_mcp_servers:
+            available = ", ".join(sorted(self._raw_mcp_servers.keys()))
+            raise KeyError(
+                f"MCP server '{name}' not found in agents.yaml. "
+                f"Available: {available}"
+            )
+
+        raw = self._raw_mcp_servers[name]
+
+        # Resolve tools (expand groups, evaluate conditions)
+        tools = _resolve_tools(
+            raw.get("tools", []), self._tool_groups, config
+        )
+        write_tools = _resolve_tools(
+            raw.get("write_tools", []), self._tool_groups, config
+        )
+
+        # Parse resources
+        resources = [
+            MCPResourceConfig(**r)
+            for r in raw.get("resources", [])
+        ]
+
+        # Parse prompts
+        prompts = [
+            MCPPromptConfig(**p)
+            for p in raw.get("prompts", [])
+        ]
+
+        return MCPServerConfig(
+            name=name,
+            description=raw.get("description", ""),
+            tools=tools,
+            write_tools=write_tools,
+            resources=resources,
+            prompts=prompts,
+        )
+
+    def list_mcp_servers(self) -> list[str]:
+        """List all MCP server names in the catalog."""
+        return list(self._raw_mcp_servers.keys())
 
 
 # ---------------------------------------------------------------------------
@@ -322,4 +382,5 @@ def load_agent_catalog(
         tool_groups=data.get("tool_groups", {}),
         raw_agents=data.get("agents", {}),
         knowledge=knowledge,
+        raw_mcp_servers=data.get("mcp_servers", {}),
     )
