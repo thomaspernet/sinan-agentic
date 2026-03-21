@@ -18,6 +18,7 @@ A framework for building AI agents using the OpenAI Agents SDK. Fork this reposi
 - **Tool Catalog** - Load tool metadata (description, category, recovery hints) from a YAML file
 - **Knowledge Store** - Inject domain knowledge from YAML files into agent system prompts
 - **Structured Agent-as-Tool** - Typed input schemas and structured error handling for sub-agent calls
+- **MCP Server** - Expose registered tools as an MCP server (stdio or HTTP) with zero description duplication — all metadata comes from `tools.yaml`
 
 ## Installation
 
@@ -368,6 +369,171 @@ If both are provided, YAML wins for non-empty fields.
 | `catalog.get(name)` | `ToolYamlEntry` | Resolved entry for a single tool |
 | `catalog.list_tools()` | `list[str]` | All tool names in the catalog |
 | `catalog.enrich_registry(registry)` | `None` | Patch registry ToolDefinitions with YAML metadata |
+
+## MCP Server (optional)
+
+Expose your registered tools as an [MCP](https://modelcontextprotocol.io/) server so any MCP-compatible client (Claude Desktop, Claude Code, VS Code, Cursor, ChatGPT Desktop) can call them. Tool descriptions, parameter schemas, and annotations all come from `tools.yaml` — no duplication.
+
+Requires the `mcp` extra:
+
+```bash
+pip install 'agents-core[mcp]'
+# or: pip install git+https://github.com/thomaspernet/package_agentic.git#egg=agents-core[mcp]
+```
+
+### YAML configuration
+
+Mark tools for MCP exposure in `tools.yaml`:
+
+```yaml
+# tools.yaml
+tools:
+  search_database:
+    description: Search the database for records
+    category: search
+    parameters_description: "query (str): Search text"
+    returns_description: "JSON with results"
+    mcp:                          # NEW — MCP-specific metadata
+      expose: true
+      annotations:
+        readOnlyHint: true
+
+  create_record:
+    description: Create a new record
+    category: write
+    mcp:
+      expose: true
+      annotations:
+        readOnlyHint: false
+        idempotentHint: false
+
+  internal_tool:
+    description: Internal reasoning tool
+    category: reasoning
+    # No mcp section → not exposed to MCP clients
+```
+
+Define which tools the MCP server exposes in `agents.yaml`:
+
+```yaml
+# agents.yaml
+tool_groups:
+  search_tools:
+    - search_database
+    - read_record
+
+mcp_servers:
+  my_server:
+    description: "My knowledge base — search and manage records"
+    tools:
+      - group: search_tools       # reuses existing tool groups
+      - list_categories
+    write_tools:                  # separate list — opt-in via config
+      - create_record
+      - update_record
+```
+
+### Building the server
+
+Implement a `MCPContextFactory` to provide runtime dependencies (database connections, auth, filters) for each tool call:
+
+```python
+from agents_core.mcp import MCPContextFactory, build_mcp_server
+from agents_core import get_tool_registry, load_agent_catalog, load_tool_catalog
+
+class MyContextFactory(MCPContextFactory):
+    async def create_context(self):
+        db = await connect_to_database()
+        return MyAppContext(db_connector=db)
+
+    async def cleanup(self, context):
+        await context.db_connector.close()
+
+# Load catalogs
+agent_catalog = load_agent_catalog("agents.yaml", knowledge_dir="knowledge/")
+tool_catalog = load_tool_catalog("tools.yaml")
+tool_catalog.enrich_registry(get_tool_registry())
+
+# Get MCP server config from agents.yaml
+mcp_config = agent_catalog.get_mcp_server("my_server")
+
+# Build the server
+server = build_mcp_server(
+    server_name="My App",
+    tool_registry=get_tool_registry(),
+    tool_catalog=tool_catalog,
+    mcp_config=mcp_config,
+    context_factory=MyContextFactory(),
+    include_write_tools=False,  # read-only by default
+)
+
+# Run in stdio mode (for Claude Desktop / Claude Code)
+server.run(transport="stdio")
+```
+
+### Transports
+
+**stdio** — for local MCP clients (Claude Desktop, Claude Code). The server launches as a subprocess:
+
+```json
+{
+  "mcpServers": {
+    "my-app": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["-m", "my_app.mcp_server"]
+    }
+  }
+}
+```
+
+**Streamable HTTP** — for remote clients or when sharing a process with an existing web app (e.g., FastAPI). Mount the MCP server as an ASGI app:
+
+```python
+from fastapi import FastAPI
+
+app = FastAPI()
+mcp_app = server.streamable_http_app()
+app.mount("/mcp", mcp_app)
+```
+
+Clients connect via HTTP:
+
+```json
+{
+  "mcpServers": {
+    "my-app": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
+### How tool invocation works
+
+The `MCPToolAdapter` bridges MCP calls to your registered `@function_tool` functions:
+
+1. MCP client calls a tool (e.g., `search_database(query="test")`)
+2. The adapter creates a context via your `MCPContextFactory`
+3. It builds a synthetic `ToolContext` and calls `FunctionTool.on_invoke_tool()`
+4. The tool function runs with a real database connection, just like when called by an agent
+5. The result is returned to the MCP client
+6. The context is cleaned up (connections closed)
+
+Each tool call gets its own context — no shared state between calls.
+
+### API reference
+
+| Function / Class | Description |
+|---|---|
+| `build_mcp_server(...)` | Build a FastMCP server from registry + catalogs |
+| `MCPContextFactory` | ABC — implement `create_context()` and `cleanup()` |
+| `MCPServerBuilder` | Low-level builder class (use `build_mcp_server()` for convenience) |
+| `MCPServerConfig` | Pydantic model for resolved MCP server definition |
+| `MCPToolConfig` | Per-tool MCP config (expose flag + annotations) |
+| `catalog.get_mcp_tools()` | List tool names with `mcp.expose: true` |
+| `catalog.get_mcp_server(name)` | Get resolved `MCPServerConfig` from `agents.yaml` |
 
 ## Knowledge Store
 
@@ -817,11 +983,17 @@ agents_core/
 │   └── turn_budget_tool.py  # request_extension tool (agent self-approval)
 ├── instructions/
 │   └── builder.py           # InstructionBuilder base class
+├── mcp/                        # MCP server support (optional, requires agents-core[mcp])
+│   ├── __init__.py             # Public API: build_mcp_server, MCPContextFactory
+│   ├── context_protocol.py     # MCPContextFactory ABC
+│   ├── server_builder.py       # MCPServerBuilder + build_mcp_server()
+│   ├── tool_adapter.py         # Wraps registered tools for MCP invocation
+│   └── yaml_schema.py          # Pydantic models for MCP YAML config
 ├── registry/
-│   ├── agent_catalog.py     # YAML-driven agent catalog (load_agent_catalog)
+│   ├── agent_catalog.py     # YAML-driven agent catalog + MCP server definitions
 │   ├── agent_registry.py    # AgentDefinition + registry
 │   ├── agent_factory.py     # create_agent_from_registry()
-│   ├── tool_catalog.py      # YAML-driven tool catalog (load_tool_catalog)
+│   ├── tool_catalog.py      # YAML-driven tool catalog + MCP exposure flags
 │   ├── tool_registry.py     # ToolDefinition + registry
 │   └── guardrail_registry.py
 ├── services/
