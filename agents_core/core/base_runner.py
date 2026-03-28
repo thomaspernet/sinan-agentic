@@ -91,12 +91,16 @@ class BaseAgentRunner:
         self,
         agent_name: str,
         context: Any,
+        model_override: Optional[str] = None,
+        model_settings_override: Optional["ModelSettings"] = None,
     ) -> Agent:
         """Create an agent instance with proper tools and configuration.
 
         Args:
             agent_name: Name of registered agent to create
             context: Context for dynamic instruction generation
+            model_override: If set, replaces the agent definition's model.
+            model_settings_override: If set, replaces the computed model settings.
 
         Returns:
             Configured Agent instance
@@ -114,7 +118,13 @@ class BaseAgentRunner:
         agent_guardrails = self._build_guardrails(agent_def.guardrails)
         handoffs = await self._build_handoffs(agent_def.handoffs, context)
         output_type = self._resolve_output_type(agent_def.output_dataclass)
-        model_settings = self._build_model_settings(agent_def, ctx_wrapper)
+
+        if model_settings_override is not None:
+            model_settings = model_settings_override
+        else:
+            model_settings = self._build_model_settings(agent_def, ctx_wrapper)
+
+        effective_model = model_override or agent_def.model
 
         agent_kwargs = self._build_agent_kwargs(
             agent_def=agent_def,
@@ -124,11 +134,12 @@ class BaseAgentRunner:
             handoffs=handoffs,
             output_type=output_type,
             model_settings=model_settings,
+            model_override=model_override,
         )
 
         agent = Agent(**agent_kwargs)
 
-        logger.info(f"Created agent: {agent_name} (model: {agent_def.model})")
+        logger.info(f"Created agent: {agent_name} (model: {effective_model})")
 
         return agent
 
@@ -149,6 +160,8 @@ class BaseAgentRunner:
         input_text: str = "",
         turn_budget: Optional[TurnBudget] = None,
         error_recovery: Optional[ToolErrorRecovery] = None,
+        model_override: Optional[str] = None,
+        model_settings_override: Optional["ModelSettings"] = None,
     ) -> Any:
         """Run an agent and return its final_output directly.
 
@@ -200,17 +213,23 @@ class BaseAgentRunner:
                 agent_name, context, session, on_event, sdk_max_turns, input_text,
                 turn_budget=turn_budget,
                 error_recovery=error_recovery,
+                model_override=model_override,
+                model_settings_override=model_settings_override,
             )
         elif fallback_on_overflow:
             return await self._execute_with_fallback(
                 agent_name, context, session, sdk_max_turns, input_text,
                 fallback_prompt_builder,
+                model_override=model_override,
+                model_settings_override=model_settings_override,
             )
         else:
             return await self._execute_basic(
                 agent_name, context, session, sdk_max_turns, input_text,
                 turn_budget=turn_budget,
                 error_recovery=error_recovery,
+                model_override=model_override,
+                model_settings_override=model_settings_override,
             )
 
     async def _execute_basic(
@@ -222,9 +241,15 @@ class BaseAgentRunner:
         input_text: str,
         turn_budget: Optional[TurnBudget] = None,
         error_recovery: Optional[ToolErrorRecovery] = None,
+        model_override: Optional[str] = None,
+        model_settings_override: Optional["ModelSettings"] = None,
     ) -> Any:
         """Run agent via Runner.run() and return final_output."""
-        agent = await self.create_agent(agent_name=agent_name, context=context)
+        agent = await self.create_agent(
+            agent_name=agent_name, context=context,
+            model_override=model_override,
+            model_settings_override=model_settings_override,
+        )
 
         if turn_budget:
             agent.tools.append(request_extension_tool)
@@ -258,6 +283,8 @@ class BaseAgentRunner:
         max_turns: int,
         input_text: str,
         fallback_prompt_builder: Optional[Callable],
+        model_override: Optional[str] = None,
+        model_settings_override: Optional["ModelSettings"] = None,
     ) -> Any:
         """Run agent with automatic fallback on context overflow.
 
@@ -265,7 +292,11 @@ class BaseAgentRunner:
         all gathered tool outputs and makes a single condensed LLM call.
         """
         agent_def = self._get_agent_definition(agent_name)
-        agent = await self.create_agent(agent_name=agent_name, context=context)
+        agent = await self.create_agent(
+            agent_name=agent_name, context=context,
+            model_override=model_override,
+            model_settings_override=model_settings_override,
+        )
 
         collecting = _CollectingSessionWrapper(session)
         logger.info(f"Running agent with fallback: {agent_name}")
@@ -327,7 +358,7 @@ class BaseAgentRunner:
             messages.append({"role": "user", "content": prompt})
 
             kwargs: Dict[str, Any] = {
-                "model": agent_def.model or "gpt-4o-mini",
+                "model": model_override or agent_def.model or "gpt-4o-mini",
                 "messages": messages,
                 "temperature": 0.3,
             }
@@ -364,13 +395,19 @@ class BaseAgentRunner:
         input_text: str,
         turn_budget: Optional[TurnBudget] = None,
         error_recovery: Optional[ToolErrorRecovery] = None,
+        model_override: Optional[str] = None,
+        model_settings_override: Optional["ModelSettings"] = None,
     ) -> Any:
         """Run agent with token-level streaming via Runner.run_streamed().
 
         Adds user message to session, streams events via on_event callback,
         and returns final_output.
         """
-        agent = await self.create_agent(agent_name=agent_name, context=context)
+        agent = await self.create_agent(
+            agent_name=agent_name, context=context,
+            model_override=model_override,
+            model_settings_override=model_settings_override,
+        )
 
         if turn_budget:
             agent.tools.append(request_extension_tool)
@@ -755,6 +792,7 @@ class BaseAgentRunner:
         handoffs: list,
         output_type,
         model_settings,
+        model_override: Optional[str] = None,
     ) -> dict:
         """Build agent constructor kwargs.
 
@@ -766,6 +804,7 @@ class BaseAgentRunner:
             handoffs: Configured handoffs list
             output_type: Resolved output type
             model_settings: Model settings or None
+            model_override: If set, replaces agent_def.model
 
         Returns:
             Dictionary of agent constructor arguments
@@ -775,7 +814,7 @@ class BaseAgentRunner:
             "instructions": instructions,
             "tools": tools,
             "output_guardrails": guardrails if guardrails else [],
-            "model": agent_def.model,
+            "model": model_override or agent_def.model,
             "output_type": output_type,
         }
 
