@@ -51,6 +51,64 @@ class TestRecordToolResult:
         recovery.record_tool_result("my_tool", json.dumps({"data": "ok"}))
         assert not recovery.has_errors
 
+    def test_status_failed_detected_as_error(self):
+        recovery = ToolErrorRecovery()
+        recovery.record_tool_result(
+            "my_tool", json.dumps({"status": "failed", "message": "Page not found"})
+        )
+        assert recovery.has_errors
+        summary = recovery.get_error_summary()
+        assert summary["my_tool"]["error"] == "Page not found"
+
+    def test_status_validation_error_detected(self):
+        recovery = ToolErrorRecovery()
+        recovery.record_tool_result(
+            "my_tool",
+            json.dumps({"status": "validation_error", "message": "name is required"}),
+        )
+        assert recovery.has_errors
+        summary = recovery.get_error_summary()
+        assert summary["my_tool"]["error"] == "name is required"
+
+    def test_status_completed_is_success(self):
+        recovery = ToolErrorRecovery()
+        recovery.record_tool_result(
+            "my_tool",
+            json.dumps({"status": "completed", "message": "Page created"}),
+        )
+        assert not recovery.has_errors
+
+    def test_status_failed_without_message_uses_fallback(self):
+        recovery = ToolErrorRecovery()
+        recovery.record_tool_result(
+            "my_tool", json.dumps({"status": "failed"})
+        )
+        assert recovery.has_errors
+        summary = recovery.get_error_summary()
+        assert "failed" in summary["my_tool"]["error"]
+
+    def test_error_key_takes_priority_over_status(self):
+        """When both 'error' and 'status' are present, 'error' wins."""
+        recovery = ToolErrorRecovery()
+        recovery.record_tool_result(
+            "my_tool",
+            json.dumps({"error": "explicit error", "status": "failed", "message": "status msg"}),
+        )
+        assert recovery.has_errors
+        summary = recovery.get_error_summary()
+        assert summary["my_tool"]["error"] == "explicit error"
+
+    def test_status_failed_clears_on_subsequent_success(self):
+        recovery = ToolErrorRecovery()
+        recovery.record_tool_result(
+            "my_tool", json.dumps({"status": "failed", "message": "bad"})
+        )
+        assert recovery.has_errors
+        recovery.record_tool_result(
+            "my_tool", json.dumps({"status": "completed", "message": "ok"})
+        )
+        assert not recovery.has_errors
+
     def test_multiple_errors_same_tool(self):
         recovery = ToolErrorRecovery()
         args = json.dumps({"mode": "search", "query": "test"})
@@ -224,6 +282,21 @@ class TestHintLookup:
         recovery.record_tool_result("ext_tool", json.dumps({"error": "fail"}))
         section = recovery.build_instruction_section()
         assert "external hint" in section
+
+    def test_hint_shown_for_status_based_error(self):
+        registry = Mock()
+        tool_def = Mock()
+        tool_def.recovery_hint = "Use search to find the UUID first."
+        registry.get_tool.return_value = tool_def
+
+        recovery = ToolErrorRecovery(tool_registry=registry)
+        recovery.record_tool_result(
+            "update_page",
+            json.dumps({"status": "failed", "message": "Page not found: my-page"}),
+        )
+        section = recovery.build_instruction_section()
+        assert "Use search to find the UUID first." in section
+        assert "Page not found" in section
 
 
 # ------------------------------------------------------------------ #

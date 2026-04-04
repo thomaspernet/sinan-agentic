@@ -92,6 +92,9 @@ class ToolErrorRecovery:
         self._last_args: dict[str, str] = {}  # tool_name -> last args_hash
         self.max_identical_before_stop = max_identical_before_stop
 
+    # Status values that indicate a tool failure (used by _extract_error).
+    _FAILURE_STATUSES = frozenset({"failed", "validation_error", "error"})
+
     def record_tool_result(
         self,
         tool_name: str,
@@ -101,12 +104,16 @@ class ToolErrorRecovery:
         """Record a tool result, tracking errors and clearing on success.
 
         Called from ToolErrorRecoveryHooks.on_tool_end(). Parses the result
-        to detect errors (JSON with an "error" key) and tracks:
+        to detect errors and tracks:
         - Total error count per tool
         - Identical-argument retry count
         - Recovery hints from the registry
 
-        On success (no "error" key), clears the tracked error for this tool.
+        Error detection supports two JSON shapes:
+        - ``{"error": "message"}`` — explicit error key
+        - ``{"status": "failed", "message": "..."}`` — status-based failure
+
+        On success, clears the tracked error for this tool.
 
         Args:
             tool_name: Name of the tool that was called.
@@ -118,13 +125,15 @@ class ToolErrorRecovery:
         except (json.JSONDecodeError, TypeError):
             return
 
-        if not isinstance(data, dict) or "error" not in data:
+        if not isinstance(data, dict):
+            return
+
+        error_msg = self._extract_error(data)
+        if error_msg is None:
             # Success — clear tracked error for this tool
             self._errors.pop(tool_name, None)
             self._last_args.pop(tool_name, None)
             return
-
-        error_msg = str(data["error"])
         args_hash = self._hash_args(arguments)
         hint = self._get_hint(tool_name)
         args_summary = self._summarize_args(arguments)
@@ -257,6 +266,24 @@ class ToolErrorRecovery:
     # ------------------------------------------------------------------ #
     # Private helpers
     # ------------------------------------------------------------------ #
+
+    @classmethod
+    def _extract_error(cls, data: dict[str, Any]) -> str | None:
+        """Extract an error message from a tool result dict.
+
+        Supports two common shapes:
+        - ``{"error": "message"}`` — explicit error key (highest priority)
+        - ``{"status": "failed"|"validation_error"|"error", "message": "..."}``
+          — status-based failure
+
+        Returns the error message string, or None if the result is a success.
+        """
+        if "error" in data:
+            return str(data["error"])
+        status = data.get("status")
+        if isinstance(status, str) and status in cls._FAILURE_STATUSES:
+            return str(data.get("message", f"Tool returned status: {status}"))
+        return None
 
     def _get_hint(self, tool_name: str) -> str:
         """Look up recovery hint from registry or MCP config."""
