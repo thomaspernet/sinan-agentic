@@ -2,8 +2,8 @@
 
 import pytest
 
-from agents_core.registry.tool_catalog import ToolCatalog
-from agents_core.registry.agent_catalog import AgentCatalog
+from sinan_agentic_core.registry.tool_catalog import ToolCatalog
+from sinan_agentic_core.registry.agent_catalog import AgentCatalog
 
 
 # ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@ Provides SQLite-backed persistence for chat sessions:
 - OpenAI-compatible history format
 
 Usage:
-    from agents_core.session.sqlite_store import SQLiteSessionStore
+    from sinan_agentic_core.session.sqlite_store import SQLiteSessionStore
 
     store = SQLiteSessionStore("data/conversations.db")
 

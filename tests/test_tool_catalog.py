@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from agents_core.registry.tool_catalog import (
+from sinan_agentic_core.registry.tool_catalog import (
     ToolCatalog,
     ToolYamlEntry,
     load_tool_catalog,
 )
-from agents_core.registry.tool_registry import ToolDefinition, ToolRegistry
+from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
 
 
 # ---------------------------------------------------------------------------
@@ -277,13 +277,13 @@ class TestLoadToolCatalog:
 
 class TestTopLevelImports:
     def test_import_from_registry_package(self):
-        from agents_core.registry import ToolCatalog, ToolYamlEntry, load_tool_catalog
+        from sinan_agentic_core.registry import ToolCatalog, ToolYamlEntry, load_tool_catalog
         assert ToolCatalog is not None
         assert ToolYamlEntry is not None
         assert load_tool_catalog is not None
 
     def test_import_from_top_level(self):
-        from agents_core import ToolCatalog, ToolYamlEntry, load_tool_catalog
+        from sinan_agentic_core import ToolCatalog, ToolYamlEntry, load_tool_catalog
         assert ToolCatalog is not None
         assert ToolYamlEntry is not None
         assert load_tool_catalog is not None

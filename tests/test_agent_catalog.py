@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from agents_core.registry.agent_catalog import (
+from sinan_agentic_core.registry.agent_catalog import (
     AgentCatalog,
     AgentYamlEntry,
     TurnBudgetConfig,

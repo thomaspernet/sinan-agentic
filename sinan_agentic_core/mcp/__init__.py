@@ -1,15 +1,15 @@
-"""MCP server capabilities for agents_core.
+"""MCP server capabilities for sinan_agentic_core.
 
 Build an MCP server from the existing tool registry with zero duplication —
 descriptions, schemas, and annotations all come from tools.yaml.
 
 Requires the ``mcp`` extra::
 
-    pip install 'agents-core[mcp]'
+    pip install 'sinan_agentic_core[mcp]'
 
 Quick start::
 
-    from agents_core.mcp import build_mcp_server, MCPContextFactory
+    from sinan_agentic_core.mcp import build_mcp_server, MCPContextFactory
 
     class MyFactory(MCPContextFactory):
         async def create_context(self):

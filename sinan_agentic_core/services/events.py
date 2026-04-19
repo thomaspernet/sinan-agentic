@@ -5,7 +5,7 @@ Use ``StreamingHelper`` to emit events through a callback, or use
 the dataclasses directly with your own transport (SSE, WebSocket, etc.).
 
 Usage:
-    from agents_core.services.events import StreamingHelper, AgentStartEvent
+    from sinan_agentic_core.services.events import StreamingHelper, AgentStartEvent
 
     helper = StreamingHelper(event_callback=my_callback)
     helper.emit_agent_start("analyzer", iteration=1)

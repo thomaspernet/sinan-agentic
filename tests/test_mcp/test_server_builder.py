@@ -6,11 +6,11 @@ import pytest
 from agents import function_tool
 from agents.tool_context import ToolContext
 
-from agents_core.registry.tool_registry import ToolRegistry, ToolDefinition
-from agents_core.registry.tool_catalog import ToolCatalog
-from agents_core.mcp.context_protocol import MCPContextFactory
-from agents_core.mcp.yaml_schema import MCPServerConfig
-from agents_core.mcp.server_builder import build_mcp_server
+from sinan_agentic_core.registry.tool_registry import ToolRegistry, ToolDefinition
+from sinan_agentic_core.registry.tool_catalog import ToolCatalog
+from sinan_agentic_core.mcp.context_protocol import MCPContextFactory
+from sinan_agentic_core.mcp.yaml_schema import MCPServerConfig
+from sinan_agentic_core.mcp.server_builder import build_mcp_server
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 """Tests for MCP YAML schema models."""
 
-from agents_core.mcp.yaml_schema import (
+from sinan_agentic_core.mcp.yaml_schema import (
     MCPAnnotationsConfig,
     MCPPromptConfig,
     MCPResourceConfig,

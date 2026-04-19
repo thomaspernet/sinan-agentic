@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock
 from agents import function_tool
 from agents.tool_context import ToolContext
 
-from agents_core.registry.tool_registry import ToolRegistry, ToolDefinition
-from agents_core.mcp.context_protocol import MCPContextFactory
-from agents_core.mcp.tool_adapter import MCPToolAdapter, _get_params_schema
+from sinan_agentic_core.registry.tool_registry import ToolRegistry, ToolDefinition
+from sinan_agentic_core.mcp.context_protocol import MCPContextFactory
+from sinan_agentic_core.mcp.tool_adapter import MCPToolAdapter, _get_params_schema
 
 
 # ---------------------------------------------------------------------------

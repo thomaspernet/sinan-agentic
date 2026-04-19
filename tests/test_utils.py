@@ -1,8 +1,8 @@
-"""Tests for agents_core.utils.tool_helpers."""
+"""Tests for sinan_agentic_core.utils.tool_helpers."""
 
 import json
 
-from agents_core.utils.tool_helpers import tool_error, tool_response, unwrap_context
+from sinan_agentic_core.utils.tool_helpers import tool_error, tool_response, unwrap_context
 
 
 class _FakeWrapper:
@@ -65,7 +65,7 @@ def test_tool_error_with_extras() -> None:
 
 def test_imports_from_package() -> None:
     """Verify top-level imports work."""
-    from agents_core import tool_error, tool_response, unwrap_context
+    from sinan_agentic_core import tool_error, tool_response, unwrap_context
 
     assert callable(unwrap_context)
     assert callable(tool_response)

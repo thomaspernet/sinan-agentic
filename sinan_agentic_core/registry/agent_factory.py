@@ -4,7 +4,7 @@ Resolves an AgentDefinition + its registered tools into a ready-to-use
 OpenAI Agents SDK ``Agent`` instance.
 
 Usage:
-    from agents_core import create_agent_from_registry
+    from sinan_agentic_core import create_agent_from_registry
 
     agent = create_agent_from_registry("weather_assistant")
     result = await Runner.run(agent, "What's the weather?")
@@ -42,7 +42,7 @@ def create_agent_from_registry(
 
     Example::
 
-        from agents_core import create_agent_from_registry
+        from sinan_agentic_core import create_agent_from_registry
         from agents import Runner
 
         agent = create_agent_from_registry("my_agent")

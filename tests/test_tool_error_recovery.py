@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from agents_core.core.tool_error_recovery import (
+from sinan_agentic_core.core.tool_error_recovery import (
     ToolErrorEntry,
     ToolErrorRecovery,
     ToolErrorRecoveryHooks,
@@ -411,9 +411,9 @@ class TestToolErrorRecoveryHooks:
 class TestBaseAgentRunnerIntegration:
     @pytest.fixture
     def _registries(self):
-        from agents_core.registry.agent_registry import AgentDefinition, AgentRegistry
-        from agents_core.registry.tool_registry import ToolRegistry
-        from agents_core.registry.guardrail_registry import GuardrailRegistry
+        from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
+        from sinan_agentic_core.registry.tool_registry import ToolRegistry
+        from sinan_agentic_core.registry.guardrail_registry import GuardrailRegistry
 
         agent_reg = AgentRegistry()
         tool_reg = ToolRegistry()
@@ -431,13 +431,13 @@ class TestBaseAgentRunnerIntegration:
 
     @pytest.fixture
     def runner(self, _registries):
-        from agents_core.core.base_runner import BaseAgentRunner
+        from sinan_agentic_core.core.base_runner import BaseAgentRunner
 
         agent_reg, tool_reg, guardrail_reg = _registries
         with (
-            patch("agents_core.core.base_runner.get_agent_registry", return_value=agent_reg),
-            patch("agents_core.core.base_runner.get_tool_registry", return_value=tool_reg),
-            patch("agents_core.core.base_runner.get_guardrail_registry", return_value=guardrail_reg),
+            patch("sinan_agentic_core.core.base_runner.get_agent_registry", return_value=agent_reg),
+            patch("sinan_agentic_core.core.base_runner.get_tool_registry", return_value=tool_reg),
+            patch("sinan_agentic_core.core.base_runner.get_guardrail_registry", return_value=guardrail_reg),
         ):
             return BaseAgentRunner()
 
@@ -462,7 +462,7 @@ class TestBaseAgentRunnerIntegration:
         assert agent.instructions == "Static."
 
     def test_apply_dynamic_instructions_both_budget_and_recovery(self, runner):
-        from agents_core.core.turn_budget import TurnBudget
+        from sinan_agentic_core.core.turn_budget import TurnBudget
 
         budget = TurnBudget(default_turns=10)
         budget.turns_used = 8
@@ -479,25 +479,25 @@ class TestBaseAgentRunnerIntegration:
         assert "Tool Error Recovery" in result  # recovery section
 
     def test_build_hooks_none_when_no_features(self):
-        from agents_core.core.base_runner import BaseAgentRunner
+        from sinan_agentic_core.core.base_runner import BaseAgentRunner
         assert BaseAgentRunner._build_hooks() is None
 
     def test_build_hooks_single_budget(self):
-        from agents_core.core.base_runner import BaseAgentRunner
-        from agents_core.core.turn_budget import TurnBudget, TurnBudgetHooks
+        from sinan_agentic_core.core.base_runner import BaseAgentRunner
+        from sinan_agentic_core.core.turn_budget import TurnBudget, TurnBudgetHooks
 
         hooks = BaseAgentRunner._build_hooks(budget=TurnBudget())
         assert isinstance(hooks, TurnBudgetHooks)
 
     def test_build_hooks_single_recovery(self):
-        from agents_core.core.base_runner import BaseAgentRunner
+        from sinan_agentic_core.core.base_runner import BaseAgentRunner
 
         hooks = BaseAgentRunner._build_hooks(recovery=ToolErrorRecovery())
         assert isinstance(hooks, ToolErrorRecoveryHooks)
 
     def test_build_hooks_composite_when_both(self):
-        from agents_core.core.base_runner import BaseAgentRunner, _CompositeHooks
-        from agents_core.core.turn_budget import TurnBudget
+        from sinan_agentic_core.core.base_runner import BaseAgentRunner, _CompositeHooks
+        from sinan_agentic_core.core.turn_budget import TurnBudget
 
         hooks = BaseAgentRunner._build_hooks(
             budget=TurnBudget(), recovery=ToolErrorRecovery()
@@ -513,7 +513,7 @@ class TestBaseAgentRunnerIntegration:
         mock_result = Mock()
         mock_result.final_output = "test output"
 
-        with patch("agents_core.core.base_runner.Runner") as MockRunner:
+        with patch("sinan_agentic_core.core.base_runner.Runner") as MockRunner:
             MockRunner.run = AsyncMock(return_value=mock_result)
             with patch.object(runner, "create_agent", new_callable=AsyncMock) as mock_create:
                 mock_agent = Mock()
@@ -555,7 +555,7 @@ class TestBaseAgentRunnerIntegration:
 class TestCompositeHooks:
     @pytest.mark.asyncio
     async def test_delegates_to_all_hooks(self):
-        from agents_core.core.base_runner import _CompositeHooks
+        from sinan_agentic_core.core.base_runner import _CompositeHooks
 
         hook_a = Mock()
         hook_a.on_tool_start = AsyncMock()
@@ -587,11 +587,11 @@ class TestCompositeHooks:
 
 class TestTopLevelImports:
     def test_importable_from_core(self):
-        from agents_core.core import ToolErrorRecovery, ToolErrorRecoveryHooks
+        from sinan_agentic_core.core import ToolErrorRecovery, ToolErrorRecoveryHooks
         assert ToolErrorRecovery is not None
         assert ToolErrorRecoveryHooks is not None
 
     def test_importable_from_top_level(self):
-        from agents_core import ToolErrorRecovery, ToolErrorRecoveryHooks
+        from sinan_agentic_core import ToolErrorRecovery, ToolErrorRecoveryHooks
         assert ToolErrorRecovery is not None
         assert ToolErrorRecoveryHooks is not None

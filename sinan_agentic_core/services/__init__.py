@@ -3,13 +3,13 @@
 Public API::
 
     # Chat functions
-    from agents_core.services import chat, chat_with_hooks, chat_streamed
+    from sinan_agentic_core.services import chat, chat_with_hooks, chat_streamed
 
     # RunHooks for tool tracking
-    from agents_core.services import StreamingRunHooks
+    from sinan_agentic_core.services import StreamingRunHooks
 
     # Event types + emitter (used by orchestrator)
-    from agents_core.services import StreamingHelper, AgentStartEvent, ...
+    from sinan_agentic_core.services import StreamingHelper, AgentStartEvent, ...
 """
 
 from .events import (

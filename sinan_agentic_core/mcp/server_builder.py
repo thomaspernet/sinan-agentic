@@ -6,7 +6,7 @@ Reads tool functions from ``ToolRegistry``, metadata from ``ToolCatalog``
 
 Usage::
 
-    from agents_core.mcp import build_mcp_server
+    from sinan_agentic_core.mcp import build_mcp_server
 
     server = build_mcp_server(
         server_name="My App",
@@ -39,7 +39,7 @@ def _import_fastmcp() -> Any:
     except ImportError:
         raise ImportError(
             "FastMCP is required for MCP server support. "
-            "Install it with: pip install 'agents-core[mcp]' "
+            "Install it with: pip install 'sinan_agentic_core[mcp]' "
             "or: pip install mcp"
         )
 
@@ -226,8 +226,8 @@ def build_mcp_server(
 
     Example::
 
-        from agents_core.mcp import build_mcp_server, MCPContextFactory
-        from agents_core import get_tool_registry
+        from sinan_agentic_core.mcp import build_mcp_server, MCPContextFactory
+        from sinan_agentic_core import get_tool_registry
 
         class MyFactory(MCPContextFactory):
             async def create_context(self):

@@ -2,8 +2,8 @@
 
 import pytest
 
-from agents_core.session.agent_session import AgentSession, ConversationHistory
-from agents_core.session.sqlite_store import SQLiteSessionStore
+from sinan_agentic_core.session.agent_session import AgentSession, ConversationHistory
+from sinan_agentic_core.session.sqlite_store import SQLiteSessionStore
 
 
 # -- ConversationHistory -------------------------------------------------------

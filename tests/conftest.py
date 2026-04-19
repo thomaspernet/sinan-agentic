@@ -1,12 +1,12 @@
-"""Shared fixtures for agents_core tests."""
+"""Shared fixtures for sinan_agentic_core tests."""
 
 from unittest.mock import Mock
 
 import pytest
 from agents import Usage
 
-from agents_core.models.context import AgentContext
-from agents_core.session.agent_session import AgentSession, ConversationHistory
+from sinan_agentic_core.models.context import AgentContext
+from sinan_agentic_core.session.agent_session import AgentSession, ConversationHistory
 
 
 @pytest.fixture

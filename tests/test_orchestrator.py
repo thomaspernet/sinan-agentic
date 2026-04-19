@@ -4,23 +4,23 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from agents_core.registry.agent_registry import AgentRegistry
-from agents_core.registry.guardrail_registry import GuardrailRegistry
-from agents_core.registry.tool_registry import ToolRegistry
+from sinan_agentic_core.registry.agent_registry import AgentRegistry
+from sinan_agentic_core.registry.guardrail_registry import GuardrailRegistry
+from sinan_agentic_core.registry.tool_registry import ToolRegistry
 
 
 @pytest.fixture
 def orchestrator():
     """Build an AgentOrchestrator with empty registries."""
     with (
-        patch("agents_core.core.base_runner.get_agent_registry", return_value=AgentRegistry()),
-        patch("agents_core.core.base_runner.get_tool_registry", return_value=ToolRegistry()),
+        patch("sinan_agentic_core.core.base_runner.get_agent_registry", return_value=AgentRegistry()),
+        patch("sinan_agentic_core.core.base_runner.get_tool_registry", return_value=ToolRegistry()),
         patch(
-            "agents_core.core.base_runner.get_guardrail_registry",
+            "sinan_agentic_core.core.base_runner.get_guardrail_registry",
             return_value=GuardrailRegistry(),
         ),
     ):
-        from agents_core.orchestrator import AgentOrchestrator
+        from sinan_agentic_core.orchestrator import AgentOrchestrator
 
         return AgentOrchestrator()
 

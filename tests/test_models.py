@@ -2,8 +2,8 @@
 
 from unittest.mock import Mock
 
-from agents_core.models.outputs import ChatResponse, ToolOutput
-from agents_core.models.context import AgentContext
+from sinan_agentic_core.models.outputs import ChatResponse, ToolOutput
+from sinan_agentic_core.models.context import AgentContext
 
 
 # -- ToolOutput ---------------------------------------------------------------

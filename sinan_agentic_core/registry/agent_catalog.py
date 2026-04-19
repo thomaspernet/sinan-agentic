@@ -13,7 +13,7 @@ Features:
 
 Usage::
 
-    from agents_core import load_agent_catalog
+    from sinan_agentic_core import load_agent_catalog
 
     catalog = load_agent_catalog("agents.yaml", knowledge_dir="knowledge/")
 

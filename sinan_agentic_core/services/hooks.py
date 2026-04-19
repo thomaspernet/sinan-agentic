@@ -8,7 +8,7 @@ processing.  Pair it with ``chat_with_hooks()`` or use directly with
 Usage:
     import asyncio
     from agents import Runner
-    from agents_core.services.hooks import StreamingRunHooks
+    from sinan_agentic_core.services.hooks import StreamingRunHooks
 
     queue = asyncio.Queue()
     hooks = StreamingRunHooks(queue, tool_friendly_names={"get_weather": "Checking weather"})

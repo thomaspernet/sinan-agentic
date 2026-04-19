@@ -1,4 +1,10 @@
-# Agents Core
+# Sinan (司南)
+
+<img src="https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Model_Si_Nan_of_Han_Dynasty.jpg/250px-Model_Si_Nan_of_Han_Dynasty.jpg" alt="Sinan — a Han dynasty south-pointing spoon on a bronze plate" width="220" align="right" />
+
+> **sinan (司南)** — the earliest known compass. A lodestone carved into a spoon, resting on a bronze plate inscribed with the 24 directions. Han dynasty China, ~2nd century BCE.
+>
+> Like its namesake, this framework is the instrument that helps you align yourself with our agentic logic — the plate holds the field of tools, knowledge, and rules; the spoon is the agent that always knows which way to turn.
 
 A framework for building AI agents using the OpenAI Agents SDK. Fork this repository to quickly create agent-based applications.
 
@@ -23,7 +29,7 @@ A framework for building AI agents using the OpenAI Agents SDK. Fork this reposi
 ## Installation
 
 ```bash
-pip install git+https://github.com/thomaspernet/package_agentic.git
+pip install git+https://github.com/thomaspernet/sinan-agentic.git
 export OPENAI_API_KEY="your-key"
 ```
 
@@ -33,7 +39,7 @@ export OPENAI_API_KEY="your-key"
 
 ```python
 from agents import function_tool
-from agents_core import register_tool, AgentDefinition, register_agent
+from sinan_agentic_core import register_tool, AgentDefinition, register_agent
 
 @register_tool(name="get_weather")
 @function_tool
@@ -53,7 +59,7 @@ register_agent(AgentDefinition(
 
 ```python
 from agents import Runner
-from agents_core import create_agent_from_registry
+from sinan_agentic_core import create_agent_from_registry
 
 agent = create_agent_from_registry("weather_assistant")
 result = await Runner.run(agent, "What's the weather in Paris?")
@@ -65,7 +71,7 @@ print(result.final_output)
 Ready-to-use functions for API endpoints. All accept an optional `context=` parameter that gets forwarded to `Runner.run()`, making it available to dynamic instructions and tools via `RunContextWrapper`.
 
 ```python
-from agents_core import chat, chat_with_hooks, chat_streamed, AgentSession
+from sinan_agentic_core import chat, chat_with_hooks, chat_streamed, AgentSession
 
 session = AgentSession(session_id="user-123")
 
@@ -140,7 +146,7 @@ result = await chat("Hello!", "my_agent", session, context=UserContext(user_name
 Build agent system instructions with a consistent section pattern instead of ad-hoc string concatenation. Subclass `InstructionBuilder`, override the sections you need, and skip the rest.
 
 ```python
-from agents_core import InstructionBuilder, AgentDefinition, register_agent
+from sinan_agentic_core import InstructionBuilder, AgentDefinition, register_agent
 
 class MyAgentBuilder(InstructionBuilder):
     def __init__(self, context, agent_def):
@@ -169,7 +175,7 @@ register_agent(AgentDefinition(
 
 `build()` assembles sections in order (persona → domain_knowledge → context → steps → rules → output), skips any that return `None`, and joins with double newlines. Override `sections()` to reorder, or `extra_sections()` to append additional `(header, body)` blocks.
 
-For agents with fundamentally different instruction paths (e.g., surface vs deep extraction), use a shared private base with concrete subclasses and a dispatcher function — see `agents_core/instructions/builder.py` docstring for details.
+For agents with fundamentally different instruction paths (e.g., surface vs deep extraction), use a shared private base with concrete subclasses and a dispatcher function — see `sinan_agentic_core/instructions/builder.py` docstring for details.
 
 ## Agent Catalog (YAML-driven agent config)
 
@@ -189,7 +195,7 @@ agents:
 ```
 
 ```python
-from agents_core import load_agent_catalog, AgentDefinition, register_agent
+from sinan_agentic_core import load_agent_catalog, AgentDefinition, register_agent
 
 catalog = load_agent_catalog("agents.yaml")
 cfg = catalog.get("weather_assistant")
@@ -315,7 +321,7 @@ tools:
 
 ```python
 from agents import function_tool
-from agents_core import register_tool, load_tool_catalog, get_tool_registry
+from sinan_agentic_core import register_tool, load_tool_catalog, get_tool_registry
 
 # Decorator is minimal — just links function to name
 @register_tool(name="search_database")
@@ -377,8 +383,8 @@ Expose your registered tools as an [MCP](https://modelcontextprotocol.io/) serve
 Requires the `mcp` extra:
 
 ```bash
-pip install 'agents-core[mcp]'
-# or: pip install git+https://github.com/thomaspernet/package_agentic.git#egg=agents-core[mcp]
+pip install 'sinan-agentic-core[mcp]'
+# or: pip install git+https://github.com/thomaspernet/sinan-agentic.git#egg=sinan-agentic-core[mcp]
 ```
 
 ### YAML configuration
@@ -438,8 +444,8 @@ mcp_servers:
 Implement a `MCPContextFactory` to provide runtime dependencies (database connections, auth, filters) for each tool call:
 
 ```python
-from agents_core.mcp import MCPContextFactory, build_mcp_server
-from agents_core import get_tool_registry, load_agent_catalog, load_tool_catalog
+from sinan_agentic_core.mcp import MCPContextFactory, build_mcp_server
+from sinan_agentic_core import get_tool_registry, load_agent_catalog, load_tool_catalog
 
 class MyContextFactory(MCPContextFactory):
     async def create_context(self):
@@ -574,7 +580,7 @@ agents:
 Pass `knowledge_dir` to `load_agent_catalog()`:
 
 ```python
-from agents_core import load_agent_catalog
+from sinan_agentic_core import load_agent_catalog
 
 catalog = load_agent_catalog("agents.yaml", knowledge_dir="knowledge/")
 cfg = catalog.get("extraction_agent")
@@ -617,7 +623,7 @@ Define a dataclass for the sub-agent's input schema. The parent LLM is forced to
 
 ```python
 from dataclasses import dataclass
-from agents_core import AgentDefinition, register_agent
+from sinan_agentic_core import AgentDefinition, register_agent
 
 @dataclass
 class WriterRequest:
@@ -715,7 +721,7 @@ recovery = ToolErrorRecovery(
 Pass `error_recovery` to `execute()`:
 
 ```python
-from agents_core import BaseAgentRunner, ToolErrorRecovery
+from sinan_agentic_core import BaseAgentRunner, ToolErrorRecovery
 
 runner = BaseAgentRunner()
 recovery = ToolErrorRecovery(tool_registry=runner.tool_registry)
@@ -738,7 +744,7 @@ if recovery.has_errors:
 Both features compose automatically. When both are active, the agent sees both sections in its instructions:
 
 ```python
-from agents_core import BaseAgentRunner, TurnBudget, ToolErrorRecovery
+from sinan_agentic_core import BaseAgentRunner, TurnBudget, ToolErrorRecovery
 
 runner = BaseAgentRunner()
 budget = TurnBudget(default_turns=15)
@@ -834,7 +840,7 @@ agents:
 Then use `build_turn_budget()` to create a `TurnBudget` from the catalog entry:
 
 ```python
-from agents_core import load_agent_catalog, BaseAgentRunner
+from sinan_agentic_core import load_agent_catalog, BaseAgentRunner
 
 catalog = load_agent_catalog("agents.yaml")
 cfg = catalog.get("research_agent")
@@ -856,7 +862,7 @@ output = await runner.execute(
 You can also create a `TurnBudget` directly:
 
 ```python
-from agents_core import BaseAgentRunner, TurnBudget
+from sinan_agentic_core import BaseAgentRunner, TurnBudget
 
 budget = TurnBudget(
     default_turns=10,
@@ -942,7 +948,7 @@ If `as_tool_turn_budget` is not set, the runner falls back to `as_tool_max_turns
 ## Session Persistence
 
 ```python
-from agents_core import AgentSession, SQLiteSessionStore
+from sinan_agentic_core import AgentSession, SQLiteSessionStore
 
 # In-memory (default)
 session = AgentSession(session_id="user-123")
@@ -961,7 +967,7 @@ store.clear_session("session-123")     # Delete permanently
 ## Output Models
 
 ```python
-from agents_core import ToolOutput, ChatResponse
+from sinan_agentic_core import ToolOutput, ChatResponse
 
 output = ToolOutput(success=True, data={"temp": 72}, metadata={"source": "api"})
 response = ChatResponse(success=True, response="It's sunny.", session_id="u-123", tools_called=["get_weather"])
@@ -973,7 +979,7 @@ response.to_dict()  # {"success": True, "response": "...", ...}
 ## Project Structure
 
 ```text
-agents_core/
+sinan_agentic_core/
 ├── __init__.py              # Main exports
 ├── orchestrator.py          # Multi-agent orchestration
 ├── core/
@@ -983,7 +989,7 @@ agents_core/
 │   └── turn_budget_tool.py  # request_extension tool (agent self-approval)
 ├── instructions/
 │   └── builder.py           # InstructionBuilder base class
-├── mcp/                        # MCP server support (optional, requires agents-core[mcp])
+├── mcp/                        # MCP server support (optional, requires sinan-agentic-core[mcp])
 │   ├── __init__.py             # Public API: build_mcp_server, MCPContextFactory
 │   ├── context_protocol.py     # MCPContextFactory ABC
 │   ├── server_builder.py       # MCPServerBuilder + build_mcp_server()

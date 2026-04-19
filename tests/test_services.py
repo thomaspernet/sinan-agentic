@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from agents_core.services.events import (
+from sinan_agentic_core.services.events import (
     AgentCompleteEvent,
     AgentStartEvent,
     AnswerEvent,
@@ -16,9 +16,9 @@ from agents_core.services.events import (
     ThinkingEvent,
     ToolCallEvent,
 )
-from agents_core.services.hooks import StreamingRunHooks
-from agents_core.services.chat import _usage_to_dict
-from agents_core.session.agent_session import AgentSession
+from sinan_agentic_core.services.hooks import StreamingRunHooks
+from sinan_agentic_core.services.chat import _usage_to_dict
+from sinan_agentic_core.session.agent_session import AgentSession
 
 
 # -- Event dataclasses ---------------------------------------------------------
@@ -204,8 +204,8 @@ class TestChat:
         import sys
         # Import to ensure the module is loaded, then get from sys.modules
         # to avoid the __init__.py shadowing the module with the function
-        import agents_core.services.chat  # noqa: F811
-        return sys.modules["agents_core.services.chat"]
+        import sinan_agentic_core.services.chat  # noqa: F811
+        return sys.modules["sinan_agentic_core.services.chat"]
 
     async def test_chat_returns_usage(self):
         from agents import Usage
@@ -289,8 +289,8 @@ class TestChatWithHooks:
     @staticmethod
     def _get_chat_module():
         import sys
-        import agents_core.services.chat  # noqa: F811
-        return sys.modules["agents_core.services.chat"]
+        import sinan_agentic_core.services.chat  # noqa: F811
+        return sys.modules["sinan_agentic_core.services.chat"]
 
     async def test_yields_thinking_and_answer(self):
         from agents import Usage
@@ -387,8 +387,8 @@ class TestChatStreamed:
     @staticmethod
     def _get_chat_module():
         import sys
-        import agents_core.services.chat  # noqa: F811
-        return sys.modules["agents_core.services.chat"]
+        import sinan_agentic_core.services.chat  # noqa: F811
+        return sys.modules["sinan_agentic_core.services.chat"]
 
     async def test_yields_stream_events(self):
         from agents import Usage

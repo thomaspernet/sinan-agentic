@@ -4,7 +4,7 @@ Define your agent tools here. Tools are functions that agents can call.
 
 Example:
     from agents import function_tool
-    from agents_core.registry import register_tool
+    from sinan_agentic_core.registry import register_tool
     
     @register_tool(
         name="my_tool",

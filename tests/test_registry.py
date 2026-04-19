@@ -2,9 +2,9 @@
 
 import pytest
 
-from agents_core.registry.agent_registry import AgentDefinition, AgentRegistry
-from agents_core.registry.tool_registry import ToolDefinition, ToolRegistry
-from agents_core.registry.guardrail_registry import GuardrailDefinition, GuardrailRegistry
+from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
+from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
+from sinan_agentic_core.registry.guardrail_registry import GuardrailDefinition, GuardrailRegistry
 
 
 # -- AgentDefinition -----------------------------------------------------------
@@ -75,7 +75,7 @@ class TestAgentRegistry:
         assert reg.get("x").description == "new"
 
     def test_register_agent_global_helper(self):
-        from agents_core.registry.agent_registry import register_agent, get_agent_registry
+        from sinan_agentic_core.registry.agent_registry import register_agent, get_agent_registry
 
         a = AgentDefinition(name="_global_helper_agent", description="d", instructions="i")
         register_agent(a)
@@ -144,7 +144,7 @@ class TestToolRegistry:
 
 class TestRegisterToolDecorator:
     def test_decorator_registers_and_returns_function(self):
-        from agents_core.registry.tool_registry import register_tool, get_tool_registry
+        from sinan_agentic_core.registry.tool_registry import register_tool, get_tool_registry
 
         @register_tool(
             name="_deco_tool",
@@ -217,14 +217,14 @@ class TestGuardrailRegistry:
 
 class TestRegisterGuardrailDecorator:
     def test_get_guardrail_registry_returns_singleton(self):
-        from agents_core.registry.guardrail_registry import get_guardrail_registry
+        from sinan_agentic_core.registry.guardrail_registry import get_guardrail_registry
 
         reg1 = get_guardrail_registry()
         reg2 = get_guardrail_registry()
         assert reg1 is reg2
 
     def test_decorator_registers_and_returns_function(self):
-        from agents_core.registry.guardrail_registry import (
+        from sinan_agentic_core.registry.guardrail_registry import (
             register_guardrail,
             get_guardrail_registry,
         )
@@ -251,9 +251,9 @@ class TestRegisterGuardrailDecorator:
 
 class TestAgentFactory:
     def test_create_agent_success(self):
-        from agents_core.registry.agent_factory import create_agent_from_registry
-        from agents_core.registry.agent_registry import get_agent_registry
-        from agents_core.registry.tool_registry import get_tool_registry
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+        from sinan_agentic_core.registry.agent_registry import get_agent_registry
+        from sinan_agentic_core.registry.tool_registry import get_tool_registry
 
         tool_reg = get_tool_registry()
         tool_fn = lambda: None
@@ -274,14 +274,14 @@ class TestAgentFactory:
         assert agent.name == "_factory_agent"
 
     def test_create_agent_not_found(self):
-        from agents_core.registry.agent_factory import create_agent_from_registry
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
 
         with pytest.raises(ValueError, match="not found"):
             create_agent_from_registry("__nonexistent_factory_agent__")
 
     def test_model_override(self):
-        from agents_core.registry.agent_factory import create_agent_from_registry
-        from agents_core.registry.agent_registry import get_agent_registry
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+        from sinan_agentic_core.registry.agent_registry import get_agent_registry
 
         get_agent_registry().register(
             AgentDefinition(

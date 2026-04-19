@@ -3,7 +3,7 @@
 Define your agents here by creating AgentDefinition instances and registering them.
 
 Example:
-    from agents_core.registry import AgentDefinition, register_agent
+    from sinan_agentic_core.registry import AgentDefinition, register_agent
     
     my_agent = AgentDefinition(
         name="analyzer",

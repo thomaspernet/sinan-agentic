@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock, patch, MagicMock
 
 import pytest
 
-from agents_core.core.turn_budget import TurnBudget, TurnBudgetHooks
+from sinan_agentic_core.core.turn_budget import TurnBudget, TurnBudgetHooks
 
 
 # ------------------------------------------------------------------ #
@@ -233,12 +233,12 @@ class TestTurnBudgetHooks:
 
 class TestInstructionBuilderTurnBudget:
     def test_no_budget_returns_none(self):
-        from agents_core.instructions import InstructionBuilder
+        from sinan_agentic_core.instructions import InstructionBuilder
         builder = InstructionBuilder(None, None)
         assert builder.turn_budget_section() is None
 
     def test_budget_in_context_returns_section(self):
-        from agents_core.instructions import InstructionBuilder
+        from sinan_agentic_core.instructions import InstructionBuilder
 
         budget = TurnBudget(default_turns=8)
         budget.turns_used = 6
@@ -252,7 +252,7 @@ class TestInstructionBuilderTurnBudget:
         assert "2" in section and "8" in section
 
     def test_budget_section_in_build_output(self):
-        from agents_core.instructions import InstructionBuilder
+        from sinan_agentic_core.instructions import InstructionBuilder
 
         budget = TurnBudget(default_turns=10)
 
@@ -268,7 +268,7 @@ class TestInstructionBuilderTurnBudget:
         assert "10 turns" in result
 
     def test_budget_section_absent_without_budget(self):
-        from agents_core.instructions import InstructionBuilder
+        from sinan_agentic_core.instructions import InstructionBuilder
 
         class TestBuilder(InstructionBuilder):
             def persona(self):
@@ -287,9 +287,9 @@ class TestInstructionBuilderTurnBudget:
 class TestBaseAgentRunnerTurnBudget:
     @pytest.fixture
     def _registries(self):
-        from agents_core.registry.agent_registry import AgentDefinition, AgentRegistry
-        from agents_core.registry.tool_registry import ToolRegistry
-        from agents_core.registry.guardrail_registry import GuardrailRegistry
+        from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
+        from sinan_agentic_core.registry.tool_registry import ToolRegistry
+        from sinan_agentic_core.registry.guardrail_registry import GuardrailRegistry
 
         agent_reg = AgentRegistry()
         tool_reg = ToolRegistry()
@@ -307,13 +307,13 @@ class TestBaseAgentRunnerTurnBudget:
 
     @pytest.fixture
     def runner(self, _registries):
-        from agents_core.core.base_runner import BaseAgentRunner
+        from sinan_agentic_core.core.base_runner import BaseAgentRunner
 
         agent_reg, tool_reg, guardrail_reg = _registries
         with (
-            patch("agents_core.core.base_runner.get_agent_registry", return_value=agent_reg),
-            patch("agents_core.core.base_runner.get_tool_registry", return_value=tool_reg),
-            patch("agents_core.core.base_runner.get_guardrail_registry", return_value=guardrail_reg),
+            patch("sinan_agentic_core.core.base_runner.get_agent_registry", return_value=agent_reg),
+            patch("sinan_agentic_core.core.base_runner.get_tool_registry", return_value=tool_reg),
+            patch("sinan_agentic_core.core.base_runner.get_guardrail_registry", return_value=guardrail_reg),
         ):
             return BaseAgentRunner()
 
@@ -351,7 +351,7 @@ class TestBaseAgentRunnerTurnBudget:
         mock_result = Mock()
         mock_result.final_output = "test output"
 
-        with patch("agents_core.core.base_runner.Runner") as MockRunner:
+        with patch("sinan_agentic_core.core.base_runner.Runner") as MockRunner:
             MockRunner.run = AsyncMock(return_value=mock_result)
             with patch.object(runner, "create_agent", new_callable=AsyncMock) as mock_create:
                 mock_agent = Mock()
@@ -448,14 +448,14 @@ class TestBaseAgentRunnerTurnBudget:
 
 class TestTopLevelImports:
     def test_turn_budget_importable(self):
-        from agents_core import TurnBudget
+        from sinan_agentic_core import TurnBudget
         assert TurnBudget is not None
 
     def test_turn_budget_hooks_importable(self):
-        from agents_core import TurnBudgetHooks
+        from sinan_agentic_core import TurnBudgetHooks
         assert TurnBudgetHooks is not None
 
     def test_turn_budget_from_core(self):
-        from agents_core.core import TurnBudget, TurnBudgetHooks
+        from sinan_agentic_core.core import TurnBudget, TurnBudgetHooks
         assert TurnBudget is not None
         assert TurnBudgetHooks is not None

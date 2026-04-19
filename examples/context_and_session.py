@@ -18,7 +18,7 @@ from typing import Any, Dict, List
 
 from agents import Agent, Runner, RunContextWrapper, function_tool
 
-from agents_core import AgentSession
+from sinan_agentic_core import AgentSession
 
 
 # =============================================================================

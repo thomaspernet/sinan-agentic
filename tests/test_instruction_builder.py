@@ -1,6 +1,6 @@
 """Tests for InstructionBuilder base class."""
 
-from agents_core.instructions import InstructionBuilder
+from sinan_agentic_core.instructions import InstructionBuilder
 
 
 class TestBuild:
@@ -192,10 +192,10 @@ class TestCallable:
 
 
 class TestTopLevelImport:
-    def test_importable_from_agents_core(self):
-        from agents_core import InstructionBuilder as IB
+    def test_importable_from_sinan_agentic_core(self):
+        from sinan_agentic_core import InstructionBuilder as IB
         assert IB is InstructionBuilder
 
     def test_importable_from_instructions(self):
-        from agents_core.instructions import InstructionBuilder as IB
+        from sinan_agentic_core.instructions import InstructionBuilder as IB
         assert IB is InstructionBuilder

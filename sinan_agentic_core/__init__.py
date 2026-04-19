@@ -1,4 +1,4 @@
-"""Agents Core - Generic agent orchestration framework.
+"""Sinan - Generic agent orchestration framework.
 
 This package provides a reusable framework for building multi-agent systems
 using the OpenAI Agents SDK with code orchestration.
@@ -11,7 +11,7 @@ Core Components:
 - AgentOrchestrator: Workflow orchestration logic
 
 Quick Start:
-    from agents_core import (
+    from sinan_agentic_core import (
         AgentSession,
         AgentContext,
         AgentOrchestrator,
@@ -69,9 +69,9 @@ from .services import (
 from .orchestrator import AgentOrchestrator
 from .utils import tool_error, tool_response, unwrap_context
 
-# MCP support (optional — requires 'agents-core[mcp]')
+# MCP support (optional — requires 'sinan_agentic_core[mcp]')
 # Lazy import to avoid requiring FastMCP for non-MCP users.
-# Usage: from agents_core.mcp import build_mcp_server, MCPContextFactory
+# Usage: from sinan_agentic_core.mcp import build_mcp_server, MCPContextFactory
 
 __all__ = [
     # Core

@@ -6,12 +6,12 @@ from unittest.mock import AsyncMock, Mock, patch, MagicMock
 import pytest
 from agents import Usage
 
-from agents_core.core.base_runner import BaseAgentRunner, _CollectingSessionWrapper
-from agents_core.models.context import AgentContext
-from agents_core.registry.agent_registry import AgentDefinition, AgentRegistry
-from agents_core.registry.guardrail_registry import GuardrailDefinition, GuardrailRegistry
-from agents_core.registry.tool_registry import ToolDefinition, ToolRegistry
-from agents_core.session.agent_session import AgentSession
+from sinan_agentic_core.core.base_runner import BaseAgentRunner, _CollectingSessionWrapper
+from sinan_agentic_core.models.context import AgentContext
+from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
+from sinan_agentic_core.registry.guardrail_registry import GuardrailDefinition, GuardrailRegistry
+from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
+from sinan_agentic_core.session.agent_session import AgentSession
 
 
 @pytest.fixture
@@ -46,9 +46,9 @@ def runner(_registries):
     agent_reg, tool_reg, guardrail_reg = _registries
 
     with (
-        patch("agents_core.core.base_runner.get_agent_registry", return_value=agent_reg),
-        patch("agents_core.core.base_runner.get_tool_registry", return_value=tool_reg),
-        patch("agents_core.core.base_runner.get_guardrail_registry", return_value=guardrail_reg),
+        patch("sinan_agentic_core.core.base_runner.get_agent_registry", return_value=agent_reg),
+        patch("sinan_agentic_core.core.base_runner.get_tool_registry", return_value=tool_reg),
+        patch("sinan_agentic_core.core.base_runner.get_guardrail_registry", return_value=guardrail_reg),
     ):
         return BaseAgentRunner()
 
@@ -68,10 +68,10 @@ class TestBaseAgentRunnerInit:
     def test_is_not_abstract(self):
         """BaseAgentRunner should be instantiable directly (not ABC)."""
         with (
-            patch("agents_core.core.base_runner.get_agent_registry", return_value=AgentRegistry()),
-            patch("agents_core.core.base_runner.get_tool_registry", return_value=ToolRegistry()),
+            patch("sinan_agentic_core.core.base_runner.get_agent_registry", return_value=AgentRegistry()),
+            patch("sinan_agentic_core.core.base_runner.get_tool_registry", return_value=ToolRegistry()),
             patch(
-                "agents_core.core.base_runner.get_guardrail_registry",
+                "sinan_agentic_core.core.base_runner.get_guardrail_registry",
                 return_value=GuardrailRegistry(),
             ),
         ):
@@ -248,7 +248,7 @@ class TestRunAgent:
 
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("agents_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
         ):
             mock_runner_cls.run = AsyncMock(return_value=mock_run_result)
             result = await runner.run_agent("basic_agent", session, ctx, "hello")
@@ -353,7 +353,7 @@ class TestExecuteBasic:
 
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("agents_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
         ):
             mock_runner_cls.run = AsyncMock(return_value=mock_run_result)
             result = await runner.execute("basic_agent", ctx, session, input_text="hello")
@@ -367,7 +367,7 @@ class TestExecuteBasic:
 
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("agents_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
         ):
             mock_runner_cls.run = AsyncMock(return_value=mock_run_result)
             await runner.execute("basic_agent", ctx, session, max_turns=20)
@@ -421,7 +421,7 @@ class TestExecuteStreaming:
 
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("agents_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
         ):
             mock_runner_cls.run_streamed = Mock(return_value=mock_result)
             await runner._execute_streamed(
@@ -448,7 +448,7 @@ class TestExecuteStreaming:
 
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("agents_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
         ):
             mock_runner_cls.run_streamed = Mock(return_value=mock_result)
             result = await runner._execute_streamed(
@@ -475,7 +475,7 @@ class TestExecuteWithFallback:
 
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("agents_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
         ):
             mock_runner_cls.run = AsyncMock(return_value=mock_run_result)
             result = await runner.execute(
@@ -503,7 +503,7 @@ class TestExecuteWithFallback:
 
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("agents_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
         ):
             mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Something else broke"))
             with pytest.raises(RuntimeError, match="Something else broke"):
@@ -522,7 +522,7 @@ class TestExecuteWithFallback:
 
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("agents_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
             patch("openai.AsyncOpenAI") as mock_openai,
         ):
             mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Max turns exceeded"))
@@ -561,7 +561,7 @@ class TestExecuteWithFallback:
 
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("agents_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
             patch("openai.AsyncOpenAI") as mock_openai,
         ):
             mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Max turns exceeded"))
@@ -605,7 +605,7 @@ class TestExecuteWithFallback:
 
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("agents_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
             patch("openai.AsyncOpenAI") as mock_openai,
         ):
             mock_runner_cls.run = AsyncMock(
@@ -633,7 +633,7 @@ class TestExecuteWithFallback:
 
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("agents_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
             patch("openai.AsyncOpenAI") as mock_openai,
         ):
             mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Max turns exceeded"))
@@ -717,7 +717,7 @@ class TestPrivateHelpers:
 
     def test_resolve_output_type_string(self, runner):
         result = runner._resolve_output_type("ChatResponse")
-        from agents_core.models.outputs import ChatResponse
+        from sinan_agentic_core.models.outputs import ChatResponse
         assert result is ChatResponse
 
     def test_resolve_output_type_unknown_string(self, runner):
@@ -829,7 +829,7 @@ class TestStructuredAgentAsTool:
 class TestBudgetAwareAgentAsTool:
     async def test_build_tools_with_turn_budget(self, runner):
         """Agent-as-tool with turn_budget gets hooks and max_turns from budget."""
-        from agents_core.core.turn_budget import TurnBudget
+        from sinan_agentic_core.core.turn_budget import TurnBudget
 
         budget = TurnBudget(default_turns=5, max_extensions=1, extension_size=3, absolute_max=10)
         runner.agent_registry.register(
@@ -849,7 +849,7 @@ class TestBudgetAwareAgentAsTool:
 
     async def test_budget_takes_precedence_over_max_turns(self, runner):
         """When both as_tool_turn_budget and as_tool_max_turns are set, budget wins."""
-        from agents_core.core.turn_budget import TurnBudget
+        from sinan_agentic_core.core.turn_budget import TurnBudget
 
         budget = TurnBudget(default_turns=5, absolute_max=10)
         runner.agent_registry.register(
@@ -894,7 +894,7 @@ class TestBudgetAwareAgentAsTool:
 
 class TestStructuredToolError:
     def test_returns_json(self):
-        from agents_core.core.errors import structured_tool_error
+        from sinan_agentic_core.core.errors import structured_tool_error
         result = structured_tool_error(None, ValueError("page_uuid is required"))
         data = json.loads(result)
         assert data["status"] == "error"
@@ -903,25 +903,25 @@ class TestStructuredToolError:
         assert "retry_hint" in data
 
     def test_max_turns_hint(self):
-        from agents_core.core.errors import structured_tool_error
+        from sinan_agentic_core.core.errors import structured_tool_error
         result = structured_tool_error(None, RuntimeError("Max turns exceeded"))
         data = json.loads(result)
         assert "simplify" in data["retry_hint"].lower() or "turns" in data["retry_hint"].lower()
 
     def test_not_found_hint(self):
-        from agents_core.core.errors import structured_tool_error
+        from sinan_agentic_core.core.errors import structured_tool_error
         result = structured_tool_error(None, ValueError("Page not found: abc-123"))
         data = json.loads(result)
         assert "uuid" in data["retry_hint"].lower()
 
     def test_required_hint(self):
-        from agents_core.core.errors import structured_tool_error
+        from sinan_agentic_core.core.errors import structured_tool_error
         result = structured_tool_error(None, ValueError("content is required"))
         data = json.loads(result)
         assert "required" in data["retry_hint"].lower()
 
     def test_generic_hint(self):
-        from agents_core.core.errors import structured_tool_error
+        from sinan_agentic_core.core.errors import structured_tool_error
         result = structured_tool_error(None, RuntimeError("something weird"))
         data = json.loads(result)
         assert "retry" in data["retry_hint"].lower()

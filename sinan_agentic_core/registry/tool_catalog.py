@@ -5,7 +5,7 @@ lives in YAML. The function binding stays in Python via @register_tool.
 
 Usage::
 
-    from agents_core import load_tool_catalog, get_tool_registry
+    from sinan_agentic_core import load_tool_catalog, get_tool_registry
 
     catalog = load_tool_catalog("tools.yaml")
     catalog.enrich_registry(get_tool_registry())

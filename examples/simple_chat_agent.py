@@ -1,6 +1,6 @@
 """Example: Simple Chat Agent
 
-This is a minimal example showing how to build and run an agent using agents_core.
+This is a minimal example showing how to build and run an agent using sinan_agentic_core.
 Fork this file as a starting point for your own agents.
 
 Usage:
@@ -16,7 +16,7 @@ from datetime import datetime
 
 from agents import function_tool, Agent, Runner
 
-from agents_core import (
+from sinan_agentic_core import (
     AgentDefinition,
     AgentSession,
     AgentContext,
