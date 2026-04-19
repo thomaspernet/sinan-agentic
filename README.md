@@ -1,10 +1,10 @@
 # Sinan (司南)
 
-<img src="https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Model_Si_Nan_of_Han_Dynasty.jpg/250px-Model_Si_Nan_of_Han_Dynasty.jpg" alt="Sinan — a Han dynasty south-pointing spoon on a bronze plate" width="220" align="right" />
+<img src="https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Model_Si_Nan_of_Han_Dynasty.jpg/250px-Model_Si_Nan_of_Han_Dynasty.jpg" alt="Sinan - a Han dynasty south-pointing spoon on a bronze plate" width="220" align="right" />
 
-> **sinan (司南)** — the earliest known compass. A lodestone carved into a spoon, resting on a bronze plate inscribed with the 24 directions. Han dynasty China, ~2nd century BCE.
+> **sinan (司南)** - the earliest known compass. A lodestone carved into a spoon, resting on a bronze plate inscribed with the 24 directions. Han dynasty China, ~2nd century BCE.
 >
-> Like its namesake, this framework is the instrument that helps you align yourself with our agentic logic — the plate holds the field of tools, knowledge, and rules; the spoon is the agent that always knows which way to turn.
+> Like its namesake, this framework is the instrument that helps you align yourself with our agentic logic - the plate holds the field of tools, knowledge, and rules; the spoon is the agent that always knows which way to turn.
 
 A framework for building AI agents using the OpenAI Agents SDK. Fork this repository to quickly create agent-based applications.
 
@@ -24,7 +24,7 @@ A framework for building AI agents using the OpenAI Agents SDK. Fork this reposi
 - **Tool Catalog** - Load tool metadata (description, category, recovery hints) from a YAML file
 - **Knowledge Store** - Inject domain knowledge from YAML files into agent system prompts
 - **Structured Agent-as-Tool** - Typed input schemas and structured error handling for sub-agent calls
-- **MCP Server** - Expose registered tools as an MCP server (stdio or HTTP) with zero description duplication — all metadata comes from `tools.yaml`
+- **MCP Server** - Expose registered tools as an MCP server (stdio or HTTP) with zero description duplication - all metadata comes from `tools.yaml`
 
 ## Installation
 
@@ -175,7 +175,7 @@ register_agent(AgentDefinition(
 
 `build()` assembles sections in order (persona → domain_knowledge → context → steps → rules → output), skips any that return `None`, and joins with double newlines. Override `sections()` to reorder, or `extra_sections()` to append additional `(header, body)` blocks.
 
-For agents with fundamentally different instruction paths (e.g., surface vs deep extraction), use a shared private base with concrete subclasses and a dispatcher function — see `sinan_agentic_core/instructions/builder.py` docstring for details.
+For agents with fundamentally different instruction paths (e.g., surface vs deep extraction), use a shared private base with concrete subclasses and a dispatcher function - see `sinan_agentic_core/instructions/builder.py` docstring for details.
 
 ## Agent Catalog (YAML-driven agent config)
 
@@ -207,7 +207,7 @@ register_agent(AgentDefinition(
     model=cfg.model,
     description=cfg.description,
     tools=cfg.tools,
-    instructions=build_weather_instructions,  # dynamic — stays in Python
+    instructions=build_weather_instructions,  # dynamic - stays in Python
 ))
 ```
 
@@ -281,7 +281,7 @@ if catalog.is_enabled("web_search_agent", config=my_config):
         model=cfg.model,
         description=cfg.description,
         tools=cfg.tools,
-        hosted_tools=[get_web_search_tool],  # SDK-specific — stays in Python
+        hosted_tools=[get_web_search_tool],  # SDK-specific - stays in Python
     ))
 ```
 
@@ -295,7 +295,7 @@ if catalog.is_enabled("web_search_agent", config=my_config):
 
 ## Tool Catalog (YAML-driven tool metadata)
 
-Keep static tool metadata (description, category, parameters, recovery hints) in a YAML file instead of repeating it in every `@register_tool()` decorator. The Python decorator becomes minimal — just a name linking the function to its YAML entry.
+Keep static tool metadata (description, category, parameters, recovery hints) in a YAML file instead of repeating it in every `@register_tool()` decorator. The Python decorator becomes minimal - just a name linking the function to its YAML entry.
 
 ### Basic usage
 
@@ -323,7 +323,7 @@ tools:
 from agents import function_tool
 from sinan_agentic_core import register_tool, load_tool_catalog, get_tool_registry
 
-# Decorator is minimal — just links function to name
+# Decorator is minimal - just links function to name
 @register_tool(name="search_database")
 @function_tool
 async def search_database(ctx, query: str, search_type: str = "keyword") -> str:
@@ -343,10 +343,10 @@ catalog.enrich_registry(get_tool_registry())
 
 Registration happens in two phases:
 
-1. **Import time** — `@register_tool(name="search_database")` registers the function with an empty `ToolDefinition` (name + function only)
-2. **Startup** — `catalog.enrich_registry(registry)` patches each `ToolDefinition` with metadata from the YAML file
+1. **Import time** - `@register_tool(name="search_database")` registers the function with an empty `ToolDefinition` (name + function only)
+2. **Startup** - `catalog.enrich_registry(registry)` patches each `ToolDefinition` with metadata from the YAML file
 
-YAML values always win over decorator values. Empty YAML fields do not overwrite existing decorator values. This makes it backward compatible — decorators with full metadata still work without a YAML file.
+YAML values always win over decorator values. Empty YAML fields do not overwrite existing decorator values. This makes it backward compatible - decorators with full metadata still work without a YAML file.
 
 ### Backward compatibility
 
@@ -378,7 +378,7 @@ If both are provided, YAML wins for non-empty fields.
 
 ## MCP Server (optional)
 
-Expose your registered tools as an [MCP](https://modelcontextprotocol.io/) server so any MCP-compatible client (Claude Desktop, Claude Code, VS Code, Cursor, ChatGPT Desktop) can call them. Tool descriptions, parameter schemas, and annotations all come from `tools.yaml` — no duplication.
+Expose your registered tools as an [MCP](https://modelcontextprotocol.io/) server so any MCP-compatible client (Claude Desktop, Claude Code, VS Code, Cursor, ChatGPT Desktop) can call them. Tool descriptions, parameter schemas, and annotations all come from `tools.yaml` - no duplication.
 
 Requires the `mcp` extra:
 
@@ -399,7 +399,7 @@ tools:
     category: search
     parameters_description: "query (str): Search text"
     returns_description: "JSON with results"
-    mcp:                          # NEW — MCP-specific metadata
+    mcp:                          # NEW - MCP-specific metadata
       expose: true
       annotations:
         readOnlyHint: true
@@ -430,11 +430,11 @@ tool_groups:
 
 mcp_servers:
   my_server:
-    description: "My knowledge base — search and manage records"
+    description: "My knowledge base - search and manage records"
     tools:
       - group: search_tools       # reuses existing tool groups
       - list_categories
-    write_tools:                  # separate list — opt-in via config
+    write_tools:                  # separate list - opt-in via config
       - create_record
       - update_record
 ```
@@ -479,7 +479,7 @@ server.run(transport="stdio")
 
 ### Transports
 
-**stdio** — for local MCP clients (Claude Desktop, Claude Code). The server launches as a subprocess:
+**stdio** - for local MCP clients (Claude Desktop, Claude Code). The server launches as a subprocess:
 
 ```json
 {
@@ -493,7 +493,7 @@ server.run(transport="stdio")
 }
 ```
 
-**Streamable HTTP** — for remote clients or when sharing a process with an existing web app (e.g., FastAPI). Mount the MCP server as an ASGI app:
+**Streamable HTTP** - for remote clients or when sharing a process with an existing web app (e.g., FastAPI). Mount the MCP server as an ASGI app:
 
 ```python
 from fastapi import FastAPI
@@ -527,14 +527,14 @@ The `MCPToolAdapter` bridges MCP calls to your registered `@function_tool` funct
 5. The result is returned to the MCP client
 6. The context is cleaned up (connections closed)
 
-Each tool call gets its own context — no shared state between calls.
+Each tool call gets its own context - no shared state between calls.
 
 ### API reference
 
 | Function / Class | Description |
 |---|---|
 | `build_mcp_server(...)` | Build a FastMCP server from registry + catalogs |
-| `MCPContextFactory` | ABC — implement `create_context()` and `cleanup()` |
+| `MCPContextFactory` | ABC - implement `create_context()` and `cleanup()` |
 | `MCPServerBuilder` | Low-level builder class (use `build_mcp_server()` for convenience) |
 | `MCPServerConfig` | Pydantic model for resolved MCP server definition |
 | `MCPToolConfig` | Per-tool MCP config (expose flag + annotations) |
@@ -543,7 +543,7 @@ Each tool call gets its own context — no shared state between calls.
 
 ## Knowledge Store
 
-Inject domain knowledge into agent system prompts from separate YAML files. Knowledge teaches agents "what things are" (domain model), while tool descriptions handle routing. Inspired by the CLAUDE.md pattern — static context that shapes agent behavior.
+Inject domain knowledge into agent system prompts from separate YAML files. Knowledge teaches agents "what things are" (domain model), while tool descriptions handle routing. Inspired by the CLAUDE.md pattern - static context that shapes agent behavior.
 
 ### Setup
 
@@ -604,12 +604,12 @@ register_agent(AgentDefinition(
 
 `InstructionBuilder.domain_knowledge()` reads `agent_def.knowledge_text` and places it between persona and context sections. The section order is:
 
-1. **persona** — identity statement
-2. **domain_knowledge** — static domain knowledge from YAML files
-3. **context_section** — runtime environment info
-4. **steps** — task instructions
-5. **rules** — constraints
-6. **output_format** — expected output structure
+1. **persona** - identity statement
+2. **domain_knowledge** - static domain knowledge from YAML files
+3. **context_section** - runtime environment info
+4. **steps** - task instructions
+5. **rules** - constraints
+6. **output_format** - expected output structure
 
 Override `domain_knowledge()` in your builder subclass for custom behavior.
 
@@ -640,7 +640,7 @@ register_agent(AgentDefinition(
 ))
 ```
 
-When the parent agent calls `writer_agent`, the LLM must provide `operation`, `target_id`, and optionally `payload` — no more ambiguous freeform text.
+When the parent agent calls `writer_agent`, the LLM must provide `operation`, `target_id`, and optionally `payload` - no more ambiguous freeform text.
 
 ### Structured error handling
 
@@ -671,24 +671,24 @@ This is handled by `structured_tool_error()`, which is automatically wired into 
 2. Passes `structured_tool_error` as `failure_error_function` for all agent-as-tool calls
 3. If `as_tool_turn_budget` is set, wires up `TurnBudgetHooks` and dynamic instructions (see [Turn budget for sub-agents](#turn-budget-for-sub-agents-agent-as-tool))
 
-No manual wiring needed — just set `as_tool_parameters` on your `AgentDefinition`.
+No manual wiring needed - just set `as_tool_parameters` on your `AgentDefinition`.
 
 ## Tool Error Recovery
 
-When a tool returns an error, agents often retry with identical parameters, wasting turns in a loop. `ToolErrorRecovery` solves this by tracking tool errors and injecting progressive recovery guidance into the agent's instructions — the same dynamic-instructions pattern used by `TurnBudget`.
+When a tool returns an error, agents often retry with identical parameters, wasting turns in a loop. `ToolErrorRecovery` solves this by tracking tool errors and injecting progressive recovery guidance into the agent's instructions - the same dynamic-instructions pattern used by `TurnBudget`.
 
 ### How it works
 
 1. **`on_tool_end` hook** tracks tool results. When a result contains `{"error": "..."}`, the tool name, arguments, and error are recorded.
 2. **Dynamic instructions** inject a `## Tool Error Recovery` section before each LLM call, telling the agent what failed and how to recover.
-3. **Progressive escalation** — guidance gets more directive with each repeated failure:
+3. **Progressive escalation** - guidance gets more directive with each repeated failure:
    - **1st failure**: Show the error and recovery hint
    - **2nd failure (same args)**: Warn that the agent is repeating the same failing call
    - **3rd failure (same args)**: Tell the agent to stop retrying and move on
 
 ### Registering recovery hints
 
-Add a `recovery_hint` to your tool registration. This static hint is shown to the agent whenever the tool errors — no need to handle each error case individually:
+Add a `recovery_hint` to your tool registration. This static hint is shown to the agent whenever the tool errors - no need to handle each error case individually:
 
 ```python
 @register_tool(
