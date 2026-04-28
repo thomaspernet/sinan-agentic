@@ -2,6 +2,9 @@
 
 import pytest
 
+from sinan_agentic_core.core.capabilities import Capability
+from sinan_agentic_core.core.tool_error_recovery import ToolErrorRecovery
+from sinan_agentic_core.core.turn_budget import TurnBudget
 from sinan_agentic_core.session.agent_session import AgentSession, ConversationHistory
 from sinan_agentic_core.session.sqlite_store import SQLiteSessionStore
 
@@ -190,3 +193,149 @@ class TestSQLiteSessionStore:
         store.add_message("s1", "user", "msg", metadata={"source": "web"})
         messages = store.get_messages("s1")
         assert messages[0]["metadata"] == {"source": "web"}
+
+
+# -- Capability snapshot persistence ------------------------------------------
+
+
+class _NoopRecorder(Capability):
+    """Stateless capability — to_snapshot returns None by default."""
+
+
+class _ManualSnapshot(Capability):
+    """Capability that opts in to persistence with a custom snapshot key."""
+
+    snapshot_key = "manual.snapshot"
+
+    def __init__(self) -> None:
+        self.tally: int = 0
+
+    def to_snapshot(self):
+        return {"tally": self.tally}
+
+    def from_snapshot(self, data):
+        self.tally = int(data.get("tally", 0))
+
+
+class TestSQLiteCapabilitySnapshots:
+    @pytest.fixture
+    def store(self, tmp_path):
+        return SQLiteSessionStore(str(tmp_path / "snap.db"))
+
+    def test_save_and_load_snapshot(self, store):
+        store.save_capability_snapshot("s1", "TurnBudget", {"turns_used": 4})
+        assert store.load_capability_snapshot("s1", "TurnBudget") == {"turns_used": 4}
+
+    def test_load_missing_snapshot_returns_none(self, store):
+        assert store.load_capability_snapshot("s1", "TurnBudget") is None
+
+    def test_save_overwrites_existing_snapshot(self, store):
+        store.save_capability_snapshot("s1", "TurnBudget", {"turns_used": 1})
+        store.save_capability_snapshot("s1", "TurnBudget", {"turns_used": 7})
+        assert store.load_capability_snapshot("s1", "TurnBudget") == {"turns_used": 7}
+
+    def test_snapshots_are_scoped_per_session(self, store):
+        store.save_capability_snapshot("s1", "TurnBudget", {"turns_used": 1})
+        store.save_capability_snapshot("s2", "TurnBudget", {"turns_used": 9})
+        assert store.load_capability_snapshot("s1", "TurnBudget") == {"turns_used": 1}
+        assert store.load_capability_snapshot("s2", "TurnBudget") == {"turns_used": 9}
+
+    def test_load_all_snapshots_returns_keyed_dict(self, store):
+        store.save_capability_snapshot("s1", "TurnBudget", {"turns_used": 4})
+        store.save_capability_snapshot("s1", "ToolErrorRecovery", {"errors": {}})
+        snapshots = store.load_all_capability_snapshots("s1")
+        assert snapshots == {
+            "TurnBudget": {"turns_used": 4},
+            "ToolErrorRecovery": {"errors": {}},
+        }
+
+    def test_clear_session_drops_snapshots(self, store):
+        store.save_capability_snapshot("s1", "TurnBudget", {"turns_used": 4})
+        store.clear_session("s1")
+        assert store.load_capability_snapshot("s1", "TurnBudget") is None
+
+    def test_delete_capability_snapshots(self, store):
+        store.save_capability_snapshot("s1", "TurnBudget", {"turns_used": 4})
+        store.delete_capability_snapshots("s1")
+        assert store.load_all_capability_snapshots("s1") == {}
+
+
+class TestAgentSessionRehydrate:
+    @pytest.fixture
+    def store(self, tmp_path):
+        return SQLiteSessionStore(str(tmp_path / "hydrate.db"))
+
+    def test_turn_budget_round_trip_through_session_and_store(self, store):
+        # AC: configure a TurnBudget to 10 turns, advance counter to 4, snapshot,
+        #     rehydrate in a new session, confirm 6 turns remain.
+        original_budget = TurnBudget(default_turns=10)
+        for _ in range(4):
+            original_budget.record_turn()
+
+        original_session = AgentSession(session_id="resume-1")
+        original_session.persist_capabilities(store, [original_budget])
+
+        resumed_budget = TurnBudget(default_turns=10)
+        resumed_session = AgentSession(session_id="resume-1")
+        resumed_session.rehydrate_capabilities(store, [resumed_budget])
+
+        assert resumed_budget.turns_used == 4
+        assert resumed_budget.remaining == 6
+
+    def test_tool_error_recovery_round_trip(self, store):
+        from unittest.mock import Mock
+
+        from agents import RunContextWrapper
+
+        original = ToolErrorRecovery()
+        ctx = RunContextWrapper(context=None)
+        tool = Mock()
+        tool.name = "search"
+        import json as _json
+        original.on_tool_start(ctx, tool, _json.dumps({"q": "x"}))
+        original.on_tool_end(ctx, tool, _json.dumps({"error": "boom"}))
+
+        AgentSession(session_id="resume-2").persist_capabilities(store, [original])
+
+        resumed = ToolErrorRecovery()
+        AgentSession(session_id="resume-2").rehydrate_capabilities(store, [resumed])
+
+        assert resumed.has_errors
+        assert resumed._errors["search"].error == "boom"
+
+    def test_stateless_capability_is_skipped(self, store):
+        # Stateless capability (default to_snapshot returns None) must not crash
+        # and must not write any row.
+        cap = _NoopRecorder()
+        session = AgentSession(session_id="resume-3")
+        session.persist_capabilities(store, [cap])
+        assert store.load_all_capability_snapshots("resume-3") == {}
+
+        # Rehydrating with no row stored is also a no-op.
+        session.rehydrate_capabilities(store, [cap])  # must not raise
+
+    def test_rehydrate_skips_capabilities_without_stored_row(self, store):
+        # If only one capability has a stored snapshot, the others stay
+        # untouched at their zeroed defaults.
+        budget = TurnBudget(default_turns=10)
+        budget.record_turn()
+        AgentSession(session_id="mixed").persist_capabilities(store, [budget])
+
+        resumed_budget = TurnBudget(default_turns=10)
+        resumed_recovery = ToolErrorRecovery()
+        AgentSession(session_id="mixed").rehydrate_capabilities(
+            store, [resumed_budget, resumed_recovery]
+        )
+        assert resumed_budget.turns_used == 1
+        assert not resumed_recovery.has_errors
+
+    def test_explicit_snapshot_key_is_honored(self, store):
+        cap = _ManualSnapshot()
+        cap.tally = 12
+        AgentSession(session_id="manual").persist_capabilities(store, [cap])
+        snapshots = store.load_all_capability_snapshots("manual")
+        assert "manual.snapshot" in snapshots
+
+        resumed = _ManualSnapshot()
+        AgentSession(session_id="manual").rehydrate_capabilities(store, [resumed])
+        assert resumed.tally == 12

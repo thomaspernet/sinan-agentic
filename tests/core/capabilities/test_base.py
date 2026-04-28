@@ -111,6 +111,35 @@ class TestClone:
         assert clone.tool_ends is not original.tool_ends
 
 
+class TestSnapshotDefaults:
+    def test_to_snapshot_defaults_to_none(self) -> None:
+        assert DummyCapability().to_snapshot() is None
+
+    def test_from_snapshot_is_noop(self) -> None:
+        cap = DummyCapability()
+        cap.from_snapshot({"anything": 1})  # must not raise
+
+    def test_subclass_can_override_to_and_from_snapshot(self) -> None:
+        class Persisted(Capability):
+            def __init__(self) -> None:
+                self.value: int = 0
+
+            def to_snapshot(self) -> dict[str, Any]:
+                return {"value": self.value}
+
+            def from_snapshot(self, data: dict[str, Any]) -> None:
+                self.value = int(data.get("value", 0))
+
+        original = Persisted()
+        original.value = 42
+        snap = original.to_snapshot()
+
+        rehydrated = Persisted()
+        assert snap is not None
+        rehydrated.from_snapshot(snap)
+        assert rehydrated.value == 42
+
+
 class TestSubclassLifecycle:
     def test_subclass_can_override_instructions(self) -> None:
         cap = StatefulCapability()

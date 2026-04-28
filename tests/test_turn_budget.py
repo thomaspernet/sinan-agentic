@@ -546,6 +546,66 @@ class TestTurnBudgetClone:
 
 
 # ------------------------------------------------------------------ #
+# Snapshot / rehydrate
+# ------------------------------------------------------------------ #
+
+
+class TestTurnBudgetSnapshot:
+    def test_snapshot_serializes_counters(self):
+        budget = TurnBudget(default_turns=10)
+        budget.record_turn()
+        budget.record_turn()
+        budget.request_extension("need more")
+
+        snap = budget.to_snapshot()
+        assert snap == {
+            "turns_used": 2,
+            "extensions_used": 1,
+            "extension_reasons": ["need more"],
+        }
+
+    def test_round_trip_preserves_remaining_budget(self):
+        # AC: configure to 10 turns, advance to 4, snapshot, rehydrate, expect 6 remaining.
+        original = TurnBudget(default_turns=10)
+        for _ in range(4):
+            original.record_turn()
+        snap = original.to_snapshot()
+
+        resumed = TurnBudget(default_turns=10)
+        resumed.from_snapshot(snap)
+        assert resumed.turns_used == 4
+        assert resumed.remaining == 6
+        assert resumed.effective_max == 10
+
+    def test_round_trip_preserves_extensions(self):
+        original = TurnBudget(default_turns=5, extension_size=3, max_extensions=2)
+        original.request_extension("first")
+        original.record_turn()
+
+        resumed = TurnBudget(default_turns=5, extension_size=3, max_extensions=2)
+        resumed.from_snapshot(original.to_snapshot())
+
+        assert resumed.extensions_used == 1
+        assert resumed.effective_max == 8
+        assert resumed.remaining == 7
+        assert resumed.extension_reasons == ["first"]
+
+    def test_from_snapshot_tolerates_missing_keys(self):
+        budget = TurnBudget()
+        budget.from_snapshot({})  # must not raise
+        assert budget.turns_used == 0
+        assert budget.extensions_used == 0
+        assert budget.extension_reasons == []
+
+    def test_snapshot_is_json_serializable(self):
+        import json
+        budget = TurnBudget()
+        budget.record_turn()
+        budget.request_extension("why")
+        json.dumps(budget.to_snapshot())  # must not raise
+
+
+# ------------------------------------------------------------------ #
 # Top-level imports
 # ------------------------------------------------------------------ #
 

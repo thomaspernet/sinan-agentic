@@ -195,3 +195,21 @@ class TurnBudget(Capability):
             extension_size=self.extension_size,
             absolute_max=self.absolute_max,
         )
+
+    def to_snapshot(self) -> dict[str, Any]:
+        """Serialize counters so a future session can resume mid-budget."""
+        return {
+            "turns_used": self.turns_used,
+            "extensions_used": self.extensions_used,
+            "extension_reasons": list(self.extension_reasons),
+        }
+
+    def from_snapshot(self, data: dict[str, Any]) -> None:
+        """Restore counters from a previous snapshot.
+
+        Tolerates missing keys so older snapshots stay readable.
+        """
+        self.turns_used = int(data.get("turns_used", 0))
+        self.extensions_used = int(data.get("extensions_used", 0))
+        reasons = data.get("extension_reasons", [])
+        self.extension_reasons = [str(r) for r in reasons] if isinstance(reasons, list) else []

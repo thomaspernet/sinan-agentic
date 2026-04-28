@@ -5,6 +5,11 @@ Provides SQLite-backed persistence for chat sessions:
 - Session metadata (created_at, title, archived)
 - Archive old sessions
 - OpenAI-compatible history format
+- Capability snapshots (one JSON blob per capability per session)
+
+Schema migrations are forward-only: each new release adds tables/columns
+without altering existing rows. Older databases pick up new tables on the
+next ``__init__``.
 
 Usage:
     from sinan_agentic_core.session.sqlite_store import SQLiteSessionStore
@@ -95,6 +100,17 @@ class SQLiteSessionStore:
                 ON sessions(is_archived, updated_at)
             """)
 
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS capability_snapshots (
+                    session_id TEXT NOT NULL,
+                    capability_key TEXT NOT NULL,
+                    snapshot TEXT NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (session_id, capability_key),
+                    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+                )
+            """)
+
             conn.commit()
             logger.debug(f"Database initialized at {self.db_path}")
 
@@ -152,6 +168,10 @@ class SQLiteSessionStore:
         with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
+            cursor.execute(
+                "DELETE FROM capability_snapshots WHERE session_id = ?",
+                (session_id,),
+            )
             cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             conn.commit()
             return cursor.rowcount > 0
@@ -284,3 +304,89 @@ class SQLiteSessionStore:
         """
         messages = self.get_messages(session_id)
         return [{"role": m["role"], "content": m["content"]} for m in messages]
+
+    # -----------------------------------------------------------------
+    # Capability snapshots
+    # -----------------------------------------------------------------
+
+    def save_capability_snapshot(
+        self,
+        session_id: str,
+        capability_key: str,
+        snapshot: dict[str, Any],
+    ) -> None:
+        """Persist a capability's snapshot for a session.
+
+        Each ``(session_id, capability_key)`` pair stores at most one row;
+        repeated calls overwrite the previous blob. ``capability_key`` is a
+        stable identifier the caller chooses (typically the capability's
+        class name) — it must match the key used at rehydrate time.
+
+        Args:
+            session_id: Session the snapshot belongs to. The session row is
+                created on demand so callers do not need to seed it first.
+            capability_key: Stable identifier for the capability instance.
+            snapshot: JSON-serializable dict produced by
+                ``Capability.to_snapshot()``.
+        """
+        self.get_or_create_session(session_id)
+        payload = json.dumps(snapshot)
+        with self._connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO capability_snapshots (session_id, capability_key, snapshot)
+                VALUES (?, ?, ?)
+                ON CONFLICT(session_id, capability_key) DO UPDATE SET
+                    snapshot = excluded.snapshot,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (session_id, capability_key, payload),
+            )
+            conn.commit()
+
+    def load_capability_snapshot(
+        self,
+        session_id: str,
+        capability_key: str,
+    ) -> Optional[dict[str, Any]]:
+        """Return the stored snapshot dict, or ``None`` when absent."""
+        with self._connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT snapshot FROM capability_snapshots
+                WHERE session_id = ? AND capability_key = ?
+                """,
+                (session_id, capability_key),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            data = json.loads(row["snapshot"])
+            return data if isinstance(data, dict) else None
+
+    def load_all_capability_snapshots(self, session_id: str) -> dict[str, dict[str, Any]]:
+        """Return every snapshot for a session keyed by capability key."""
+        with self._connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT capability_key, snapshot FROM capability_snapshots WHERE session_id = ?",
+                (session_id,),
+            )
+            result: dict[str, dict[str, Any]] = {}
+            for row in cursor.fetchall():
+                data = json.loads(row["snapshot"])
+                if isinstance(data, dict):
+                    result[row["capability_key"]] = data
+            return result
+
+    def delete_capability_snapshots(self, session_id: str) -> None:
+        """Drop every capability snapshot stored under this session."""
+        with self._connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM capability_snapshots WHERE session_id = ?",
+                (session_id,),
+            )
+            conn.commit()

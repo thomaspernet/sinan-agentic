@@ -708,3 +708,70 @@ class TestResetClearsPendingArgs:
 
         recovery.reset()
         assert recovery._pending_args == {}
+
+
+# ------------------------------------------------------------------ #
+# Snapshot / rehydrate
+# ------------------------------------------------------------------ #
+
+
+def _record_failure(recovery: ToolErrorRecovery, tool_name: str, args: dict, message: str = "boom") -> None:
+    """Helper: simulate a single failed tool call."""
+    ctx = RunContextWrapper(context=None)
+    tool = Mock()
+    tool.name = tool_name
+    recovery.on_tool_start(ctx, tool, json.dumps(args))
+    recovery.on_tool_end(ctx, tool, json.dumps({"error": message}))
+
+
+class TestToolErrorRecoverySnapshot:
+    def test_snapshot_captures_tracked_errors(self):
+        recovery = ToolErrorRecovery()
+        _record_failure(recovery, "search", {"q": "x"}, "404")
+
+        snap = recovery.to_snapshot()
+        assert "search" in snap["errors"]
+        assert snap["errors"]["search"]["call_count"] == 1
+        assert snap["errors"]["search"]["error"] == "404"
+        assert "search" in snap["last_args"]
+
+    def test_round_trip_preserves_error_state(self):
+        # AC: same round-trip behavior for ToolErrorRecovery as TurnBudget.
+        original = ToolErrorRecovery(max_identical_before_stop=3)
+        _record_failure(original, "search", {"q": "a"}, "fail-1")
+        _record_failure(original, "search", {"q": "a"}, "fail-2")
+        _record_failure(original, "fetch", {"url": "u"}, "timeout")
+
+        snap = original.to_snapshot()
+
+        resumed = ToolErrorRecovery(max_identical_before_stop=3)
+        resumed.from_snapshot(snap)
+
+        assert resumed.has_errors
+        assert resumed._errors["search"].call_count == 2
+        assert resumed._errors["search"].identical_count == 2
+        assert resumed._errors["fetch"].call_count == 1
+        assert resumed._last_args["search"] == original._last_args["search"]
+        assert resumed._pending_args == {}
+
+    def test_snapshot_is_json_serializable(self):
+        recovery = ToolErrorRecovery()
+        _record_failure(recovery, "search", {"q": "x"})
+        json.dumps(recovery.to_snapshot())  # must not raise
+
+    def test_from_snapshot_tolerates_missing_keys(self):
+        recovery = ToolErrorRecovery()
+        recovery.from_snapshot({})
+        assert recovery._errors == {}
+        assert recovery._last_args == {}
+
+    def test_round_trip_preserves_instruction_escalation(self):
+        original = ToolErrorRecovery(max_identical_before_stop=3)
+        _record_failure(original, "search", {"q": "a"}, "fail")
+        _record_failure(original, "search", {"q": "a"}, "fail")
+        _record_failure(original, "search", {"q": "a"}, "fail")
+
+        resumed = ToolErrorRecovery(max_identical_before_stop=3)
+        resumed.from_snapshot(original.to_snapshot())
+        assert resumed.has_critical_errors
+        assert "STOP" in resumed.build_instruction_section()

@@ -3,10 +3,14 @@
 This is a generic conversation history manager that works with the OpenAI Agents SDK.
 """
 
-from typing import List, Optional, Dict, Any
+from typing import TYPE_CHECKING, Iterable, List, Optional, Dict, Any
 from agents.memory.session import SessionABC
 from agents.items import TResponseInputItem
 import json
+
+if TYPE_CHECKING:
+    from ..core.capabilities import Capability
+    from .sqlite_store import SQLiteSessionStore
 
 
 class ConversationHistory:
@@ -182,12 +186,80 @@ class AgentSession(SessionABC):
     
     def get_metadata(self, key: str, default: Any = None) -> Any:
         """Retrieve session metadata.
-        
+
         Args:
             key: Metadata key
             default: Default value if key not found
-            
+
         Returns:
             Metadata value or default
         """
         return self.metadata.get(key, default)
+
+    # -----------------------------------------------------------------
+    # Capability snapshot/rehydrate
+    # -----------------------------------------------------------------
+
+    def rehydrate_capabilities(
+        self,
+        store: "SQLiteSessionStore",
+        capabilities: Iterable["Capability"],
+    ) -> None:
+        """Restore each capability from its persisted snapshot, if any.
+
+        For every capability that produces a snapshot key (i.e.
+        ``to_snapshot()`` returns a dict), look up the stored blob and call
+        ``from_snapshot()``. Capabilities without a snapshot row are left
+        untouched, and capabilities that opt out of persistence (default
+        ``to_snapshot`` returns ``None``) are silently skipped.
+
+        Args:
+            store: Backing SQLite store that owns the snapshot table.
+            capabilities: Capabilities attached to this session in the
+                same order they will be cloned by the runner.
+        """
+        snapshots = store.load_all_capability_snapshots(self.session_id)
+        if not snapshots:
+            return
+        for capability in capabilities:
+            if capability.to_snapshot() is None:
+                continue
+            key = _capability_key(capability)
+            data = snapshots.get(key)
+            if data is None:
+                continue
+            capability.from_snapshot(data)
+
+    def persist_capabilities(
+        self,
+        store: "SQLiteSessionStore",
+        capabilities: Iterable["Capability"],
+    ) -> None:
+        """Persist a snapshot for each capability that opts in.
+
+        Capabilities whose ``to_snapshot()`` returns ``None`` are treated
+        as stateless and skipped.
+        """
+        for capability in capabilities:
+            data = capability.to_snapshot()
+            if data is None:
+                continue
+            store.save_capability_snapshot(
+                self.session_id,
+                _capability_key(capability),
+                data,
+            )
+
+
+def _capability_key(capability: "Capability") -> str:
+    """Stable identifier for a capability instance.
+
+    Uses the fully-qualified class name so two capabilities of the same
+    type collapse to one snapshot row per session. Subclasses that need
+    per-instance separation can override by setting ``snapshot_key``.
+    """
+    explicit = getattr(capability, "snapshot_key", None)
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    cls = type(capability)
+    return f"{cls.__module__}.{cls.__qualname__}"

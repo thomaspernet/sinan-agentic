@@ -131,6 +131,30 @@ class Capability:
         clone.on_event = None
         return clone
 
+    def to_snapshot(self) -> dict[str, Any] | None:
+        """Return a JSON-serializable snapshot of this capability's mutable state.
+
+        Return ``None`` (the default) to opt out of persistence: the runtime
+        treats the capability as stateless and skips writing a snapshot row.
+        Override to expose counters, queues, or any state that must survive
+        a process restart so the next session can resume mid-run.
+
+        The returned dict must round-trip through ``json.dumps`` /
+        ``json.loads`` — keep values to plain types (str, int, float, bool,
+        list, dict, None).
+        """
+        return None
+
+    def from_snapshot(self, data: dict[str, Any]) -> None:
+        """Rehydrate mutable state from a snapshot produced by ``to_snapshot``.
+
+        The default is a no-op so subclasses without persistence stay
+        unaffected. Implementations should be tolerant of missing keys (the
+        snapshot may have been written by an older version of the
+        capability) and never raise on partial input.
+        """
+        return None
+
     def tools(self) -> list[Tool]:
         """Return tools this capability exposes to the agent.
 

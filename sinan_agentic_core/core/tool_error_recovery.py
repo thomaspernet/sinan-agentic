@@ -266,6 +266,53 @@ class ToolErrorRecovery(Capability):
             max_identical_before_stop=self.max_identical_before_stop,
         )
 
+    def to_snapshot(self) -> dict[str, Any]:
+        """Serialize tracked errors and last-args map so retries survive restarts."""
+        return {
+            "errors": {
+                name: {
+                    "tool_name": entry.tool_name,
+                    "error": entry.error,
+                    "args_hash": entry.args_hash,
+                    "call_count": entry.call_count,
+                    "identical_count": entry.identical_count,
+                    "recovery_hint": entry.recovery_hint,
+                    "last_args_summary": entry.last_args_summary,
+                }
+                for name, entry in self._errors.items()
+            },
+            "last_args": dict(self._last_args),
+        }
+
+    def from_snapshot(self, data: dict[str, Any]) -> None:
+        """Restore tracked errors from a previous snapshot.
+
+        ``_pending_args`` is intentionally left empty: it tracks in-flight
+        tool calls that did not survive the process boundary.
+        """
+        raw_errors = data.get("errors", {})
+        self._errors = {}
+        if isinstance(raw_errors, dict):
+            for name, payload in raw_errors.items():
+                if not isinstance(payload, dict):
+                    continue
+                self._errors[str(name)] = ToolErrorEntry(
+                    tool_name=str(payload.get("tool_name", name)),
+                    error=str(payload.get("error", "")),
+                    args_hash=str(payload.get("args_hash", "")),
+                    call_count=int(payload.get("call_count", 1)),
+                    identical_count=int(payload.get("identical_count", 1)),
+                    recovery_hint=str(payload.get("recovery_hint", "")),
+                    last_args_summary=str(payload.get("last_args_summary", "")),
+                )
+        raw_last = data.get("last_args", {})
+        self._last_args = (
+            {str(k): str(v) for k, v in raw_last.items()}
+            if isinstance(raw_last, dict)
+            else {}
+        )
+        self._pending_args = {}
+
     # ------------------------------------------------------------------ #
     # Instruction section builders (progressive escalation)
     # ------------------------------------------------------------------ #
