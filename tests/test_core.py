@@ -832,6 +832,99 @@ class TestExecuteWithFallback:
             call_kwargs = mock_runner_cls.run.call_args.kwargs
             assert "hooks" not in call_kwargs
 
+    async def test_recovery_branch_reuses_configured_default_client(self, runner):
+        """Recovery branch routes the rescue call through the SDK's configured
+        default client (e.g. AsyncAzureOpenAI) instead of constructing a fresh
+        AsyncOpenAI. Regression for #35.
+        """
+        from sinan_agentic_core.core.capabilities import Capability
+
+        class _Recorder(Capability):
+            def __init__(self):
+                self.start_calls = 0
+                self.end_calls = 0
+
+            def on_fallback_start(self, ctx, prompt, collected_items):
+                self.start_calls += 1
+
+            def on_fallback_end(self, ctx, response, usage):
+                self.end_calls += 1
+
+        recorder = _Recorder()
+        ctx = AgentContext(database_connector=Mock())
+        session = AgentSession(session_id="test")
+
+        mock_completion = Mock()
+        mock_completion.choices = [Mock()]
+        mock_completion.choices[0].message.content = "Rescued via Azure"
+        mock_completion.usage = Mock(prompt_tokens=50, completion_tokens=10, total_tokens=60)
+
+        configured_client = AsyncMock(name="AsyncAzureOpenAI")
+        configured_client.chat.completions.create = AsyncMock(return_value=mock_completion)
+
+        with (
+            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
+            patch(
+                "agents.models._openai_shared.get_default_openai_client",
+                return_value=configured_client,
+            ),
+            patch("openai.AsyncOpenAI") as mock_async_openai,
+        ):
+            mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Max turns (2) exceeded"))
+
+            result = await runner._execute_with_fallback(
+                "basic_agent",
+                ctx,
+                session,
+                2,
+                "hello",
+                None,
+                capabilities=[recorder],
+            )
+
+        assert result == "Rescued via Azure"
+        configured_client.chat.completions.create.assert_awaited_once()
+        # Must NOT have built a fresh AsyncOpenAI when a default is configured.
+        mock_async_openai.assert_not_called()
+        # Capability hooks still fire exactly once each, in order.
+        assert recorder.start_calls == 1
+        assert recorder.end_calls == 1
+
+    async def test_recovery_branch_falls_back_to_async_openai_when_no_default(self, runner):
+        """When no default client is configured, fall back to constructing
+        AsyncOpenAI() with no api_key kwarg (the SDK reads OPENAI_API_KEY).
+        Regression for #35 — must not pass api_key=None into AsyncOpenAI().
+        """
+        ctx = AgentContext(database_connector=Mock())
+        session = AgentSession(session_id="test")
+
+        mock_completion = Mock()
+        mock_completion.choices = [Mock()]
+        mock_completion.choices[0].message.content = "Rescued via OpenAI"
+        mock_completion.usage = Mock(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+        with (
+            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
+            patch(
+                "agents.models._openai_shared.get_default_openai_client",
+                return_value=None,
+            ),
+            patch("openai.AsyncOpenAI") as mock_async_openai,
+        ):
+            mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Max turns exceeded"))
+            mock_client = AsyncMock()
+            mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
+            mock_async_openai.return_value = mock_client
+
+            result = await runner._execute_with_fallback(
+                "basic_agent", ctx, session, 10, "hello", None
+            )
+
+        assert result == "Rescued via OpenAI"
+        mock_async_openai.assert_called_once_with()
+
 
 # ------------------------------------------------------------------ #
 # _default_fallback_prompt_builder
