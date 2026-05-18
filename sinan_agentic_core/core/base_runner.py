@@ -399,11 +399,13 @@ class BaseAgentRunner:
             for cap in capabilities:
                 cap.on_fallback_start(ctx_wrapper, prompt, collecting.raw_items)
 
-            from agents.models._openai_shared import get_default_openai_key
-            from openai import AsyncOpenAI
+            from agents.models._openai_shared import get_default_openai_client
 
-            api_key = get_default_openai_key()
-            client = AsyncOpenAI(api_key=api_key)
+            client = get_default_openai_client()
+            if client is None:
+                from openai import AsyncOpenAI
+
+                client = AsyncOpenAI()
 
             output_type = self._resolve_output_type(agent_def.output_dataclass)
             use_json = output_type and output_type is not str
