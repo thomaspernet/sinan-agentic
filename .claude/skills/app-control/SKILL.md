@@ -33,7 +33,7 @@ Read `CLAUDE.md` (or `README.md`) in the target repo to learn how its dev stack 
 
 - **Node / Next.js**: `npm run dev`, `npm run start:dev`, `pnpm dev`, `yarn dev`.
 - **Python / FastAPI**: `uv run uvicorn <module>:app --port <N>`, `python -m <module>`, `./manage.py runserver`.
-- **Multi-service**: a repo-root `start.sh`, `docker compose up`, or a `Procfile`. Respect it — if it exists, run it instead of reinventing the startup sequence.
+- **Multi-service**: a repo-root `start.sh`, `docker compose up`, or a `Procfile`. Defer to it **only** when its hardcoded ports pass the [External-process guard](#external-process-guard-refuse-instead-of-clobber) below — never let a launcher "free" a port by killing whatever is sitting there. That process is almost always another claude session / terminal agent, not a leftover orphan (#2162).
 
 If the repo documents a specific launch command (e.g. `./start.sh`, `make dev`), use it. Otherwise read `package.json` scripts and `pyproject.toml` to identify the correct dev commands.
 
@@ -67,6 +67,46 @@ Wire them into the launch commands (examples):
 
 If the target repo has `.claude/rules/dev-ports.md`, treat it as authoritative — follow whatever recipe it prescribes. Otherwise use the block above.
 
+## External-process guard (refuse instead of clobber)
+
+A process listening on a port we're about to bind that is **not** in our `$PID_FILE` is **not** a leftover orphan. It is another claude session, another terminal, or another developer tool. Launching now — or letting a launcher script "free" the port — would kill it. The skill refuses in that case (#2162).
+
+Define the guard once and call it from every code path that is about to bind a port (the dynamic-port launch and any launcher script):
+
+```bash
+assert_ports_free_or_ours() {
+    local ports=("$@")
+    local our_pids=""
+    if [ -f "$PID_FILE" ]; then
+        our_pids=$(tr '\n' ' ' < "$PID_FILE")
+    fi
+    for port in "${ports[@]}"; do
+        local listeners
+        listeners=$(lsof -ti:"$port" -sTCP:LISTEN 2>/dev/null || true)
+        [ -z "$listeners" ] && continue
+        for lpid in $listeners; do
+            case " $our_pids " in
+                *" $lpid "*) continue ;;
+            esac
+            local cmd
+            cmd=$(ps -o command= -p "$lpid" 2>/dev/null | head -c 200)
+            echo "Port $port is held by pid $lpid ($cmd)." >&2
+            echo "  That isn't a stack I started — refusing to clobber." >&2
+            echo "  Stop it yourself, or rebind our launcher to different ports." >&2
+            return 1
+        done
+    done
+    return 0
+}
+```
+
+Call sites:
+
+- **Dynamic-port path.** After `$BACKEND_PORT` / `$FRONTEND_PORT` are picked, call `assert_ports_free_or_ours "$BACKEND_PORT" "$FRONTEND_PORT"` before launching. The picker returns free ports, so this only fires on a race — but the message is clearer than a generic `EADDRINUSE`.
+- **Launcher-script path.** Read the launcher to extract the ports it will bind — `grep -oE ':[0-9]{2,5}' start.sh`, the `ports:` block of `docker-compose.yml`, or the port suffixes in a `Procfile`. Pass those into the guard. If it returns non-zero, **do not run the launcher.**
+
+A launcher that "frees" a hardcoded port by killing whatever is on it is the failure mode this guard exists to prevent. If the launcher's ports fail the guard, stop and tell the user — do not run it.
+
 ## Intelligence (what you decide)
 
 ### If ACTION=open
@@ -83,6 +123,14 @@ If the target repo has `.claude/rules/dev-ports.md`, treat it as authoritative �
         done < "$PID_FILE"
         rm -f "$PID_FILE"
     fi
+    ```
+
+    Then run the [External-process guard](#external-process-guard-refuse-instead-of-clobber) against every port the launch will bind. Refuse if any port is held by a foreign process — never let a launcher "free" it.
+    ```bash
+    # Dynamic-port path: check the ports the picker chose.
+    assert_ports_free_or_ours "$BACKEND_PORT" "$FRONTEND_PORT" || exit 1
+    # Launcher-script path: substitute the launcher's hardcoded ports, e.g.
+    # assert_ports_free_or_ours 8000 8080 2481 || exit 1
     ```
 
 2. **Identify the launch commands.** Usually one backend + one frontend. Write down the exact shell command for each, wiring in the `$BACKEND_PORT` / `$FRONTEND_PORT` you picked above (e.g. `uv run uvicorn server.main:app --host 127.0.0.1 --port "$BACKEND_PORT"` and `cd dashboard && npm run dev -- --port "$FRONTEND_PORT"`).
