@@ -23,6 +23,7 @@ Run the [general checklist](../checklist) first, then this one.
 - [ ] Repository interfaces in domain layer (ABC). Implementations in infrastructure layer. → [Interface-First Design](architecture#interface-first-design)
 - [ ] Import direction is strictly downward: API → Application → Infrastructure → Domain. No upward imports. → [Layered Architecture](architecture#layered-architecture)
 - [ ] All database entity names (node labels, table names, relationship types) use constants/enums, never string literals. → [No String Literals in Queries](architecture#no-string-literals-in-queries)
+- [ ] Files grouped by family into sub-packages, not flat directories. New modules placed in the right sub-package. → [Module Organization](architecture#module-organization)
 
 ## Patterns
 

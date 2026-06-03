@@ -72,10 +72,20 @@ Business rules that might change — processing options, model selections, featu
 
 The test is always the same: if I change X, how many other things break? If the answer is "just X," you are decoupled. If the answer is "X and everything that touches X," you have a hidden dependency to remove. Decoupling is not about adding abstraction layers. It is about drawing clear boundaries. A well-decoupled system has fewer abstractions, not more — because each component does one thing and the boundaries between them are obvious.
 
+## 7. Organize by Family
+
+Code is grouped by what it belongs to, not dumped into flat catch-all directories. When you add a file, it goes into the folder for its feature, domain, or family — not into a growing pile of unrelated siblings.
+
+A flat `utils/` with forty unrelated helpers, a `models/` directory holding every entity in the system, a `components/` folder with sixty files at one level — these hide structure. The layout of a codebase should reveal its domains at a glance. Someone opening the tree should see the features, not a wall of files.
+
+Group first, then nest as a family grows. Start by putting siblings that change together under one roof — everything chat-related in one place, every auth entity together. When a group gets large enough that you scan past unrelated files to find what you want, split it into sub-packages. Depth is a tool, not a goal: add a level when it earns its keep, not preemptively.
+
+The test: when you create a file, is there an obvious folder it belongs in? If yes, put it there. If the only home is a flat catch-all bucket, the structure is missing a grouping — add it. This is the spatial side of decoupling: a tree grouped by domain makes duplication, dead code, and misplaced responsibilities visible, where a flat dump hides them. (Language-specific layouts: see the backend and frontend architecture docs.)
+
 ---
 
 ## How These Principles Work Together
 
-These six principles reinforce each other. No backward compatibility forces you to refactor forward — you cannot improve something halfway and leave the old version around. Refactoring forward eliminates duplication — you fix the root issue instead of patching around it. Eliminating duplication removes the temptation for shortcuts — when logic lives in one place, there is nothing to copy-paste. Avoiding shortcuts keeps the code honest — every decision is deliberate, not expedient. Decoupling ensures that each principle can be applied locally — fixing one module does not cascade into unrelated modules. Forward-looking design ensures you do not add complexity in the name of preventing it — you solve today's problem and trust that good structure makes tomorrow's changes easy.
+These seven principles reinforce each other. No backward compatibility forces you to refactor forward — you cannot improve something halfway and leave the old version around. Refactoring forward eliminates duplication — you fix the root issue instead of patching around it. Eliminating duplication removes the temptation for shortcuts — when logic lives in one place, there is nothing to copy-paste. Avoiding shortcuts keeps the code honest — every decision is deliberate, not expedient. Decoupling ensures that each principle can be applied locally — fixing one module does not cascade into unrelated modules. Forward-looking design ensures you do not add complexity in the name of preventing it — you solve today's problem and trust that good structure makes tomorrow's changes easy. Organizing by family makes the other six visible — duplication, hidden dependencies, and dead code stand out in a tree grouped by domain and disappear into a flat dump.
 
 When two principles seem to conflict, the resolution is usually scope. "No duplication" does not mean building a generic framework for two similar functions — that would be speculative. "Refactor forward" does not mean rewriting an entire module to fix a one-line bug — that would be a shortcut away from the actual task. "Decouple everything" does not mean wrapping every function call in an interface — that would be speculative abstraction. Apply each principle within the scope of the work at hand.

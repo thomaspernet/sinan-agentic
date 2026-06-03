@@ -375,6 +375,10 @@ async def search(self, query: str) -> list[Result]:
 
 The test: if a product decision changes (bigger page size, longer timeout, different model), can you change it without touching code? If yes, it is decoupled. If no, the business rule is hardcoded.
 
+Default to extracting. Any literal that is not structurally trivial — `0`, `1`, `""`, an index — is a named constant or config value until proven otherwise. "It's not really a policy" is the rationalization that leaves magic numbers scattered through the code; if you have to argue the case, extract it.
+
+A module-level constant is not the same as config. Hoisting `MAX_RESULTS = 200` to the top of the same file removes the magic number, but the value still lives in code. If it is a policy a non-developer might tune — limits, timeouts, model names, thresholds, feature flags — it belongs in the project's configuration (see project conventions for where config lives), not just a local constant. Local constants are for values that are structural to that module and will only ever change in a code review.
+
 This extends to any value that a non-developer might want to change: email subjects, default labels, retry delays, batch sizes, notification thresholds. If it is a policy decision, it belongs in config.
 
 ---

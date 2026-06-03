@@ -27,6 +27,10 @@ This is the general checklist — language-agnostic. After this, run the languag
 - [ ] No shortcuts or patches. Root cause fixed, not symptoms. No TODO comments left behind — create an issue instead. → [Pillar 2: No Shortcuts](clean-code#2-no-shortcuts)
 - [ ] No speculative abstractions. No extension points, plugin systems, or configurability for requirements that do not exist yet. → [Pillar 5: Forward-Looking, Not Speculative](clean-code#5-forward-looking-not-speculative)
 
+## Structure
+
+- [ ] Files grouped by family/feature into the right subfolder, not dumped flat into a shared catch-all dir. New files live with the thing they belong to. → [Pillar 7: Organize by Family](clean-code#7-organize-by-family)
+
 ## Decoupling
 
 - [ ] Layer boundaries respected. No business logic in the API layer. No database queries outside the repository layer. No HTTP concerns in services. → [Pillar 6: Decouple Everything](clean-code#6-decouple-everything)

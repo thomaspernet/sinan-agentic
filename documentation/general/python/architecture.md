@@ -136,7 +136,7 @@ def process_document(self, doc_uuid: str) -> None:
 
 ## Module Organization
 
-Prefer deep nesting over flat directories. Structure scales with depth -- a flat `models/` directory with 40 files is harder to navigate than a nested tree.
+Group by family first, then nest as a family grows. Organize related concepts into sub-packages rather than flat directories -- a flat `models/` directory with 40 files is harder to navigate than a tree grouped by domain. Add depth when a group grows large enough that unrelated files crowd it, not preemptively. (This is Pillar 7, Organize by Family, applied to Python packages.)
 
 ```
 project/
