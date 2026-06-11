@@ -16,12 +16,13 @@ Read this repo's CLAUDE.md for architecture and rules.
 
 ## Parse arguments
 
-Extract issue number, optional run ID, and optional base branch from `$ARGUMENTS`:
-- `$ARGUMENTS` = `"42"` -> ISSUE=42, RUN_ID=(none), BASE_BRANCH=(none)
+Extract issue number, optional run ID, optional base branch, and the optional auto-approve flag from `$ARGUMENTS`:
+- `$ARGUMENTS` = `"42"` -> ISSUE=42, RUN_ID=(none), BASE_BRANCH=(none), AUTO_APPROVE=false
 - `$ARGUMENTS` = `"42 --run 7"` -> ISSUE=42, RUN_ID=7, BASE_BRANCH=(none)
 - `$ARGUMENTS` = `"42 --run 7 --base-branch feat/364-something"` -> ISSUE=42, RUN_ID=7, BASE_BRANCH=feat/364-something
+- `$ARGUMENTS` = `"42 --run 7 --auto-approve"` -> ISSUE=42, RUN_ID=7, AUTO_APPROVE=true
 
-Use ISSUE for git branch names and GitHub references. Use RUN_ID for all `devwatch` tracking calls. Use BASE_BRANCH (if provided) as the base for the new branch instead of the default dev branch.
+Use ISSUE for git branch names and GitHub references. Use RUN_ID for all `devwatch` tracking calls. Use BASE_BRANCH (if provided) as the base for the new branch instead of the default dev branch. `--auto-approve` is set by the dispatcher when the owning workflow has the per-workflow auto-approve-gates toggle on (#2349); it only affects the **No-op terminal path** below — it has no effect on normal fix work.
 
 ## Detect repo
 
@@ -190,6 +191,8 @@ take the success path. Both produce wedged runs:
   and ships an empty PR.
 
 Take the no-op terminal path instead:
+
+**Confirmation gate.** Closing an issue is consequential and outward-facing, so by default present your no-op conclusion — the reason plus the evidence (the duplicate issue / the fixing PR / the commit, or why the reported behaviour is working as intended) — to the human and wait for approval before running the close below. **If `AUTO_APPROVE` is true** (the `--auto-approve` flag was on `$ARGUMENTS`): skip the confirmation entirely — close and report the no-op immediately, with no prompt and no pause. The owning workflow opted into auto-approval (#2349), which is a standing "yes, close it" for this run. The default stays gated.
 
 1. Close the GitHub issue with a comment explaining why:
 
