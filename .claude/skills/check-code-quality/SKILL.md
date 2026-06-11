@@ -39,9 +39,9 @@ If an issue number was provided, verify the current branch belongs to that issue
 git branch --show-current
 ```
 
-If RUN_ID is present, skip branch-name validation — the dashboard already resolved the correct branch for this workflow. Just verify you are on a feature branch (not `main`, `master`, etc.).
+The branch must be the issue's resolved branch. For a standalone issue that means `fix/<ISSUE>-`, `feat/<ISSUE>-`, `refactor/<ISSUE>-`, `chore/<ISSUE>-`, `docs/<ISSUE>-`, or `ci-fix/<ISSUE>-`. For a child of an epic running under EPIC_INTEGRATION the resolved branch is the parent epic's `epic/<EPIC>-<slug>` integration branch — which is what the dashboard already checked out for you when RUN_ID is present.
 
-If RUN_ID is NOT present, the branch name must start with `fix/<ISSUE>-`, `feat/<ISSUE>-`, `refactor/<ISSUE>-`, `chore/<ISSUE>-`, `docs/<ISSUE>-`, or `ci-fix/<ISSUE>-`. If the branch does not match, **stop immediately** — do not gather the diff, do not run checklists, do not post any comment. Tell the user:
+In every case, **the CLI re-checks this coupling at the writer** (step 7): if the current branch does not belong to the issue, `devwatch check-quality` rejects the row before any GitHub comment is posted. If you suspect the branch is wrong, **stop immediately** — do not gather the diff, do not run checklists, do not post any comment. Tell the user:
 
 > "Current branch `<branch>` does not belong to issue #<ISSUE>. Check out the correct branch first."
 

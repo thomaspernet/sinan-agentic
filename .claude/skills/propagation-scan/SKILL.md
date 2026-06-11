@@ -14,13 +14,16 @@ The output contains every doc you must read; treat it as if you opened each file
 
 ## Parse arguments
 
-- `$ARGUMENTS` = `"42"` → ISSUE=42, RUN_ID=(none), BASE_BRANCH=(none), HEAD_SHA=(none), CAP=5
+- `$ARGUMENTS` = `"42"` → ISSUE=42, RUN_ID=(none), BASE_BRANCH=(none), HEAD_SHA=(none), CAP=5, AUTO_APPROVE=false
 - `$ARGUMENTS` = `"42 --run 7"` → ISSUE=42, RUN_ID=7
 - `$ARGUMENTS` = `"42 --run 7 --base-branch feat/364-x"` → ISSUE=42, RUN_ID=7, BASE_BRANCH=feat/364-x
 - `$ARGUMENTS` = `"42 --run 7 --base-branch local-dev-next --head 9f3a2b1"` → ISSUE=42, RUN_ID=7, BASE_BRANCH=local-dev-next, HEAD_SHA=9f3a2b1
 - `$ARGUMENTS` = `"42 --cap 3"` → CAP=3 (overrides the default top-5 cap)
+- `$ARGUMENTS` = `"42 --run 7 --head 9f3a2b1 --auto-approve"` → AUTO_APPROVE=true
 
-`--head <sha>` is set by the dispatcher when the action fires inside an `epic_integration` chain (#1916): by the time this skill runs, `merge-to-epic` and `delete-branch` have already destroyed the feature branch, so a working-tree diff would be empty. The flag pins the diff to the implement run's tip — the same diff every time, regardless of where HEAD now sits.
+`--head <sha>` is set by the dispatcher when the action fires inside an `epic_integration` chain (#1916). Since #2353 this skill runs **before** `merge-to-epic` and `delete-branch`, so the child's feature branch still exists and `origin/<epic>...<HEAD_SHA>` is the child's *own un-merged change*. The flag pins the diff to the implement run's tip so it is the same diff every time, regardless of which branch the dispatcher left checked out. (Pre-#2353 this skill ran after the merge, when `<HEAD_SHA>` was already an ancestor of `origin/<epic>` — the three-dot diff collapsed to empty and the agent was tempted to reconstruct a diff by other means. §3 forbids that; the ordering fix removes the temptation.)
+
+`--auto-approve` is set by the dispatcher when the owning workflow has the per-workflow auto-approve-gates toggle on (#2349). It bypasses the §8 human gate only — every other step (skip rules, cap, file-only boundary, the §6 deduplicate-and-close) is unchanged. Absent the flag, the gate stays in force.
 
 ## Detect repo
 
@@ -57,7 +60,11 @@ fi
 
 When `--head <sha>` is supplied the diff is pinned to that SHA — deterministic across re-runs and immune to checkout state. The implement run's tip SHA is recorded on the `agent_runs` row by `/fix-issue` / `/feat-issue`; the dispatcher resolves it at trigger time and passes it here.
 
-If the diff is empty, purely cosmetic (formatting or import reorder), or limited to a dependency bump (`uv.lock`, `package-lock.json`, `package.json` deps), emit `status: skipped` with a reason and stop.
+**Run exactly the diff command above — nothing else.** The single `git diff` invocation in this section is the *only* sanctioned way to obtain the diff. The two refs (`origin/${BASE}` and `${HEAD_SHA}` / `HEAD`) come from the dispatcher; you do not choose them.
+
+**Fail closed on an empty or degenerate diff — never reconstruct one.** If the command above prints nothing, or the diff is purely cosmetic (formatting or import reorder), or limited to a dependency bump (`uv.lock`, `package-lock.json`, `package.json` deps), emit `status: skipped` with the reason and stop. An empty diff means *there is nothing to scan* — it does **not** mean "find the change some other way." You must **not** improvise a substitute diff by any means: not `git show <sha>`, not `git diff <sha>^ <sha>`, not diffing against a different base, not a commit's own patch, not the working tree. If the sanctioned diff is empty, the correct and only output is `status: skipped`.
+
+This matters most under `--auto-approve` (§8), where no human reviews what you file: auto-approve is a standing "yes" to the proposed list, **never** a licence to manufacture a list from a reconstructed diff. "Nothing to scan" is a valid, expected outcome — report it and stop.
 
 ## 4. Identify candidate patterns
 
@@ -93,7 +100,38 @@ For each candidate:
 
 Diff-scoped rule: **only patterns derived from the current diff.** Do not sweep the codebase for unrelated patterns.
 
-## 6. Cap and present
+## 6. Deduplicate against existing propagation issues
+
+`/propagation-scan` is idempotent by design: re-running it on the same target must not re-file candidates that are already tracked, and it collapses duplicate `propagation:` issues that earlier runs left behind. This step runs **always** — it is independent of the §8 human gate and of `--auto-approve`. It is the one place the skill is permitted to touch a pre-existing issue, and only to **close** an exact duplicate.
+
+First, list the propagation issues already filed against this scan target:
+
+```bash
+gh issue list --repo "$REPO" --state all --limit 200 \
+  --search "propagation: in:title" --json number,title,state,body
+```
+
+Keep only issues that are genuinely children of **this** scan target — their body carries `Surfaced by /propagation-scan on #<ISSUE>` and a `child-of` link to `#<ISSUE>`. Discard the rest (propagation issues for other targets are not yours to touch). For each kept issue, read its **candidate site** (`<file>:<line range>`, recorded in the body). That `(file, overlapping line range)` is the **dedup key**.
+
+**Prevent — never re-file a tracked site.** Drop every current candidate whose dedup key matches an **open** existing propagation issue for this scan target. Do this *before* the cap (§7) so the cap counts only genuinely-new sites, not slots wasted on already-tracked ones. Note each dropped candidate and the issue number it duplicates, for the summary.
+
+**Close — collapse redundant duplicates.** Group the kept propagation issues by dedup key. When a key has more than one issue, the **canonical** one is the lowest-numbered (it was filed first; if its work already shipped it is closed/merged — that is still the canonical). Close every *other* **open** issue for that key as a duplicate, pointing at the canonical:
+
+```bash
+gh issue close <dup> --repo "$REPO" \
+  --comment "Closing as a duplicate of #<canonical> — same propagation candidate (\`<file>:<line range>\`). Tracked there."
+```
+
+Rules for this step — they are narrow on purpose:
+
+- **Close, never edit.** The only mutation permitted is **closing** a redundant duplicate. Never re-title, re-label, re-parent, re-link, or reopen any issue.
+- **Keep exactly one per key.** Never close the canonical (lowest-numbered) issue for a key, whether it is open or already closed. After this step each dedup key has exactly one non-duplicate issue.
+- **Scope is this scan target's propagation issues only.** Never close an issue that is not a `propagation:` child of `#<ISSUE>` — not an unrelated issue, not a propagation child of a different target.
+- **No creation here.** This step only drops candidates (prevention) and closes redundants (cleanup); it never files an issue.
+
+If there are no existing propagation issues for this scan target, this step is a no-op — proceed.
+
+## 7. Cap and present
 
 Truncate to the top `CAP` opportunities (default `5`). If the raw count exceeds the cap, record the overflow for the summary.
 
@@ -117,17 +155,19 @@ Print the list, one entry per opportunity:
    Proposed action: apply the same None-guard pattern
 ```
 
-## 7. Human gate
+## 8. Human gate
 
-**Do not** file issues until the human confirms. Present the list and wait.
+**If `AUTO_APPROVE` is true** (the `--auto-approve` flag was passed): skip this gate entirely. Proceed to §9 with the **full** capped list — do not prompt, do not wait. The operator opted the owning workflow into auto-approval, which is a standing "approve all" for this run. Everything else (the cap, the file-only boundary, the skip rules) still applies.
+
+Otherwise (the default), **do not** file issues until the human confirms. Present the list and wait.
 
 - **Approves all** → proceed with the full list.
 - **Approves a subset** → proceed with the selected subset only.
 - **Rejects** → emit `status: skipped` with reason `"user declined proposed opportunities"` and stop. Not a failure.
 
-Agent-to-agent confirmation is not sufficient for this skill. Filing issues has larger blast radius than writing a rule; the human gate is load-bearing.
+Agent-to-agent confirmation is not sufficient for this skill. Filing issues has larger blast radius than writing a rule; the human gate is load-bearing — which is why the bypass is opt-in per workflow and off by default.
 
-## 8. Execute — file issues
+## 9. Execute — file issues
 
 1. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to every title, body, and comment below.
 
@@ -149,7 +189,7 @@ devwatch --repo "$REPO" create-issue \
 against one `--run-id`; without the flag each `create-issue` would
 overwrite the run's `github_issue`/`summary` and the run row would end
 up pointing at the last child instead of the scan target. The run's
-terminal status/summary is owned by the step-9 `agent-update` below —
+terminal status/summary is owned by the step-11 `agent-update` below —
 written once, not re-stamped per child.
 
 **Title format:** every propagation issue title is `propagation: <one-line summary>` — the `propagation:` prefix exactly once, then the candidate's one-line summary. No other prefix, no descriptive-only title.
@@ -193,7 +233,7 @@ After each `create-issue`, note the returned issue number — you need them for 
 
 The `child-of` set is **not** something the skill assembles or self-verifies any more. `create-issue` writes the scan-target edge and — when the scan target has an epic — the epic edge, both in code (#2095). There is no per-run conditional for an agent to skip and no blind re-read for it to rubber-stamp: a missing or wrong `child-of` set is now a `create-issue` bug, caught by that command's own tests, not a propagation-scan responsibility.
 
-## 9. Summary comment
+## 10. Summary comment
 
 Post a single summary comment on the parent `<ISSUE>`:
 
@@ -207,10 +247,13 @@ devwatch --repo "$REPO" agent-comment \
 - #<N3> — <summary>
 
 Cap: <CAP>. Overflow: <K>.
+Dedupe (§6): skipped <S> already-tracked candidate(s); closed <C> duplicate(s) — #<D1>→#<canonical>, ….
 See the propagation-scan rule."
 ```
 
-## 10. Record completion
+When nothing was deduped, drop the Dedupe line rather than printing zeros. When the run filed nothing new but still closed duplicates, the comment is still worth posting — it records the cleanup.
+
+## 11. Record completion
 
 Update the agent-run trace (use `--run-id` if available, otherwise `--issue`):
 
@@ -237,5 +280,5 @@ devwatch --repo "$REPO" agent-update \
 - **Capped.** Top `CAP` opportunities (default 5). Overflow counted, not filed.
 - **Human-gated.** The user approves the opportunity list before any issue is created.
 - **No cross-skill writes.** Does not write rules, docs, or code. `/issue-to-rule` handles rules; `/add-documentation` handles docs.
-- **Never creates an epic.** The skill files **flat** `child-of` children of the scan target. It never passes `--epic`, never files an umbrella / epic issue, and never re-roots the filed children under a new parent. If the candidate count exceeds the cap, the overflow is **counted in the summary** (step 9) — it is never absorbed by inventing an epic to hold the extra issues.
-- **Never touches a pre-existing issue.** The skill only **creates new** flat children of the scan target. It never modifies, re-links, re-titles, re-parents, re-labels, or closes an issue that already exists — including issues filed by an *earlier* propagation run. Each run owns only the issues it creates in step 8.
+- **Never creates an epic.** The skill files **flat** `child-of` children of the scan target. It never passes `--epic`, never files an umbrella / epic issue, and never re-roots the filed children under a new parent. If the candidate count exceeds the cap, the overflow is **counted in the summary** (step 10) — it is never absorbed by inventing an epic to hold the extra issues.
+- **Closes its own duplicates, edits nothing else (#2354).** The one mutation the skill may make to a pre-existing issue is **closing an exact duplicate** in the §6 deduplicate step — a redundant `propagation:` child of the *current* scan target, collapsed onto its lowest-numbered canonical. It never re-titles, re-labels, re-parents, re-links, or reopens any issue, and never touches an issue that is not a propagation duplicate under this scan target. Apart from that close, each run owns only the issues it creates in step 9.

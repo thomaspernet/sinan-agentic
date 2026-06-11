@@ -22,7 +22,7 @@ The output contains every doc you must read; treat it as if you opened each file
 - `$ARGUMENTS` = `"42 --run 7 --base-branch feat/364-x"` → ISSUE=42, RUN_ID=7, BASE_BRANCH=feat/364-x
 - `$ARGUMENTS` = `"42 --run 7 --base-branch local-dev-next --head 9f3a2b1"` → ISSUE=42, RUN_ID=7, BASE_BRANCH=local-dev-next, HEAD_SHA=9f3a2b1
 
-`--head <sha>` is set by the dispatcher when the action fires inside an `epic_integration` chain (#1916): by the time this skill runs, `merge-to-epic` and `delete-branch` have already destroyed the feature branch, so a working-tree diff would be empty. The flag pins the diff to the implement run's tip — the same diff every time, regardless of where HEAD now sits.
+`--head <sha>` is set by the dispatcher when the action fires inside an `epic_integration` chain (#1916). Since #2353 this skill runs **before** `merge-to-epic` and `delete-branch`, so the child's feature branch still exists and `origin/<base>...<HEAD_SHA>` is the child's *own un-merged change*. The flag pins the diff to the implement run's tip so it is the same diff every time, regardless of which branch the dispatcher left checked out.
 
 Valid `MODE` values:
 
@@ -59,6 +59,8 @@ Pass `--repo "$REPO"` to every `devwatch` command.
    fi
    ```
    When `--head <sha>` is supplied the diff is pinned to that SHA — deterministic across re-runs and immune to checkout state. The implement run's tip SHA is recorded on the `agent_runs` row by `/fix-issue` / `/feat-issue`; the dispatcher resolves it at trigger time and passes it here.
+
+   Run exactly the command above — nothing else. If it prints **nothing**, the diff is empty: record an `iteration-only` skipped summary and stop. Do **not** reconstruct a diff by other means (`git show <sha>`, `git diff <sha>^ <sha>`, a different base, the working tree) — an empty sanctioned diff means there is no change to extract a rule from, not that you should find one another way.
 5. Read every file in the target tier you might write to, so you can detect conflict or subsumption before drafting:
    - `.claude/rules/*.md` — project-wide always-on rules
    - `documentation/general/principles/**/*.mdx` — language / architecture principles
