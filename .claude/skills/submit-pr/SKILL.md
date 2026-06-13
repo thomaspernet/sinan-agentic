@@ -72,6 +72,28 @@ devwatch --repo "$REPO" issue-history <ISSUE>
 
 1. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to every title, body, and comment below.
 
+2. Emit the run report (advisory — a failed post must never fail the step). Write the fixed JSON skeleton, filling `notes` with PR facts reviewers should follow up on (`follow_up`) and any risk in this PR to watch (`risk`). Use an empty array (`[]`) when there is nothing worth recording. Post it **before** `submit-pr` below so the report exists when completion hooks fire.
+
+```bash
+cat > /tmp/devwatch-report-<ISSUE>.json <<'JSON'
+{
+  "schema_version": 1,
+  "notes": [
+    {"category": "follow_up", "text": "<anything reviewers should follow up after merge>"},
+    {"category": "risk", "text": "<a risk in this PR reviewers should watch>"}
+  ]
+}
+JSON
+
+devwatch --repo "$REPO" agent-report \
+  --run-id <RUN_ID> \
+  --file /tmp/devwatch-report-<ISSUE>.json \
+  || echo "  agent-report failed (advisory) — continuing"
+```
+Fall back to `--issue <ISSUE> --branch "$(git branch --show-current)"` if RUN_ID is unavailable.
+
+3. Submit the PR:
+
 ```bash
 devwatch --repo "$REPO" submit-pr \
   --message "<your commit message>" \

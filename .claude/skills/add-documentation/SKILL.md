@@ -12,7 +12,7 @@ Run:
 
 The output contains every doc you must read; treat it as if you opened each file directly. Do not proceed with the skill body until done.
 
-**Standing authorization**: posting the `devwatch agent-update` and `devwatch agent-comment` calls described below (status update + single completion comment on the target issue) is part of this skill's contract. Run them without asking for confirmation.
+**Standing authorization**: posting the `devwatch agent-report`, `devwatch agent-update`, and `devwatch agent-comment` calls described below (run report + status update + single completion comment on the target issue) is part of this skill's contract. Run them without asking for confirmation.
 
 ## Parse arguments
 
@@ -67,8 +67,23 @@ When `EPIC_MODE=true`, this is the workflow-level meta-docs pass triggered post-
    git commit -m "docs: meta-docs for epic #<ISSUE>"
    git push origin <DEV_BRANCH>
    ```
-8. Record completion against the agent run and post a single completion comment on the epic:
+8. Emit the run report (advisory — a failed post must never fail the step), then record completion and post a single completion comment on the epic. Post the report **before** the status flip so it exists when completion hooks fire:
    ```bash
+   cat > /tmp/devwatch-report-<ISSUE>.json <<'JSON'
+   {
+     "schema_version": 1,
+     "notes": [
+       {"category": "follow_up", "text": "Updated <surface> — <why>"},
+       {"category": "consideration", "text": "<surface considered but left as-is — why>"}
+     ]
+   }
+   JSON
+
+   devwatch --repo "$REPO" agent-report \
+     --run-id <RUN_ID> \
+     --file /tmp/devwatch-report-<ISSUE>.json \
+     || echo "  agent-report failed (advisory) — continuing"
+
    devwatch --repo "$REPO" agent-update \
      --run-id <RUN_ID> --status completed \
      --summary "Meta-docs updated for epic #<ISSUE>" \
@@ -148,6 +163,30 @@ git add <changed-files>
 git commit -m "docs: update docs for issue #<ISSUE>"
 git push
 ```
+
+Emit the run report (advisory — a failed post must never fail the step). Write
+the fixed JSON skeleton, filling `notes` with the docs you updated and any doc
+you considered but deliberately left as-is (with the reason). Use an empty array
+(`[]`) when no docs changed. Post it **before** the status flip below so the
+report exists when completion hooks fire.
+
+```bash
+cat > /tmp/devwatch-report-<ISSUE>.json <<'JSON'
+{
+  "schema_version": 1,
+  "notes": [
+    {"category": "follow_up", "text": "Updated <doc> — <why>"},
+    {"category": "consideration", "text": "<doc considered but left as-is — why>"}
+  ]
+}
+JSON
+
+devwatch --repo "$REPO" agent-report \
+  --run-id <RUN_ID> \
+  --file /tmp/devwatch-report-<ISSUE>.json \
+  || echo "  agent-report failed (advisory) — continuing"
+```
+Fall back to `--issue <ISSUE> --branch "$(git branch --show-current)"` if RUN_ID is unavailable.
 
 Record completion (use `--run-id` if available, fall back to `--issue`):
 ```bash

@@ -123,7 +123,34 @@ For each failure, include the specific file/line, what's wrong, and the path to 
 
 1. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to every title, body, and comment below.
 
-If an issue number was provided, use the CLI to post the report and record the trace:
+If an issue number was provided, first emit the run report, then record the quality trace.
+
+Emit the run report (advisory — a failed post must never fail the gate). Write
+the fixed JSON skeleton, filling `notes` with the verdict plus any item
+reviewers should track, and `stats` with the pass/fail counts. Post it
+**before** the `check-quality` trace below so the report exists when completion
+hooks fire.
+
+```bash
+cat > /tmp/devwatch-report-<ISSUE>.json <<'JSON'
+{
+  "schema_version": 1,
+  "notes": [
+    {"category": "consideration", "text": "Verdict: <PASS|FAIL> — <one-line>"},
+    {"category": "follow_up", "text": "<an item reviewers should track, or drop this line>"}
+  ],
+  "stats": {"checks_passed": <N>, "checks_failed": <M>}
+}
+JSON
+
+devwatch --repo "$REPO" agent-report \
+  --run-id <RUN_ID> \
+  --file /tmp/devwatch-report-<ISSUE>.json \
+  || echo "  agent-report failed (advisory) — continuing"
+```
+Fall back to `--issue <ISSUE> --branch "$(git branch --show-current)"` if RUN_ID is unavailable.
+
+Then post the quality trace:
 
 ```bash
 # When RUN_ID is available, --run-id carries the context (issue is derived from the run)

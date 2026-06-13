@@ -253,9 +253,33 @@ See the propagation-scan rule."
 
 When nothing was deduped, drop the Dedupe line rather than printing zeros. When the run filed nothing new but still closed duplicates, the comment is still worth posting — it records the cleanup.
 
-## 11. Record completion
+## 11. Emit the run report and record completion
 
-Update the agent-run trace (use `--run-id` if available, otherwise `--issue`):
+First emit the run report (advisory — a failed post must never fail the step).
+Write the fixed JSON skeleton, filling `notes` with the candidates filed and any
+skipped (with the reason), and `stats` with the counts. Post it **before** the
+`agent-update` status flip below so the report exists when completion hooks fire.
+
+```bash
+cat > /tmp/devwatch-report-<ISSUE>.json <<'JSON'
+{
+  "schema_version": 1,
+  "notes": [
+    {"category": "follow_up", "text": "Filed #<N> — <summary>"},
+    {"category": "consideration", "text": "Skipped <candidate> — <reason>"}
+  ],
+  "stats": {"candidates_found": <N>, "filed": <M>, "skipped": <K>}
+}
+JSON
+
+devwatch --repo "$REPO" agent-report \
+  --run-id <RUN_ID> \
+  --file /tmp/devwatch-report-<ISSUE>.json \
+  || echo "  agent-report failed (advisory) — continuing"
+```
+Fall back to `--issue <ISSUE> --branch "$(git branch --show-current)"` if RUN_ID is unavailable.
+
+Then update the agent-run trace (use `--run-id` if available, otherwise `--issue`):
 
 ```bash
 devwatch --repo "$REPO" agent-update \

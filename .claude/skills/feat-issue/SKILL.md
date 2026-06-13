@@ -233,7 +233,34 @@ git push -u origin <your-branch-name>
 
 2. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to every title, body, and comment below.
 
-3. Record completion (use `--run-id` if available, fall back to `--issue`):
+3. Emit the run report (advisory — a failed post must never fail the step).
+
+Write the fixed JSON skeleton, filling only the `notes` array with this step's
+follow-ups (`follow_up`), risks reviewers should watch (`risk`), and things you
+considered but deliberately did not do (`consideration`). Use an empty array
+(`[]`) when there is nothing worth recording. Post it **before** the status flip
+below so the report exists when completion hooks fire.
+
+```bash
+cat > /tmp/devwatch-report-<ISSUE>.json <<'JSON'
+{
+  "schema_version": 1,
+  "notes": [
+    {"category": "follow_up", "text": "<a follow-up worth filing later>"},
+    {"category": "risk", "text": "<a risk reviewers should watch>"},
+    {"category": "consideration", "text": "<something considered but deliberately not done, and why>"}
+  ]
+}
+JSON
+
+devwatch --repo "$REPO" agent-report \
+  --run-id <RUN_ID> \
+  --file /tmp/devwatch-report-<ISSUE>.json \
+  || echo "  agent-report failed (advisory) — continuing"
+```
+Fall back to `--issue <ISSUE> --branch "$(git branch --show-current)"` if RUN_ID is unavailable.
+
+4. Record completion (use `--run-id` if available, fall back to `--issue`):
 ```bash
 devwatch --repo "$REPO" agent-update \
   --run-id <RUN_ID> \
@@ -243,7 +270,7 @@ devwatch --repo "$REPO" agent-update \
   --commits "$(git rev-parse HEAD)"
 ```
 
-4. Post completion comment to GitHub issue:
+5. Post completion comment to GitHub issue:
 ```bash
 devwatch --repo "$REPO" agent-comment \
   --issue <ISSUE> \
