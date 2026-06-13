@@ -43,13 +43,15 @@ Pass `--repo "$REPO"` to every `devwatch` command to ensure the correct repo is 
 
 ## Intelligence (what you decide)
 
+The README is a **scaffold and index**, not a container for the whole session. It gives a reader scanning the folder a fast orientation; the detailed thinking lives in separate, topic-specific child files that grow over time. A session collapses into an unreadable wall of prose the moment the README tries to hold everything — keep it a summary that points outward.
+
 1. Pick a good slug. Kebab-case, short, descriptive (`dark-mode-rollout`, not `dm` or `dark_mode`). Reflects the topic, not the conclusion.
-2. Author a starter README body. Three sections, each one sentence to start — the human will expand each one when they open the file:
-   - `## Why` — the question or pain that triggered the session.
-   - `## Open Questions` — the unknowns the session needs to resolve.
-   - `## What's next` — the rough shape of the output (single feature? epic? scrapped idea?).
-3. Pick a title for the frontmatter. Title-case, short — what a reader scanning a list of sessions would scan for.
-4. If `--description` was passed inline, weave it into the `## Why` section.
+2. Author a starter README body as **summary + status + index**, not a body of prose:
+   - `## Summary` — one or two sentences: the question or pain that triggered the session, plus the rough shape of the expected output (single feature? epic? scrapped idea?). Weave `--description` in here if it was passed.
+   - `**Status:** draft` — a human-readable status line that mirrors the frontmatter; the human moves it forward as the session matures.
+   - `## Files` — the links/index section. A one-line note that detailed thinking lives in topic-specific files next to the README, followed by a small table listing each child file and its purpose. Seed the table with this `README.md` row plus the first child file you expect, so the convention is visible from the start.
+3. Do NOT pour the full Why / Open Questions / What's next prose into the README. As the thinking grows, write each sub-topic into its own small `.md` file inside the session folder (`open-questions.md`, `tooling.md`, `per-repo-plan.md`, …) and add a row for it under `## Files`. The README stays a short summary + index; the child files carry the detail.
+4. Pick a title for the frontmatter. Title-case, short — what a reader scanning a list of sessions would scan for.
 
 Pass the starter README content via a `--body-file` JSON file rather than `--body` on the command line so newlines round-trip cleanly:
 
@@ -58,7 +60,7 @@ BODY_FILE=$(mktemp -t devwatch-brainstorm-body-XXXX.json)
 cat > "$BODY_FILE" <<'JSON'
 {
   "title": "<title>",
-  "body": "## Why\n\n<one sentence>\n\n## Open Questions\n\n- <bullet>\n\n## What's next\n\n<one sentence>\n"
+  "body": "## Summary\n\n<one or two sentences: what triggered the session and the rough shape of the output>\n\n**Status:** draft\n\n## Files\n\nDetailed thinking lives in topic-specific files next to this README — one per sub-topic, created as the thinking grows. Add each here as you create it.\n\n| File | Purpose |\n| --- | --- |\n| `README.md` | This file. Summary + status + index. |\n| `open-questions.md` | The unknowns this session needs to resolve. |\n"
 }
 JSON
 ```
@@ -83,9 +85,30 @@ Delete the body-file after the CLI succeeds:
 rm -f "$BODY_FILE"
 ```
 
+## Commit the session
+
+The scaffold is an on-disk artifact — it must be tracked, not left as an untracked dirty file. After the CLI succeeds, commit and push the new session folder **on the current branch**. Never commit to a protected branch (`local-dev-next`, `master-staging`, `main`):
+
+```bash
+BRANCH=$(git branch --show-current)
+SESSION_DIR="documentation/project/brainstorming/<DD-MM-YY>/$SLUG"   # the folder the CLI just created
+case "$BRANCH" in
+  local-dev-next|master-staging|main)
+    echo "On protected branch '$BRANCH' — not committing. Move onto a feature/chore branch and commit the session there."
+    ;;
+  *)
+    git add "$SESSION_DIR"
+    git commit -m "chore(brainstorm): open $SLUG session"
+    git push
+    ;;
+esac
+```
+
+Stage **only** `$SESSION_DIR` — never `git add -A` or `git add .`. On a protected branch, stop after the warning and tell the user to re-run from a feature/chore branch; do not stage or commit anything.
+
 ## Boundary
 
-This command creates the session scaffold. It does NOT open an issue and does NOT write code. Report the absolute session path and ask: *"Want to expand it? Open `<path>/README.md`. When the thinking converges, run `/new-feature --from-brainstorm <session>` (or `/new-bug --from-brainstorm <session>`)."*
+This command creates the session scaffold and commits it on the current branch (or warns and stops on a protected branch). It does NOT open an issue and does NOT write code. Report the absolute session path and ask: *"Want to expand it? Keep `<path>/README.md` a short summary + index, and push detailed thinking into topic-specific files next to it (`open-questions.md`, …), linking each under `## Files`. When the thinking converges, run `/new-feature --from-brainstorm <session>` (or `/new-bug --from-brainstorm <session>`)."*
 
 When you launched from a `--body-file`, delete the file after `devwatch new-brainstorm` succeeds:
 
