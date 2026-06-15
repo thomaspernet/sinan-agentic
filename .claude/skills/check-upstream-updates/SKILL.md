@@ -42,8 +42,16 @@ This prints the project's watched libraries as JSON. Find the row whose `id`
 matches `$ARGUMENTS` and read:
 
 - `repo` — the **upstream** repo to survey (e.g. `openai/openai-agents-python`).
-- `package_name` — the dependency name this project pins it under.
-- `manifest_path` — the manifest carrying the pin (`pyproject.toml`, `package.json`, …).
+- `package_name` — the dependency name this project pins it under. May be a
+  scoped npm name (`@udecode/plate`) or a path-qualified module
+  (`github.com/foo/bar`), not just a bare name.
+- `manifest_path` — the manifest carrying the pin (`pyproject.toml`,
+  `package.json`, `Cargo.toml`, `go.mod`, `Gemfile`/`*.gemspec`,
+  `composer.json`, …), possibly in a **subdirectory**
+  (`packages/x/package.json`). **May be empty** — the project watches this
+  upstream without a local pin (tracking releases to port ideas, not as a
+  literal dependency). When empty, skip the version-behind comparison and judge
+  applicability from how the project would *use* the change (step 4).
 - `track_mode` — `releases` (inspect releases/tags only) or `releases_commits`
   (also inspect the commit stream).
 - `last_checked_sha` / `last_checked_tag` / `last_checked_at` — the **marker**:
@@ -81,10 +89,18 @@ the substantive "what changed" lives.
 This is the differentiator. For each candidate upstream change:
 
 - Read `manifest_path` for the **pinned version** of `package_name` — how far
-  behind is this project, concretely.
+  behind is this project, concretely. Parse it per ecosystem:
+  `pyproject.toml` (PEP 621 `dependencies` / `[tool.poetry.dependencies]`),
+  `package.json` (`dependencies` / `devDependencies`, scoped keys like
+  `@udecode/plate`), `Cargo.toml` (`[dependencies]`), `go.mod` (`require`
+  lines), `Gemfile`/`*.gemspec` (`gem` / `add_dependency`), `composer.json`
+  (`require`). If `manifest_path` is **empty**, there is no local pin — skip the
+  "how far behind" math and lean entirely on the usage judgment below.
 - Search the codebase for **how the package is actually used** (imports, the
   specific APIs called). A change to an API this project never touches is not
-  applicable; a change to one it hand-rolls or calls heavily is.
+  applicable; a change to one it hand-rolls or calls heavily is. With no pin,
+  this is the *only* signal — file a rec only when you can name a concrete local
+  hook the upstream change would improve.
 
 ## 4. Judge applicability (what you decide)
 
