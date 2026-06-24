@@ -22,7 +22,7 @@ The output contains every doc you must read; treat it as if you opened each file
 - `$ARGUMENTS` = `"42 --run 7 --base-branch feat/364-x"` → ISSUE=42, RUN_ID=7, BASE_BRANCH=feat/364-x
 - `$ARGUMENTS` = `"42 --run 7 --base-branch local-dev-next --head 9f3a2b1"` → ISSUE=42, RUN_ID=7, BASE_BRANCH=local-dev-next, HEAD_SHA=9f3a2b1
 
-`--head <sha>` is set by the dispatcher when the action fires inside an `epic_integration` chain (#1916). Since #2353 this skill runs **before** `merge-to-epic` and `delete-branch`, so the child's feature branch still exists and `origin/<base>...<HEAD_SHA>` is the child's *own un-merged change*. The flag pins the diff to the implement run's tip so it is the same diff every time, regardless of which branch the dispatcher left checked out.
+`--head <sha>` is set by the dispatcher when the action fires inside an `epic_integration` chain (#1916). Since #2353 this skill runs **before** `merge-to-base` and `delete-branch`, so the child's feature branch still exists and `origin/<base>...<HEAD_SHA>` is the child's *own un-merged change*. The flag pins the diff to the implement run's tip so it is the same diff every time, regardless of which branch the dispatcher left checked out.
 
 Valid `MODE` values:
 

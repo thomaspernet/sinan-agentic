@@ -16,13 +16,12 @@ Read this repo's CLAUDE.md for architecture and rules.
 
 ## Parse arguments
 
-Extract issue number, optional run ID, optional base branch, and the optional auto-approve flag from `$ARGUMENTS`:
-- `$ARGUMENTS` = `"42"` -> ISSUE=42, RUN_ID=(none), BASE_BRANCH=(none), AUTO_APPROVE=false
-- `$ARGUMENTS` = `"42 --run 7"` -> ISSUE=42, RUN_ID=7, BASE_BRANCH=(none)
-- `$ARGUMENTS` = `"42 --run 7 --base-branch feat/364-something"` -> ISSUE=42, RUN_ID=7, BASE_BRANCH=feat/364-something
+Extract issue number, optional run ID, and the optional auto-approve flag from `$ARGUMENTS`:
+- `$ARGUMENTS` = `"42"` -> ISSUE=42, RUN_ID=(none), AUTO_APPROVE=false
+- `$ARGUMENTS` = `"42 --run 7"` -> ISSUE=42, RUN_ID=7
 - `$ARGUMENTS` = `"42 --run 7 --auto-approve"` -> ISSUE=42, RUN_ID=7, AUTO_APPROVE=true
 
-Use ISSUE for git branch names and GitHub references. Use RUN_ID for all `devwatch` tracking calls. Use BASE_BRANCH (if provided) as the base for the new branch instead of the default dev branch. `--auto-approve` is set by the dispatcher when the owning workflow has the per-workflow auto-approve-gates toggle on (#2349); it only affects the **No-op terminal path** below — it has no effect on normal implementation.
+Use ISSUE for git branch names and GitHub references. Use RUN_ID for all `devwatch` tracking calls. The base branch is **never** taken from an argument or guessed here — it is owned by the workflow (#2589), read in the **Branch** section below. `--auto-approve` is set by the dispatcher when the owning workflow has the per-workflow auto-approve-gates toggle on (#2349); it only affects the **No-op terminal path** below — it has no effect on normal implementation.
 
 ## Detect repo
 
@@ -37,6 +36,10 @@ Pass `--repo "$REPO"` to every `devwatch` command to ensure the correct repo is 
 ## Context loading
 
 The mandatory reads (above) loaded every coding-principle doc this skill needs. Read this repo's CLAUDE.md for architecture and rules.
+
+## Single-step boundary
+
+You own **exactly one** step of the workflow — this implementation step — and nothing else. Implement the feature, then record completion with `devwatch agent-update` and stop. The dispatcher's completion hook chains every later step (quality, propagation, merge, documentation, release) from your recorded completion; that is never your job. Do **not** run another workflow step, trigger another action, or try to drive the rest of the pipeline from inside this run. If the run is genuinely wedged and the dispatcher needs a kick, run `devwatch unblock <ISSUE> resume-run` (see `devwatch unblock-plan <ISSUE>` for the recovery options) — do not improvise the next step yourself.
 
 ## Lineage pre-read
 
@@ -96,67 +99,39 @@ Available arguments (run `devwatch issue-history --help` to see all):
 
 ## Workflow detection
 
-Before creating a branch, look up the workflow that owns this issue. Since #1123 / epic #1116, the workflow row is the **source of truth** for `base_branch` and `strategy` — the skill does not re-derive either.
+Before creating a branch, look up the workflow that owns this issue. Every issue is born into exactly one workflow (#2588), and the workflow row is the **single source of truth** for the branch base (#2589 / #1123 / epic #1116) — the skill never re-derives or guesses a base from lineage, drift, a repo default, or a CLI argument.
 
 ```bash
 WORKFLOW_JSON=$(devwatch --repo "$REPO" workflow-get --issue <ISSUE>)
 ```
 
-Decision matrix based on the response:
+`workflow-get` returns the owning workflow's JSON. Parse one field:
 
-1. **`null` or empty** — no workflow.
-   - If the issue body contains `child-of: #<epic>` (i.e. it is an epic child), **refuse**. Print a clear error and stop before touching git:
+- `WORKFLOW_BASE = workflow.base_branch_resolved` — the single workflow-owned base resolver (#2589): the shared **epic integration branch** `epic/<root>-<slug>` for an `epic_integration` workflow, otherwise the workflow's `base_branch`. Do **not** read `workflow.current_branch` (overwritten by every child's `agent-update --branch`; #1611) or `workflow.base_branch` directly (for `epic_integration` that is the parent the epic was cut from, **not** the ref children sit on) — `base_branch_resolved` already picks the correct ref for either strategy.
 
-     ```
-     Issue #<ISSUE> is a child of epic #<epic> but no workflow contains it.
-     Epic children cannot be implemented without a workflow that owns the
-     base branch and branching strategy. Create a workflow first:
+If `workflow-get` returns `null` (no workflow owns this issue — the workflow-birth invariant has been violated, e.g. an unsynced or manually-created issue), **refuse**. Print a clear error and stop before touching git:
 
-       - Dashboard: open epic #<epic> and click "Create workflow"
-       - CLI:       devwatch --repo "$REPO" workflow-create --root <epic> ...
+```
+Issue #<ISSUE> has no workflow. Every issue must be a member of a
+workflow that owns its base branch (#2588). Create one first:
 
-     Then re-run /feat-issue <ISSUE>.
-     ```
+  - Dashboard: open the issue and click "Start workflow"
+  - CLI:       devwatch --repo "$REPO" workflow-create ...
 
-     Exit non-zero. Do not run `git fetch`, `git checkout`, or any mutation.
-   - If the issue is standalone (no `child-of`), proceed to the **Standalone branch** block below.
+Then re-run /feat-issue <ISSUE>.
+```
 
-2. **Workflow returned** — parse these fields:
-   - `WORKFLOW_STRATEGY = workflow.strategy` — one of `"standalone"` or `"epic_integration"`. This decides which ref the child branch is cut off, so read it before either of the two refs below.
-   - `WORKFLOW_BRANCH = workflow.canonical_branch` — the canonical implementation branch (for `epic_integration`, this is the **epic integration branch** `epic/<root>-<slug>` derived from contract fields; for `standalone` it falls through to `current_branch`). Do **not** read `workflow.current_branch` directly — it is overwritten by every child's `agent-update --branch`, so under `epic_integration` it returns whichever sibling ran last (#1611).
-   - `WORKFLOW_BASE = workflow.base_branch` — the workflow's *parent* branch (typically `dev` / `local-dev-next`). For `standalone` workflows this is the ref children cut off; for `epic_integration` workflows it is the parent the epic was cut from (kept for drift-pull / merge-target context) and is **not** the right ref for children.
+Exit non-zero. Do not run `git fetch`, `git checkout`, or any mutation.
+
+If `base_branch_resolved` is `null` (an `epic_integration` workflow whose root-epic binding is missing — unsynced root issue or root not flagged `is_epic`), also refuse: the epic integration branch name cannot be resolved, so there is no safe ref to branch off. Print the binding-repair guidance and exit non-zero rather than guessing a base.
 
 ## Branch
 
-**If a workflow was returned**, choose the implementation branch based on `WORKFLOW_STRATEGY`:
-
-- **`standalone`** — the workflow has no shared integration branch. Each child cuts its own `feat/<ISSUE>-<slug>` off the workflow's parent ref:
-  ```bash
-  BASE=$WORKFLOW_BASE
-  BRANCH=$(devwatch --repo "$REPO" workflow-branch-name --issue <ISSUE> --prefix feat)
-  git fetch origin && git checkout -b "$BRANCH" origin/${BASE}
-  ```
-- **`epic_integration`** — children land on the shared epic integration branch cut at workflow creation. The child branch must be cut off `WORKFLOW_BRANCH` (the epic integration branch, `workflow.canonical_branch`), **not** `WORKFLOW_BASE` — cutting off `WORKFLOW_BASE` would skip every previously-merged sibling commit and produce a child PR with no shared history with the epic (#1457). Each child still ships on its own short-lived `feat/<childN>-<child-slug>` cut off the epic branch (#1096):
-  ```bash
-  BRANCH=$(devwatch --repo "$REPO" workflow-branch-name --issue <ISSUE> --prefix feat)
-  git fetch origin && git checkout -b "$BRANCH" origin/${WORKFLOW_BRANCH}
-  ```
-
-**If no workflow was returned AND the issue is standalone** (no `child-of`):
-
-Resolve the base branch in this order:
-1. `BASE_BRANCH` argument if provided.
-2. The nearest non-epic `child-of` ancestor's active branch (`lineage-branch`).
-3. The default dev branch.
+Cut the child's feature branch off the workflow-owned base. One path, both strategies — `WORKFLOW_BASE` already resolves to the epic integration branch for `epic_integration` (so the child inherits every previously-merged sibling commit; #1457) and to the workflow's `base_branch` otherwise. The child always ships on its own short-lived `feat/<ISSUE>-<slug>` (#1096):
 
 ```bash
-if [ -n "<BASE_BRANCH>" ]; then
-  BASE=<BASE_BRANCH>
-else
-  BASE=$(devwatch --repo "$REPO" resolve-issue-base --issue <ISSUE> --drift-pull)
-fi
 BRANCH=$(devwatch --repo "$REPO" workflow-branch-name --issue <ISSUE> --prefix feat)
-git fetch origin && git checkout -b "$BRANCH" origin/${BASE}
+git fetch origin && git checkout -b "$BRANCH" origin/${WORKFLOW_BASE}
 ```
 
 After creating or checking out the branch, record it (use `--run-id` if available, fall back to `--issue`):

@@ -1,10 +1,10 @@
 ---
-description: "Open a brainstorming session — a folder under documentation/project/brainstorming/<DD-MM-YY>/<slug>/ with a frontmatter README. Optionally pre-link it to an issue."
+description: "Open a brainstorming session — an untracked folder under the project's brainstorm tree at <DD-MM-YY>/<slug>/ with a frontmatter README. Optionally pre-link it to an issue."
 ---
 
 Create a brainstorming session folder. Stop.
 
-A brainstorming session is the pre-issue thinking space — the "why" that produced a feature or epic. It lives on disk under `documentation/project/brainstorming/<DD-MM-YY>/<slug>/` with a mandatory `README.md` carrying frontmatter (title, status, linked_issues). The session is a folder so it can hold many files and subfolders as the thinking grows.
+A brainstorming session is the pre-issue thinking space — the "why" that produced a feature or epic. It lives on disk under the project's configured brainstorm tree (`brainstorming.root`) at `<DD-MM-YY>/<slug>/` with a mandatory `README.md` carrying frontmatter (title, status, linked_issues). The brainstorm tree is a plain sibling folder, never git-tracked. The session is a folder so it can hold many files and subfolders as the thinking grows.
 
 This command only creates the scaffold. It does NOT open an issue. Use `/new-feature --from-brainstorm <session>` (or `/new-bug --from-brainstorm <session>`) when the brainstorming converges into something actionable.
 
@@ -75,8 +75,8 @@ devwatch --repo "$REPO" new-brainstorm "$SLUG" \
 
 Add `--epic <N>` OR `--issue <N>` only if the user passed one (never both — they are mutually exclusive). The CLI:
 
-- Creates `documentation/project/brainstorming/<DD-MM-YY>/<SLUG>/README.md` with frontmatter (title, status=draft, linked_issues=[N] when pre-linked, else `[]`).
-- When `--epic` or `--issue` is set, appends `brainstorm: documentation/project/brainstorming/<DD-MM-YY>/<SLUG>` under the issue body's `Links:` block.
+- Creates `<DD-MM-YY>/<SLUG>/README.md` under the project's resolved brainstorm tree (`brainstorming.root`), with frontmatter (title, status=draft, linked_issues=[N] when pre-linked, else `[]`). It prints the absolute folder path.
+- When `--epic` or `--issue` is set, appends a `brainstorm: documentation/project/brainstorming/<DD-MM-YY>/<SLUG>` line under the issue body's `Links:` block. This is the stable label form (decoupled from the physical location), so moving the tree out of the repo never rewrites the body links.
 - Fails cleanly if the folder already exists — overwriting a session is never an accident.
 
 Delete the body-file after the CLI succeeds:
@@ -85,30 +85,15 @@ Delete the body-file after the CLI succeeds:
 rm -f "$BODY_FILE"
 ```
 
-## Commit the session
+## The session is scratch — never git-tracked
 
-The scaffold is an on-disk artifact — it must be tracked, not left as an untracked dirty file. After the CLI succeeds, commit and push the new session folder **on the current branch**. Never commit to a protected branch (`local-dev-next`, `master-staging`, `main`):
+The brainstorm tree is a plain sibling folder, not part of any code repo. The CLI wrote the session under the project's configured `brainstorming.root` (an untracked location outside the code tree). **Do NOT commit, push, or `git add` anything** — there is no branch to put it on and nothing to track. The session stays on disk as scratch; the dashboard brainstorm primitive scans the folder directly (no git involved).
 
-```bash
-BRANCH=$(git branch --show-current)
-SESSION_DIR="documentation/project/brainstorming/<DD-MM-YY>/$SLUG"   # the folder the CLI just created
-case "$BRANCH" in
-  local-dev-next|master-staging|main)
-    echo "On protected branch '$BRANCH' — not committing. Move onto a feature/chore branch and commit the session there."
-    ;;
-  *)
-    git add "$SESSION_DIR"
-    git commit -m "chore(brainstorm): open $SLUG session"
-    git push
-    ;;
-esac
-```
-
-Stage **only** `$SESSION_DIR` — never `git add -A` or `git add .`. On a protected branch, stop after the warning and tell the user to re-run from a feature/chore branch; do not stage or commit anything.
+Take no git action here. The CLI already printed the absolute session folder — use that path when you report back.
 
 ## Boundary
 
-This command creates the session scaffold and commits it on the current branch (or warns and stops on a protected branch). It does NOT open an issue and does NOT write code. Report the absolute session path and ask: *"Want to expand it? Keep `<path>/README.md` a short summary + index, and push detailed thinking into topic-specific files next to it (`open-questions.md`, …), linking each under `## Files`. When the thinking converges, run `/new-feature --from-brainstorm <session>` (or `/new-bug --from-brainstorm <session>`)."*
+This command creates the session scaffold under the project's brainstorm tree and takes **no git action** — the brainstorm folder is untracked scratch. It does NOT open an issue and does NOT write code. Report the absolute session path (the folder the CLI printed) and ask: *"Want to expand it? Keep `<path>/README.md` a short summary + index, and push detailed thinking into topic-specific files next to it (`open-questions.md`, …), linking each under `## Files`. When the thinking converges, run `/new-feature --from-brainstorm <session>` (or `/new-bug --from-brainstorm <session>`)."*
 
 When you launched from a `--body-file`, delete the file after `devwatch new-brainstorm` succeeds:
 

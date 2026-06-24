@@ -110,18 +110,15 @@ The CLI handles everything deterministically: branch detection, commit, push, PR
 
 The CLI prepends `Closes #<issue>` as the first line of the rendered PR body so GitHub auto-closes the linked issue on merge. Do **not** put `Closes #N` (or `Fixes` / `Resolves` variants) in `--message` — that lands in the PR title, where GitHub ignores it. Keep the magic word in the body, where the CLI puts it.
 
-## Epic-rooted workflows
+## Workflow-rooted ship
 
-When the current issue is the root of an epic-rooted workflow (i.e. the workflow's `root_issue_number` equals this issue and `is_epic = 1`), the dashboard's Submit Workflow button and the `submit-workflow-pr` action route to the epic PR backend (`devwatch submit-epic-pr <epic>`), not a per-child PR. The routing is driven by `workflows.root_issue_number` on the backend — there is no "step 1 is the epic" heuristic. For child issues of an epic, `/submit-pr` still performs the local merge into the epic branch as described in the framework's epic pipeline; only the final epic PR goes through `submit-epic-pr`.
+When the current issue is the root of a workflow (i.e. the workflow's `root_issue_number` equals this issue), the dashboard's Submit Workflow button and the `submit-workflow-pr` action route to the ship-PR backend (`devwatch submit-epic-pr <root> --workflow-id <id>`), not a per-member PR. The routing is driven by `workflows.root_issue_number` on the backend — there is no "step 1 is the epic" heuristic, and the root need not carry the `epic` label: a one-member plain-issue workflow ships the same way as a multi-member epic (#2666). For a member of a workflow, `/submit-pr` performs the local merge into the integration branch as described in the framework's pipeline; only the final ship PR goes through `submit-epic-pr`.
 
-### Child behaviour by branch strategy
+### Member behaviour
 
-For a child issue of an epic the CLI routes on the child's workflow step strategy:
+Every workflow runs the one integration-branch path (#2666): the member branch is merged locally into `epic/<root>-<slug>` and the member issue is **closed immediately** (short comment linking the merge commit). No per-member GitHub PR is opened. The ship PR runs CI once, for the whole integration branch.
 
-- **`SAME`** — the child branch is merged locally into `epic/<N>-<slug>` and the child issue stays **open**. It auto-closes when the epic-level workflow PR merges.
-- **`EPIC_INTEGRATION`** — the child branch is merged locally into `epic/<N>-<slug>` and the child issue is **closed immediately** (short comment linking the merge commit). No per-child GitHub PR is opened. The epic-level PR runs CI once, for the whole integration branch.
-
-Both paths skip `gh pr create` — only the epic-level PR opens later via `submit-epic-pr`.
+This path skips `gh pr create` — only the ship PR opens later via `submit-epic-pr` (one PR from `epic/<root>-<slug>` to the base branch).
 
 ## Boundary
 

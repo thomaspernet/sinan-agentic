@@ -137,7 +137,7 @@ if [ "$DELETE_SOURCE" = "1" ]; then
 fi
 ```
 
-This skill never closes the child issue. Pre-#2247 a `--close-issue` flag (#1638) closed the issue here to satisfy `delete-branch`'s old "issue must be closed" gate; that gate now accepts a completed `merge-to-epic` row as proof of integration, so the child issue stays open until the epic-level PR ships and GitHub auto-closes it.
+This skill never closes the child issue. Pre-#2247 a `--close-issue` flag (#1638) closed the issue here to satisfy `delete-branch`'s old "issue must be closed" gate; that gate now accepts a completed `merge-to-base` row as proof of integration, so the child issue stays open until the epic-level PR ships and GitHub auto-closes it.
 
 Record completion:
 
