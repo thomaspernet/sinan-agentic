@@ -1,5 +1,6 @@
 ---
 description: "Scan the codebase for sites where the current diff's change could apply elsewhere. Files child issues, never edits inline."
+capability: core
 ---
 
 After a fix or feature lands, find every other site where the same change could apply — and file each site as its own tracked unit of work. File-only: never edits code, never commits, never opens a PR.

@@ -1,5 +1,6 @@
 ---
 description: "Run the completion checklists against the current branch changes. Optionally pass an issue number to scope the review."
+capability: core
 ---
 
 Quality gate. Reviews code against the repo's checklists, posts a report to the GitHub issue, and returns pass/fail. This skill is a gate — if it fails, do NOT proceed to `/submit-pr`.
@@ -59,6 +60,24 @@ devwatch --repo "$REPO" issue-history <ISSUE> --phase quality
 ```
 If prior quality checks exist, note what failed before — verify those items are now fixed.
 
+### Reviewer context — the author's implement notes
+
+Before reviewing, read the implement agent's own run-report notes for this issue and use them to focus the review (epic #2913). The implementing agent records `risk` notes ("watch this") and `consideration` notes ("deliberately didn't do X because Y") while the work is fresh — exactly the hand-off a reviewer wants. This is **read-only** context enrichment: it sharpens where you look; it is never posted anywhere.
+
+```bash
+devwatch --repo "$REPO" get-report --issue <ISSUE>
+```
+
+`get-report` prints a category-grouped markdown digest (`### Risks` / `### Decisions` / `### Follow-ups`) assembled from the notes earlier agents recorded, or nothing when there are no notes.
+
+- **Empty digest → skip.** No author context for this issue; review the diff as usual. Do not add a context block.
+- **Non-empty digest → focus the review.** Carry the digest into the checklist pass in step 4:
+  - Each **Risks** entry is a hot-spot — verify the author's concern is actually handled in the diff, not merely flagged.
+  - Each **Decisions** entry is a claimed scope boundary — confirm the omission is sound and in scope. A "deliberately didn't do X" that should have been done is a scope/quality FAIL, not a free pass.
+  - **Follow-ups** are out of scope by the author's intent — do not fail the gate on them.
+
+Do **not** post these notes to GitHub. They already live on the issue's Report tab, and the quality report you post in step 7 is the only GitHub write this skill makes — re-posting would double-comment.
+
 ## 3. Gather the diff
 
 ```bash
@@ -87,6 +106,8 @@ The mandatory-reads block already loaded every checklist this skill needs. Walk 
 3. If TypeScript files changed: TypeScript-specific checklist
 
 For each item in each checklist, verify it against the actual diff. Do not skip items.
+
+When the author's implement notes (section 2) flagged risks or decisions, give those items extra scrutiny here — the digest points you straight at where the author was unsure or made a deliberate trade-off.
 
 ## 5. Determine status
 

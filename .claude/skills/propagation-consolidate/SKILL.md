@@ -1,5 +1,6 @@
 ---
 description: "Consolidate this run's flat propagation: issues into one umbrella per (class, helper) key, fold the folded issues' pipeline steps. Never scans the diff."
+capability: core
 ---
 
 Consolidate the per-site `propagation:` issues a `/propagation-scan` just filed (#2518, epic #2514). Group them — plus the epic's open `propagation:` issues sharing the same coarse `(class, helper)` key (#2515) — into **one umbrella per pattern**, close the folded per-site issues onto it, and reconcile their devwatch steps via #2516's fold primitive so the dashboard matches GitHub.

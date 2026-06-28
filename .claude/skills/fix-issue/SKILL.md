@@ -1,5 +1,6 @@
 ---
 description: "Read GitHub issue #$ARGUMENTS, create a branch, and fix the bug."
+capability: core
 ---
 
 Fix a bug. Read the issue, diagnose, fix, test, commit, push.

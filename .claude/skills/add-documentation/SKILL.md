@@ -1,5 +1,6 @@
 ---
 description: "Update documentation for the workflow root #$ARGUMENTS after its integration branch has merged."
+capability: core
 ---
 
 Update the docs affected by the change that just shipped for workflow root #$ARGUMENTS.
@@ -61,6 +62,26 @@ The integration branch has already merged into the dev branch — this step runs
    If no merged integration PR is found (a `devonly` workflow merges straight into dev with no PR), fall back to `devwatch --repo "$REPO" check-docs --issue <ISSUE>` — when `<ISSUE>` is an epic it diffs the integration branch against dev; otherwise it diffs the issue's merged change. Either source gives you the changed-file set.
 
 ## Intelligence (what you decide)
+
+### Reviewer context — the author's implement notes
+
+Before deciding which docs are stale, read the shipping workflow's run-report notes and use them to focus the pass (epic #2913). Each child's `implement` agent recorded `risk` notes ("watch this") and `consideration` notes ("deliberately didn't do X because Y") while the work was fresh — exactly the hand-off that points you at the behaviour or API a doc may now misrepresent. This is **read-only** context enrichment: it sharpens where you look; it is never posted anywhere.
+
+Resolve the workflow that owns this root, then read its rollup digest (every shipped member's notes — you document the whole merged change, so the workflow-scoped report is the right scope):
+
+```bash
+WORKFLOW_ID="$(devwatch --repo "$REPO" workflow-get --issue <ISSUE> | jq -r '.id // empty')"
+if [ -n "$WORKFLOW_ID" ]; then
+  devwatch --repo "$REPO" get-report --workflow "$WORKFLOW_ID"
+fi
+```
+
+`get-report` prints a category-grouped markdown digest (`### Risks` / `### Decisions` / `### Follow-ups`) assembled from the notes earlier agents recorded, or nothing when there are no notes.
+
+- **Empty digest (or no workflow resolved) → skip.** No author context; map the changed files to docs as usual. Do not add a context block.
+- **Non-empty digest → focus the pass.** Treat each **Risks** and **Decisions** entry as a pointer to a surface whose behaviour or contract may have shifted — check the docs for those surfaces first. **Follow-ups** are deferred work, not shipped behaviour; do not document them as if they landed.
+
+Do **not** post these notes to GitHub. This step's only writes are the docs commit and the single completion comment below.
 
 Map every changed file to its docs page using the doc map in CLAUDE.md. Then, for each flagged doc:
 

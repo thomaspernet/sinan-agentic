@@ -1,5 +1,6 @@
 ---
 description: "Extract a persistent rule from a resolved issue. Writes to .claude/rules/ or a principle doc. Never modifies application code."
+capability: core
 ---
 
 Turn a resolved issue into a persistent rule. Read the issue context and its diff, decide whether the fix represents a **class** of mistake worth capturing, and write the constraint to the right rule file so the same mistake does not recur.
@@ -61,7 +62,12 @@ Pass `--repo "$REPO"` to every `devwatch` command.
    When `--head <sha>` is supplied the diff is pinned to that SHA — deterministic across re-runs and immune to checkout state. The implement run's tip SHA is recorded on the `agent_runs` row by `/fix-issue` / `/feat-issue`; the dispatcher resolves it at trigger time and passes it here.
 
    Run exactly the command above — nothing else. If it prints **nothing**, the diff is empty: record an `iteration-only` skipped summary and stop. Do **not** reconstruct a diff by other means (`git show <sha>`, `git diff <sha>^ <sha>`, a different base, the working tree) — an empty sanctioned diff means there is no change to extract a rule from, not that you should find one another way.
-5. Read every file in the target tier you might write to, so you can detect conflict or subsumption before drafting:
+5. Read the implementing agent's own run-report notes for this issue — read-only reviewer context for the classification (epic #2913):
+   ```bash
+   devwatch --repo "$REPO" get-report --issue <ISSUE>
+   ```
+   `get-report` prints a category-grouped markdown digest (`### Risks` / `### Decisions` / `### Follow-ups`), or nothing when there are no notes. A `consideration` ("deliberately didn't do X because Y") or a recurring `risk` is often the generalizable lesson itself — weigh it alongside the history and diff when deciding *structural* vs *iteration-only* below. **Empty digest → skip**; classify from the history and diff alone. This read posts nothing — `issue-to-rule` writes only rule text.
+6. Read every file in the target tier you might write to, so you can detect conflict or subsumption before drafting:
    - `.claude/rules/*.md` — project-wide always-on rules
    - `documentation/general/principles/**/*.mdx` — language / architecture principles
 

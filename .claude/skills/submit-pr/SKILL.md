@@ -1,5 +1,6 @@
 ---
 description: "Submit the current branch as a PR."
+capability: core
 ---
 
 Wrap up a branch: commit, push, create PR, record trace.
@@ -66,7 +67,15 @@ devwatch --repo "$REPO" issue-history <ISSUE>
 1. Review the diff: `git diff --stat` and `git diff`. Check: no secrets, no debug logs.
 2. Write a commit message: conventional prefix, explains the WHY.
 3. Write a PR summary: what changed and how to verify.
-4. Choose labels: area labels (`area:backend`, `area:frontend`, etc.). Labels are best-effort — the CLI retries without them if they don't exist in the target repo.
+4. Fold in the workflow's reviewer notes (PR body). Resolve the workflow id and read its accumulated step notes:
+
+   ```bash
+   WORKFLOW_ID=$(devwatch --repo "$REPO" workflow-get --issue <ISSUE> | jq -r '.id')
+   devwatch --repo "$REPO" get-report --workflow "$WORKFLOW_ID"
+   ```
+
+   `get-report` prints a category-grouped digest (`### Risks` / `### Decisions` / `### Follow-ups`) assembled from the notes earlier agents recorded, or nothing when there are no notes. When the digest is non-empty **and** this issue opens a standalone PR (no epic ancestor — an epic member merges into the integration branch with no PR; see **Member behaviour** below), append it to your `--summary` under a `## Reviewer notes` heading so it lands in the PR body. Omit the section entirely when the digest is empty, and skip it on the epic-member merge path — the workflow ship PR carries the digest via `/submit-epic-pr`. The digest is earlier agents' prose, so the GitHub-writing rules in **Execution** below apply to it: strip banned tokens and personal data before embedding.
+5. Choose labels: area labels (`area:backend`, `area:frontend`, etc.). Labels are best-effort — the CLI retries without them if they don't exist in the target repo.
 
 ## Execution
 

@@ -1,5 +1,6 @@
 ---
 description: "Open a brainstorming session — an untracked folder under the project's brainstorm tree at <DD-MM-YY>/<slug>/ with a frontmatter README. Optionally pre-link it to an issue."
+capability: core
 ---
 
 Create a brainstorming session folder. Stop.
@@ -51,7 +52,8 @@ The README is a **scaffold and index**, not a container for the whole session. I
    - `**Status:** draft` — a human-readable status line that mirrors the frontmatter; the human moves it forward as the session matures.
    - `## Files` — the links/index section. A one-line note that detailed thinking lives in topic-specific files next to the README, followed by a small table listing each child file and its purpose. Seed the table with this `README.md` row plus the first child file you expect, so the convention is visible from the start.
 3. Do NOT pour the full Why / Open Questions / What's next prose into the README. As the thinking grows, write each sub-topic into its own small `.md` file inside the session folder (`open-questions.md`, `tooling.md`, `per-repo-plan.md`, …) and add a row for it under `## Files`. The README stays a short summary + index; the child files carry the detail.
-4. Pick a title for the frontmatter. Title-case, short — what a reader scanning a list of sessions would scan for.
+4. Non-markdown artifacts go in a subfolder, never loose in the session root — and HTML mockups have a fixed home: `<session>/mockups/<name>.html`. A mockup is pre-issue design thinking you open in a browser over a plain `file://` link; index it as a `mockups/<name>.html` row under `## Files` alongside the markdown notes. Don't hand-place it — `/mockup <slug>` resolves-or-creates the session and writes the file there. Images and diagrams the notes reference sit in their own subfolders (`diagrams/`, …) the same way.
+5. Pick a title for the frontmatter. Title-case, short — what a reader scanning a list of sessions would scan for.
 
 Pass the starter README content via a `--body-file` JSON file rather than `--body` on the command line so newlines round-trip cleanly:
 

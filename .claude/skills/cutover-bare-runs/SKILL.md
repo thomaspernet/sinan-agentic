@@ -1,5 +1,6 @@
 ---
 description: "Ship-time cutover for the workflow-unification (epic #2586): verify the unified server's NOT-NULL workflow_id migration landed clean for this repo, re-deploy this repo's skills so the deleted standalone branch-resolution path is gone, and surface any fail-closed orphan run for a human to resolve. Read-mostly; the only write is the human-approved skill re-deploy."
+capability: core
 ---
 
 Run this **once per watched repo at the deploy that ships the workflow-unification (epic #2586)**. After this cutover there is only the workflow: every run is born into a workflow and `issue_runs.workflow_id` is NOT NULL. "Standalone" as a bare run with no owning workflow no longer exists.

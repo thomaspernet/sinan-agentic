@@ -1,5 +1,6 @@
 ---
 description: "Create a GitHub issue for a feature request."
+capability: core
 ---
 
 Create a GitHub issue for a feature. Record it in devwatch. Stop.

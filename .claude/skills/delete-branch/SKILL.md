@@ -1,5 +1,6 @@
 ---
 description: "Safely delete the feature branch for issue #$ARGUMENTS. The devwatch CLI is the single authority for whether the branch is merged and safe to delete."
+capability: core
 ---
 
 Safely delete the feature branch for a completed issue.

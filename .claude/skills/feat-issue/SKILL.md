@@ -1,5 +1,6 @@
 ---
 description: "Read GitHub issue #$ARGUMENTS, create a branch, and implement the feature."
+capability: core
 ---
 
 Implement a new feature. Read the issue, plan, implement, test, commit, push.

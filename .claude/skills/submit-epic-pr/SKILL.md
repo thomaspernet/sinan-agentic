@@ -1,5 +1,6 @@
 ---
 description: "Open the epic-level PR for an epic-rooted workflow."
+capability: core
 ---
 
 Open the epic PR for an epic-rooted workflow (#1884). Wraps the same `gh pr create` + closes-trailer body + `workflows.pr_number` write that used to run in-process — moved into a skill so the dashboard's inline terminal opens like every other workflow / step action.
@@ -51,6 +52,31 @@ devwatch --repo "$REPO" submit-epic-pr "$EPIC" \
 Omit `--run-id` if no `RUN_ID` was parsed.
 
 The CLI prints the PR URL, the shipped-child list, and the agent-run id. Surface those lines to the user verbatim — they are the only acknowledgement the user gets that the click did something.
+
+### Fold in the workflow's reviewer notes
+
+After the ship PR is open, fold the workflow's accumulated step notes into its body so the reviewer opens it with the risks, decisions, and follow-ups the implementing agents recorded. This edits the PR body the CLI just wrote — no new posting mechanism.
+
+1. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to the notes section. The digest is assembled from notes earlier agents wrote, so it may carry banned tokens or personal data — review and redact before posting.
+
+2. Read the workflow's notes digest:
+
+   ```bash
+   devwatch --repo "$REPO" get-report --workflow "$WORKFLOW_ID"
+   ```
+
+   It prints a category-grouped markdown digest (`### Risks` / `### Decisions` / `### Follow-ups`), or nothing when there are no notes.
+
+3. **Empty digest → stop.** Leave the PR body exactly as the CLI wrote it; no section is added.
+
+4. Non-empty digest → append the reviewed digest to the PR body under a `## Reviewer notes` heading. Take the PR number from the CLI's `Epic PR #<n>` line, keep the existing body intact — the `Closes #N` trailers drive auto-close on release, so **never drop them** — and write it back:
+
+   ```bash
+   gh pr view <PR_NUMBER> --repo "$REPO" --json body -q .body > /tmp/epic-pr-body-$EPIC.md
+   printf '\n\n## Reviewer notes\n\n' >> /tmp/epic-pr-body-$EPIC.md
+   # append the reviewed digest (redacted per step 1) below the heading, then:
+   gh pr edit <PR_NUMBER> --repo "$REPO" --body-file /tmp/epic-pr-body-$EPIC.md
+   ```
 
 ### What the CLI does (so you can explain failures)
 

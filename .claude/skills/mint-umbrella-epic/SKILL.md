@@ -1,5 +1,6 @@
 ---
 description: "Draft a fresh umbrella epic (name + body with a child checklist) from selected issues or propagation follow-ups, present it for human approval, and only on explicit approval create it on GitHub. Never creates the epic unasked."
+capability: core
 ---
 
 Mint a **fresh umbrella epic** to group related work under one workflow. The agent **drafts** the epic name + body; the human **approves** before anything is created on GitHub. This is the shared primitive every growth/assembly path uses (assemble, propagation attach, growth re-parent) — built once here (#2590, epic #2586).

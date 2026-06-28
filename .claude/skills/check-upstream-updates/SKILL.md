@@ -1,5 +1,6 @@
 ---
 description: "Check a watched upstream library for changes this project can benefit from, and file recommendations into the Inbox."
+capability: core
 ---
 
 Survey one **watched library** (an upstream third-party repo this project
