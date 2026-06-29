@@ -1,5 +1,6 @@
 ---
 description: "Scaffold real Playwright specs from acceptance-scenario-draft entries on issue #$ARGUMENTS."
+capability: acceptance
 ---
 
 Scaffold a Playwright `test.skip(...)` stub for every

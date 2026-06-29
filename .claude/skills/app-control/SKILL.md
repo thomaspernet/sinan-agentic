@@ -1,5 +1,6 @@
 ---
 description: "Start or stop the monitored app's dev stack. Usage: /app-control open|close"
+capability: frontend
 ---
 
 Start or stop the target repo's dev stack (backend + frontend) cleanly, without leaving orphan processes.

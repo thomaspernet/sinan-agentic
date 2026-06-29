@@ -1,5 +1,6 @@
 ---
 description: "Run the workflow's acceptance scenarios as a single Playwright invocation."
+capability: acceptance
 ---
 
 Run every linked acceptance scenario for the current workflow and gate the

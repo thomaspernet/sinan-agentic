@@ -1,5 +1,6 @@
 ---
 description: "Add or remove acceptance / regression scenario lines on an issue body."
+capability: acceptance
 ---
 
 Edit the `Links:` section on a GitHub issue body to add or remove

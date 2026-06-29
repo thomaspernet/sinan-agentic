@@ -1,5 +1,6 @@
 ---
 description: "Run Playwright scenarios with /run-scenarios <target>."
+capability: acceptance
 ---
 
 Run Playwright tests in this repo and record the result in lingtai. The CLI
