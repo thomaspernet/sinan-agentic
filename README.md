@@ -110,7 +110,8 @@ result = await chat("What's the weather?", "weather_assistant", session)
 
 async for event in chat_streamed("What's the weather?", "weather_assistant", session):
     if event["event"] == "error":
-        # {"error": "I can't help with that.", "error_kind": "model_refusal"}
+        # {"error": "Model refused to produce output: I can't help with that.",
+        #  "error_kind": "model_refusal"}
         if event["data"]["error_kind"] == RunErrorKind.MODEL_REFUSAL:
             ...
 ```
