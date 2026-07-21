@@ -12,7 +12,7 @@ events so your API layer stays thin.
 Each function accepts either ``agent_name`` (resolved via the registry)
 or a pre-built ``agent`` instance.  Use the latter when you need
 features that ``create_agent_from_registry`` does not support, such as
-dynamic instructions, structured output, guardrails, or handoffs.
+dynamic instructions, structured output, or handoffs.
 
 Usage:
     from sinan_agentic_core.services.chat import chat, chat_with_hooks, chat_streamed
