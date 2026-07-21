@@ -920,11 +920,11 @@ After repeated identical failures:
 
 An agent with an `output_dataclass` fails its whole run when the model's final message does not parse — including when the payload itself is fine but the model wrapped it in a ```` ```json ```` fence or a "Here is the result:" preamble. The SDK hands the raw message straight to Pydantic, so those runs raise `ModelBehaviorError` even though the answer is right there.
 
-Every run started through `BaseAgentRunner` installs a recovery handler that re-reads the message, finds the embedded payload, and validates it against the agent's own output schema. It never fabricates a value: anything that does not satisfy the schema is not recovered, and the run raises as before.
+Every run started through `BaseAgentRunner` or the chat functions installs a recovery handler that re-reads the message, finds the embedded payload, and validates it against the agent's own output schema. It never fabricates a value: anything that does not satisfy the schema is not recovered, and the run raises as before.
 
 Session history reads messages the same way. An agent with a non-dict `output_dataclass` answers under a wrapper key, and `AgentSession` stores the answer rather than the envelope — including when the model fenced its payload or wrote a preamble around it, which previously left the fence markers and the wrapper in the conversation every later turn replays.
 
-Recovery is on by default and covers `execute()` in all three modes plus the overflow-fallback LLM call. Turn it off per agent when a malformed response must fail loudly:
+Recovery is on by default and covers `execute()` in all three modes plus the overflow-fallback LLM call. `invalid_output_recovery` is an agent-definition flag, so it turns recovery off wherever the runner resolves that definition. Turn it off per agent when a malformed response must fail loudly:
 
 ```yaml
 # agents.yaml
@@ -945,18 +945,20 @@ register_agent(AgentDefinition(
 ))
 ```
 
-Running `Runner.run()` directly instead of through `BaseAgentRunner`? Pass the same handler to get the same behavior:
+Running `Runner.run()` directly instead of through `BaseAgentRunner`? `build_error_handlers()` reads the decision off the agent, the way `build_run_config()` does — an agent that answers in plain text has no schema to fail, so it gets `None` and `Runner.run()` keeps its defaults:
 
 ```python
 from agents import Runner
-from sinan_agentic_core import recover_invalid_final_output
+from sinan_agentic_core import build_error_handlers
 
 result = await Runner.run(
     agent,
     "Extract the records",
-    error_handlers={"invalid_final_output": recover_invalid_final_output},
+    error_handlers=build_error_handlers(agent),
 )
 ```
+
+The chat functions do exactly this on the agent they resolve. Pass `recover_invalid_final_output` yourself when you assemble the handler mapping by hand.
 
 Sub-agents built with `as_tool()` are the one gap — the SDK's `as_tool()` has no `error_handlers` parameter, so a nested agent's invalid structured output still raises.
 

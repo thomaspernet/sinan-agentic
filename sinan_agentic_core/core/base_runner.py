@@ -41,7 +41,7 @@ from .capabilities import Capability
 from .errors import structured_tool_error
 from .output_recovery import (
     build_output_schema,
-    recover_invalid_final_output,
+    invalid_final_output_handlers,
     salvage_structured_output,
 )
 from .run_config import tool_input_pre_approval
@@ -957,10 +957,7 @@ class BaseAgentRunner:
         if not agent_def.invalid_output_recovery:
             return None
 
-        handlers: RunErrorHandlers[Any] = {
-            "invalid_final_output": recover_invalid_final_output,
-        }
-        return handlers
+        return invalid_final_output_handlers()
 
     async def _build_handoffs(self, handoff_names: list[str], context: Any) -> list[Any]:
         """Build agent handoffs list.

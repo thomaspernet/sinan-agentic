@@ -9,7 +9,9 @@ Three flavours of chat, from simplest to most granular:
 All three handle session history, error handling, and return structured
 events so your API layer stays thin.  They also apply the run-level SDK
 settings the resolved agent needs — an agent whose tools carry tool-input
-guardrails runs them ahead of any human-approval interruption.
+guardrails runs them ahead of any human-approval interruption, and an agent
+with a structured ``output_type`` recovers a final message whose payload is
+valid but wrapped in prose or a code fence instead of failing the run.
 
 Each function accepts either ``agent_name`` (resolved via the registry)
 or a pre-built ``agent`` instance.  Use the latter when you need
@@ -38,6 +40,7 @@ from typing import Any
 from agents import Agent, ItemHelpers, Runner, Usage
 from openai.types.responses import ResponseTextDeltaEvent
 
+from ..core.output_recovery import build_error_handlers
 from ..core.run_config import build_run_config
 from ..registry.agent_factory import create_agent_from_registry
 from ..session import AgentSession
@@ -138,6 +141,10 @@ async def chat(
         if run_config is not None:
             run_kwargs["run_config"] = run_config
 
+        error_handlers = build_error_handlers(resolved)
+        if error_handlers is not None:
+            run_kwargs["error_handlers"] = error_handlers
+
         result = await Runner.run(**run_kwargs)
         response = result.final_output
 
@@ -214,6 +221,10 @@ async def chat_with_hooks(
             run_config = build_run_config(resolved)
             if run_config is not None:
                 run_kwargs["run_config"] = run_config
+
+            error_handlers = build_error_handlers(resolved)
+            if error_handlers is not None:
+                run_kwargs["error_handlers"] = error_handlers
 
             return await Runner.run(**run_kwargs)
 
@@ -298,6 +309,10 @@ async def chat_streamed(
         run_config = build_run_config(resolved)
         if run_config is not None:
             run_kwargs["run_config"] = run_config
+
+        error_handlers = build_error_handlers(resolved)
+        if error_handlers is not None:
+            run_kwargs["error_handlers"] = error_handlers
 
         result = Runner.run_streamed(**run_kwargs)
 

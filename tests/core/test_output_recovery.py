@@ -11,7 +11,9 @@ from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 from pydantic import BaseModel
 
 from sinan_agentic_core.core.output_recovery import (
+    build_error_handlers,
     build_output_schema,
+    invalid_final_output_handlers,
     iter_payload_candidates,
     recover_invalid_final_output,
     salvage_structured_output,
@@ -208,3 +210,40 @@ class TestRecoverInvalidFinalOutput:
         )
 
         assert validate_handler_final_output(agent, recovered).answer == "yes"
+
+
+# ------------------------------------------------------------------ #
+# build_error_handlers
+# ------------------------------------------------------------------ #
+
+
+class TestBuildErrorHandlers:
+    def test_structured_agent_gets_the_recovery_handler(self):
+        agent = Agent(name="extractor", output_type=Extraction)
+
+        handlers = build_error_handlers(agent)
+
+        assert handlers == {"invalid_final_output": recover_invalid_final_output}
+
+    def test_agent_with_a_schema_instance_gets_the_recovery_handler(self, schema):
+        assert build_error_handlers(Agent(name="extractor", output_type=schema)) is not None
+
+    def test_plain_text_agent_gets_no_handlers(self):
+        assert build_error_handlers(Agent(name="a")) is None
+
+    def test_str_output_type_gets_no_handlers(self):
+        assert build_error_handlers(Agent(name="a", output_type=str)) is None
+
+
+class TestInvalidFinalOutputHandlers:
+    def test_registers_only_the_invalid_final_output_key(self):
+        assert list(invalid_final_output_handlers()) == ["invalid_final_output"]
+
+    def test_each_call_returns_a_fresh_mapping(self):
+        first = invalid_final_output_handlers()
+        second = invalid_final_output_handlers()
+
+        first.clear()
+
+        assert first is not second
+        assert "invalid_final_output" in second
