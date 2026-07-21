@@ -306,7 +306,7 @@ A guardrail's `category` decides where it is wired into the SDK. Register the gu
 | `output` | `Agent(output_guardrails=...)` | After the agent finishes, on the final output |
 | `tool_input` | `FunctionTool(tool_input_guardrails=...)` | Before a tool executes, on the tool call arguments |
 
-`tool_input` guardrails are proactive: a rejecting guardrail returns its message as the tool output and the tool never runs. Agents that declare one also run their tool-input guardrails *before* the SDK emits a pending human-approval interruption, so a bad call is stopped without bothering a reviewer.
+`tool_input` guardrails are proactive: a rejecting guardrail returns its message as the tool output and the tool never runs. Agents run through `BaseAgentRunner` also run their tool-input guardrails *before* the SDK emits a pending human-approval interruption, so a bad call is stopped without bothering a reviewer. That ordering is a run-level setting (`RunConfig.tool_execution`), so an agent built with `create_agent_from_registry()` and passed to your own `Runner.run()` still runs its tool-input guardrails before the tool executes — just after the approval interruption rather than before it.
 
 ```python
 from agents import (
@@ -368,6 +368,8 @@ register_agent(AgentDefinition(
 ```
 
 Tool-input guardrails attach to every local function tool the agent resolves. Registry tools are copied first, so one agent's guardrails never leak into another agent using the same tool. Hosted tools (web search, file search) are left untouched — the SDK runs tool-input guardrails for local function tools only.
+
+Both agent-building paths wire declared guardrails the same way: `BaseAgentRunner.create_agent()` and `create_agent_from_registry()`.
 
 ## Tool Catalog (YAML-driven tool metadata)
 

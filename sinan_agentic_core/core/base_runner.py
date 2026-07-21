@@ -6,14 +6,12 @@ execute() with flags for streaming, fallback_on_overflow, etc.
 Also retains run_agent() for backward compatibility.
 """
 
-import copy
 import logging
 from collections.abc import Callable
 from typing import Any
 
 from agents import (
     Agent,
-    FunctionTool,
     ItemHelpers,
     ModelBehaviorError,
     ModelRetrySettings,
@@ -24,7 +22,6 @@ from agents import (
     RunHooks,
     Runner,
     ToolExecutionConfig,
-    ToolInputGuardrail,
     Usage,
 )
 from agents.extensions import ToolOutputTrimmer
@@ -35,7 +32,11 @@ from ..models import outputs as output_models
 from ..models.context import AgentContext
 from ..registry import get_agent_registry, get_guardrail_registry, get_tool_registry
 from ..registry.agent_registry import AgentDefinition
-from ..registry.guardrail_registry import GuardrailCategory, ResolvedGuardrails
+from ..registry.guardrail_registry import (
+    GuardrailCategory,
+    ResolvedGuardrails,
+    attach_tool_input_guardrails,
+)
 from ..session import AgentSession, ConversationHistory
 from .capabilities import Capability
 from .errors import structured_tool_error
@@ -150,7 +151,7 @@ class BaseAgentRunner:
         for cap in capabilities or agent_def.capabilities:
             agent_tools.extend(cap.tools())
         agent_guardrails = self.guardrail_registry.resolve(agent_def.guardrails)
-        agent_tools = self._attach_tool_input_guardrails(
+        agent_tools = attach_tool_input_guardrails(
             agent_tools, agent_guardrails.tool_input_guardrails
         )
         handoffs = await self._build_handoffs(agent_def.handoffs, context)
@@ -885,39 +886,6 @@ class BaseAgentRunner:
                 logger.error(f"Failed to create hosted tool: {e}")
 
         return tools
-
-    @staticmethod
-    def _attach_tool_input_guardrails(
-        tools: list[Any], guardrails: list[ToolInputGuardrail[Any]]
-    ) -> list[Any]:
-        """Attach tool-input guardrails to every local function tool.
-
-        Registry tools are shared across agents, so each one is copied before
-        its guardrails are set — mutating in place would leak one agent's
-        guardrails into every other agent using the same tool. Non-function
-        tools (hosted tools) pass through untouched: the SDK runs tool-input
-        guardrails for local function tools only.
-
-        Args:
-            tools: Tools already resolved for the agent
-            guardrails: Tool-input guardrails to run before each tool executes
-
-        Returns:
-            The tools list with guardrails attached to its function tools
-        """
-        if not guardrails:
-            return tools
-
-        guarded_tools: list[Any] = []
-        for tool in tools:
-            if not isinstance(tool, FunctionTool):
-                guarded_tools.append(tool)
-                continue
-            guarded = copy.copy(tool)
-            guarded.tool_input_guardrails = [*(tool.tool_input_guardrails or []), *guardrails]
-            guarded_tools.append(guarded)
-
-        return guarded_tools
 
     def _build_run_config(self, agent_def: Any) -> RunConfig | None:
         """Build the SDK run config for an agent, or None when defaults apply.

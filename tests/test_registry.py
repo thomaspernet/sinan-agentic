@@ -1,12 +1,23 @@
 """Tests for agent, tool, and guardrail registries."""
 
+import copy
+
 import pytest
+from agents import (
+    GuardrailFunctionOutput,
+    ToolGuardrailFunctionOutput,
+    function_tool,
+    input_guardrail,
+    output_guardrail,
+    tool_input_guardrail,
+)
 
 from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
 from sinan_agentic_core.registry.guardrail_registry import (
     GuardrailCategory,
     GuardrailDefinition,
     GuardrailRegistry,
+    attach_tool_input_guardrails,
 )
 from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
 
@@ -298,6 +309,53 @@ class TestResolveGuardrails:
         assert self._registry().has_category(["missing"], GuardrailCategory.INPUT) is False
 
 
+# -- attach_tool_input_guardrails ----------------------------------------------
+
+
+@pytest.fixture
+def echo_tool():
+    """A local function tool, fresh per test so attachments cannot leak."""
+
+    @function_tool
+    def echo(value: str) -> str:
+        """Echo a value.
+
+        Args:
+            value: Text to echo back.
+        """
+        return value
+
+    return echo
+
+
+class TestAttachToolInputGuardrails:
+    def test_attaches_to_function_tools(self, echo_tool):
+        result = attach_tool_input_guardrails([echo_tool], ["g"])
+
+        assert result[0].tool_input_guardrails == ["g"]
+
+    def test_skips_non_function_tools(self):
+        hosted = object()
+        assert attach_tool_input_guardrails([hosted], ["g"]) == [hosted]
+
+    def test_without_guardrails_returns_same_list(self):
+        tools = [object()]
+        assert attach_tool_input_guardrails(tools, []) is tools
+
+    def test_preserves_existing_tool_guardrails(self, echo_tool):
+        preset = copy.copy(echo_tool)
+        preset.tool_input_guardrails = ["existing"]
+
+        result = attach_tool_input_guardrails([preset], ["added"])
+
+        assert result[0].tool_input_guardrails == ["existing", "added"]
+
+    def test_source_tool_is_not_mutated(self, echo_tool):
+        attach_tool_input_guardrails([echo_tool], ["g"])
+
+        assert echo_tool.tool_input_guardrails is None
+
+
 # -- register_guardrail decorator + get_guardrail_registry ---------------------
 
 
@@ -430,3 +488,95 @@ class TestAgentFactory:
 
         agent = create_agent_from_registry("_override_agent", model_override="gpt-4o")
         assert agent.model == "gpt-4o"
+
+
+# -- AgentFactory guardrail wiring ---------------------------------------------
+
+
+@pytest.fixture
+def factory_guardrails(echo_tool, monkeypatch):
+    """Global agent/tool registries carrying one guardrail per category.
+
+    The factory reads the global registries, so the guardrail registry is
+    swapped for an isolated one and the agent/tool entries use ``_``-prefixed
+    names like the rest of the factory tests.
+    """
+    from sinan_agentic_core.registry import agent_factory
+    from sinan_agentic_core.registry.agent_registry import get_agent_registry
+    from sinan_agentic_core.registry.tool_registry import get_tool_registry
+
+    @input_guardrail
+    def guard_input(ctx, agent, agent_input):
+        return GuardrailFunctionOutput(output_info=None, tripwire_triggered=False)
+
+    @output_guardrail
+    def guard_output(ctx, agent, agent_output):
+        return GuardrailFunctionOutput(output_info=None, tripwire_triggered=False)
+
+    @tool_input_guardrail
+    def guard_tool_input(data):
+        return ToolGuardrailFunctionOutput.allow()
+
+    guardrail_reg = GuardrailRegistry()
+    guardrail_reg.register(GuardrailDefinition("_fg_in", "d", guard_input, GuardrailCategory.INPUT))
+    guardrail_reg.register(
+        GuardrailDefinition("_fg_out", "d", guard_output, GuardrailCategory.OUTPUT)
+    )
+    guardrail_reg.register(
+        GuardrailDefinition("_fg_tool", "d", guard_tool_input, GuardrailCategory.TOOL_INPUT)
+    )
+    monkeypatch.setattr(agent_factory, "get_guardrail_registry", lambda: guardrail_reg)
+
+    get_tool_registry().register(ToolDefinition(name="_fg_echo", function=echo_tool))
+    get_agent_registry().register(
+        AgentDefinition(
+            name="_fg_guarded_agent",
+            description="guarded",
+            instructions="You are guarded",
+            tools=["_fg_echo"],
+            guardrails=["_fg_in", "_fg_out", "_fg_tool"],
+        )
+    )
+    get_agent_registry().register(
+        AgentDefinition(
+            name="_fg_plain_agent",
+            description="plain",
+            instructions="You are plain",
+            tools=["_fg_echo"],
+        )
+    )
+
+    return echo_tool
+
+
+class TestAgentFactoryGuardrails:
+    def test_input_and_output_guardrails_land_in_their_slots(self, factory_guardrails):
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+
+        agent = create_agent_from_registry("_fg_guarded_agent")
+
+        assert [g.get_name() for g in agent.input_guardrails] == ["guard_input"]
+        assert [g.get_name() for g in agent.output_guardrails] == ["guard_output"]
+
+    def test_tool_input_guardrails_attach_to_tools(self, factory_guardrails):
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+
+        agent = create_agent_from_registry("_fg_guarded_agent")
+
+        assert [g.get_name() for g in agent.tools[0].tool_input_guardrails] == ["guard_tool_input"]
+
+    def test_registry_tool_is_not_mutated(self, factory_guardrails):
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+
+        create_agent_from_registry("_fg_guarded_agent")
+
+        assert factory_guardrails.tool_input_guardrails is None
+
+    def test_agent_without_guardrails_gets_empty_slots(self, factory_guardrails):
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+
+        agent = create_agent_from_registry("_fg_plain_agent")
+
+        assert agent.input_guardrails == []
+        assert agent.output_guardrails == []
+        assert agent.tools[0].tool_input_guardrails is None
