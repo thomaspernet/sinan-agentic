@@ -1,12 +1,13 @@
 """Guardrail Registry - Centralized definition of all available guardrails."""
 
+import copy
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from agents import InputGuardrail, OutputGuardrail, ToolInputGuardrail
+from agents import FunctionTool, InputGuardrail, OutputGuardrail, ToolInputGuardrail
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +132,39 @@ class GuardrailRegistry:
             if definition is not None and definition.category == category:
                 return True
         return False
+
+
+def attach_tool_input_guardrails(
+    tools: list[Any], guardrails: list[ToolInputGuardrail[Any]]
+) -> list[Any]:
+    """Attach tool-input guardrails to every local function tool.
+
+    Registry tools are shared across agents, so each one is copied before its
+    guardrails are set — mutating in place would leak one agent's guardrails
+    into every other agent using the same tool. Non-function tools (hosted
+    tools) pass through untouched: the SDK runs tool-input guardrails for local
+    function tools only.
+
+    Args:
+        tools: Tools already resolved for the agent
+        guardrails: Tool-input guardrails to run before each tool executes
+
+    Returns:
+        The tools list with guardrails attached to its function tools
+    """
+    if not guardrails:
+        return tools
+
+    guarded_tools: list[Any] = []
+    for tool in tools:
+        if not isinstance(tool, FunctionTool):
+            guarded_tools.append(tool)
+            continue
+        guarded = copy.copy(tool)
+        guarded.tool_input_guardrails = [*(tool.tool_input_guardrails or []), *guardrails]
+        guarded_tools.append(guarded)
+
+    return guarded_tools
 
 
 # Global guardrail registry instance

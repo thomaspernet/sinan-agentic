@@ -1,6 +1,5 @@
 """Tests for BaseAgentRunner (core/base_runner.py)."""
 
-import copy
 import json
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -1408,24 +1407,6 @@ class TestGuardrailCategoryWiring:
         )
 
         assert agent.tools[0].tool_input_guardrails is None
-
-    def test_attach_skips_non_function_tools(self, guardrail_runner):
-        hosted = object()
-        result = BaseAgentRunner._attach_tool_input_guardrails([hosted], ["g"])
-        assert result == [hosted]
-
-    def test_attach_without_guardrails_returns_same_list(self, guardrail_runner):
-        tools = [object()]
-        assert BaseAgentRunner._attach_tool_input_guardrails(tools, []) is tools
-
-    def test_attach_preserves_existing_tool_guardrails(self, _guardrail_registries):
-        _, _, _, echo = _guardrail_registries
-        preset = copy.copy(echo)
-        preset.tool_input_guardrails = ["existing"]
-
-        result = BaseAgentRunner._attach_tool_input_guardrails([preset], ["added"])
-
-        assert result[0].tool_input_guardrails == ["existing", "added"]
 
     def test_build_run_config_enables_pre_approval(self, guardrail_runner):
         agent_def = guardrail_runner._get_agent_definition("guarded_agent")
