@@ -989,11 +989,13 @@ The overflow-fallback path is the one partial case. Its rescue call goes straigh
 
 ## Tool Output Trimming
 
-A long agent run accumulates bulky tool outputs — search results, file dumps, error payloads — that keep costing tokens long after they stop being relevant. Left alone they grow the input until the run dies on `context_length_exceeded`, and the only recovery left is `execute(fallback_on_overflow=True)`, which re-collects the tool outputs and pays for a second, condensed model call.
+A long **multi-turn** conversation accumulates bulky tool outputs — search results, file dumps, error payloads — that keep costing tokens long after they stop being relevant. Left alone they grow the input until the run dies on `context_length_exceeded`, and the only recovery left is `execute(fallback_on_overflow=True)`, which re-collects the tool outputs and pays for a second, condensed model call.
 
 Declare `tool_output_trim` on an agent and the SDK replaces oversized tool outputs from older turns with a short preview *before* each model call. Recent turns stay at full fidelity, so the agent keeps the context it is actually working with while the tail stops growing. It reaches every execution path that runs through the SDK — `execute()` in all three modes, `run_agent()`, and `as_tool()` sub-agents.
 
 Trimming is off unless declared: it removes content the model would otherwise have seen.
+
+**It only helps across turns.** The window is counted in *user messages*, so nothing is trimmed until the conversation holds more than `recent_turns` of them. A single question answered by twenty large tool calls is left whole at every setting — the outputs all sit in the current turn, and the current turn is never touched. Trimming pays off for a session that keeps asking follow-ups, not for a one-shot run that overflows inside its own turn; that shape still needs `fallback_on_overflow`.
 
 ```yaml
 # agents.yaml
@@ -1022,7 +1024,7 @@ register_agent(AgentDefinition(
 ))
 ```
 
-Pick `max_output_chars` above the size of an output the agent still reasons over several turns later, and `preview_chars` large enough that the trimmed entry still says what the call returned. A `preview_chars` at or above `max_output_chars` is rejected at load time — the replacement would never be shorter than the original, so nothing would ever trim.
+Pick `max_output_chars` above the size of an output the agent still reasons over several turns later, and `preview_chars` large enough that the trimmed entry still says what the call returned. The two are independent: an output is replaced only when the preview is genuinely shorter than the original, so `preview_chars: 500` with `max_output_chars: 500` is a valid "keep the first 500 characters of anything bigger" policy — it spares outputs just over the cap and still cuts a 100,000-character one by 99%.
 
 Trimming and the overflow fallback are complements, not alternatives: trimming makes overflow rarer, the fallback still rescues the run when it happens anyway. The fallback's own rescue call bypasses the SDK, so a declared trim policy does not shape that prompt — the prompt builder caps each output instead.
 

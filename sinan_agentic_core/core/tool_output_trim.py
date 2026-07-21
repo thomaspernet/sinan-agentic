@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import Any
 
 from agents.extensions import ToolOutputTrimmer
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
 class ToolOutputTrimConfig(BaseModel):
@@ -50,9 +50,15 @@ class ToolOutputTrimConfig(BaseModel):
 
     Attributes:
         recent_turns: How many recent user turns stay untouched. Items at or
-            after the Nth-from-last user message are never trimmed.
+            after the Nth-from-last user message are never trimmed. The window
+            is measured in *user messages*, so nothing trims until the
+            conversation holds more than this many of them — a single question
+            answered by any number of tool calls is left whole at every setting.
         max_output_chars: Outputs longer than this are candidates for trimming.
         preview_chars: How much of the original output survives as a preview.
+            The SDK keeps the original whenever the replacement would not be
+            shorter, so a preview at or above ``max_output_chars`` still shrinks
+            far larger outputs — it only spares the ones near the cap.
         trimmable_tools: Tool names whose outputs may be trimmed. Unset means
             every tool is eligible.
     """
@@ -63,23 +69,6 @@ class ToolOutputTrimConfig(BaseModel):
     # An empty list would make no tool eligible, so the filter would run on every
     # model call and never trim anything. Unset — not empty — means "all tools".
     trimmable_tools: list[str] | None = Field(default=None, min_length=1)
-
-    @model_validator(mode="after")
-    def _preview_must_fit_under_the_cap(self) -> ToolOutputTrimConfig:
-        """Reject a preview at least as large as the size that triggers trimming.
-
-        The SDK keeps the original whenever its replacement would not be
-        shorter, so such a config parses and runs but never trims a thing.
-        """
-        if self.preview_chars is None or self.max_output_chars is None:
-            return self
-        if self.preview_chars >= self.max_output_chars:
-            msg = (
-                f"preview_chars ({self.preview_chars}) must be below max_output_chars "
-                f"({self.max_output_chars}) — a preview that large never shortens an output"
-            )
-            raise ValueError(msg)
-        return self
 
     def build(self) -> ToolOutputTrimmer:
         """Translate this config into the SDK's ``ToolOutputTrimmer``.

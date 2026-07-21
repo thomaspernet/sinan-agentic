@@ -1002,12 +1002,13 @@ class TestToolOutputTrim:
         assert trim.max_output_chars == 4000
         assert trim.trimmable_tools == ["web_search"]
 
-    def test_rejects_a_preview_at_least_as_large_as_the_cap(self) -> None:
+    def test_rejects_an_out_of_range_policy_at_load_time(self) -> None:
+        """The SDK would only raise on the first model call; the catalog raises now."""
         catalog = self._catalog(
             {
                 "model": "fast",
                 "description": "Reads papers",
-                "tool_output_trim": {"max_output_chars": 500, "preview_chars": 500},
+                "tool_output_trim": {"recent_turns": 0},
             }
         )
         with pytest.raises(ValidationError):

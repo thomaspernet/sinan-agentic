@@ -25,6 +25,17 @@ def _conversation(tool_name: str = "web_search", output: str = BULKY_OUTPUT) -> 
     ]
 
 
+def _single_turn(calls: int = 20, output: str = BULKY_OUTPUT) -> list[Any]:
+    """One question answered by many tool calls — no second user message."""
+    items: list[Any] = [{"role": "user", "content": "one question"}]
+    for i in range(calls):
+        items.append(
+            {"type": "function_call", "call_id": f"c{i}", "name": "web_search", "arguments": "{}"}
+        )
+        items.append({"type": "function_call_output", "call_id": f"c{i}", "output": output})
+    return items
+
+
 def _filtered(trimmer: ToolOutputTrimmer, items: list[Any]) -> list[Any]:
     """Run the trimmer the way the SDK does before a model call."""
     data: CallModelData[None] = CallModelData(
@@ -54,11 +65,6 @@ class TestConfigValidation:
         with pytest.raises(ValidationError):
             ToolOutputTrimConfig(trimmable_tools=[])
 
-    def test_rejects_a_preview_at_least_as_large_as_the_cap(self) -> None:
-        """Such a preview never shortens an output, so the filter is a no-op."""
-        with pytest.raises(ValidationError):
-            ToolOutputTrimConfig(max_output_chars=500, preview_chars=500)
-
     def test_rejects_zero_recent_turns(self) -> None:
         with pytest.raises(ValidationError):
             ToolOutputTrimConfig(recent_turns=0)
@@ -71,10 +77,11 @@ class TestConfigValidation:
         with pytest.raises(ValidationError):
             ToolOutputTrimConfig(preview_chars=-1)
 
-    def test_allows_a_preview_below_the_cap(self) -> None:
-        config = ToolOutputTrimConfig(max_output_chars=500, preview_chars=200)
+    def test_accepts_a_preview_at_the_cap(self) -> None:
+        """The two sizes are independent — the SDK compares replacement to original."""
+        config = ToolOutputTrimConfig(max_output_chars=500, preview_chars=500)
 
-        assert config.preview_chars == 200
+        assert config.preview_chars == 500
 
 
 class TestBuild:
@@ -121,6 +128,28 @@ class TestFilterBehavior:
         items = _filtered(trimmer, _conversation(output="short answer"))
 
         assert _tool_output(items) == "short answer"
+
+    def test_a_preview_at_the_cap_still_shortens_a_much_larger_output(self) -> None:
+        """Only outputs near the cap are spared; a big one still collapses."""
+        trimmer = ToolOutputTrimConfig(
+            recent_turns=1, max_output_chars=500, preview_chars=500
+        ).build()
+        huge = "x" * 100_000
+
+        output = _tool_output(_filtered(trimmer, _conversation(output=huge)))
+
+        assert len(output) < len(huge) / 100
+
+    def test_a_single_user_turn_is_never_trimmed(self) -> None:
+        """The window counts user messages, so one question trims nothing at any size."""
+        trimmer = ToolOutputTrimConfig(
+            recent_turns=1, max_output_chars=500, preview_chars=100
+        ).build()
+        items = _single_turn()
+
+        filtered = _filtered(trimmer, items)
+
+        assert [item.get("output") for item in filtered] == [item.get("output") for item in items]
 
     def test_recent_turns_are_never_trimmed(self) -> None:
         """The tool call sits inside the window, so its size does not matter."""
