@@ -9,7 +9,11 @@ from agents import RunContextWrapper
 from pydantic import ValidationError
 
 from sinan_agentic_core.core.capabilities import Capability
-from sinan_agentic_core.core.model_retry import RetryTrigger
+from sinan_agentic_core.core.model_retry import (
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_RETRY_TRIGGERS,
+    RetryTrigger,
+)
 from sinan_agentic_core.core.tool_error_recovery import ToolErrorRecovery
 from sinan_agentic_core.core.turn_budget import TurnBudget
 from sinan_agentic_core.registry.agent_catalog import (
@@ -589,6 +593,44 @@ class TestCatalogTurnBudget:
         assert budget.absolute_max == 30
         assert budget.default_turns == 15
 
+    def test_an_empty_mapping_opts_in_with_defaults(self, tmp_path):
+        """``turn_budget: {}`` is a declaration, not an absence."""
+        yaml_content = textwrap.dedent("""\
+            agents:
+              agent:
+                model: fast
+                max_turns: 25
+                description: Test
+                tools: []
+                turn_budget: {}
+        """)
+        (tmp_path / "agents.yaml").write_text(yaml_content)
+        entry = load_agent_catalog(tmp_path / "agents.yaml").get("agent")
+
+        assert entry.turn_budget is not None
+        assert entry.turn_budget.default_turns == 10
+        assert entry.turn_budget.reminder_at == 2
+        assert entry.turn_budget.max_extensions == 3
+        assert entry.turn_budget.extension_size == 5
+        assert entry.build_turn_budget() is not None
+
+    def test_an_explicitly_null_key_opts_out(self, tmp_path):
+        """A key with no value is an absence, same as omitting it."""
+        yaml_content = textwrap.dedent("""\
+            agents:
+              agent:
+                model: fast
+                max_turns: 25
+                description: Test
+                tools: []
+                turn_budget:
+        """)
+        (tmp_path / "agents.yaml").write_text(yaml_content)
+        entry = load_agent_catalog(tmp_path / "agents.yaml").get("agent")
+
+        assert entry.turn_budget is None
+        assert entry.build_turn_budget() is None
+
     def test_no_turn_budget_in_yaml(self, tmp_path):
         yaml_content = textwrap.dedent("""\
             agents:
@@ -919,6 +961,22 @@ class TestModelRetry:
 
     def test_defaults_to_off(self) -> None:
         catalog = self._catalog({"model": "fast", "description": "Reads papers"})
+        assert catalog.get("researcher").model_retry is None
+
+    def test_an_empty_mapping_opts_in_with_defaults(self) -> None:
+        """``model_retry: {}`` is a declaration, not an absence."""
+        catalog = self._catalog({"model": "fast", "description": "Reads papers", "model_retry": {}})
+        retry = catalog.get("researcher").model_retry
+
+        assert retry is not None
+        assert retry.max_retries == DEFAULT_MAX_RETRIES
+        assert retry.retry_on == list(DEFAULT_RETRY_TRIGGERS)
+
+    def test_an_explicitly_null_key_opts_out(self) -> None:
+        """A key with no value is an absence, same as omitting it."""
+        catalog = self._catalog(
+            {"model": "fast", "description": "Reads papers", "model_retry": None}
+        )
         assert catalog.get("researcher").model_retry is None
 
     def test_parses_the_declared_policy(self) -> None:
