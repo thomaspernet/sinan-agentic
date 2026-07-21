@@ -21,6 +21,15 @@ The scan that locates the payload, :func:`iter_payload_candidates`, is the
 shared half: anything that has to read a payload out of a model message —
 recovery here, session persistence in ``session/agent_session.py`` — reads it
 the same way rather than handing the whole message to a parser.
+
+Handlers belong to the *run*, not the agent, so building an agent is not enough
+to get recovery: they are passed to ``Runner.run()`` / ``Runner.run_streamed()``.
+``BaseAgentRunner`` decides from the agent *definition*, whose
+``invalid_output_recovery`` flag it has on every execution branch. Call sites
+that only hold a built ``Agent`` — the chat service, and consumers driving
+``Runner`` themselves — read the decision off the agent with
+:func:`build_error_handlers` instead, so a pre-built agent gets recovery on the
+same terms as a registry-resolved one.
 """
 
 from __future__ import annotations
@@ -29,7 +38,14 @@ import logging
 from collections.abc import Iterator
 from typing import Any
 
-from agents import ItemHelpers, MessageOutputItem, ModelBehaviorError, RunItem
+from agents import (
+    Agent,
+    ItemHelpers,
+    MessageOutputItem,
+    ModelBehaviorError,
+    RunErrorHandlers,
+    RunItem,
+)
 from agents.agent_output import AgentOutputSchema, AgentOutputSchemaBase
 from agents.run_error_handlers import RunErrorHandlerInput
 
@@ -60,7 +76,7 @@ def build_output_schema(
         The schema for *output_type*, or ``None`` when the agent produces
         plain text and there is nothing to validate.
     """
-    if not output_type or output_type is str:
+    if not _is_structured_output(output_type):
         return None
     if isinstance(output_type, AgentOutputSchemaBase):
         return output_type
@@ -150,6 +166,44 @@ def recover_invalid_final_output(handler_input: RunErrorHandlerInput[Any]) -> An
 
     logger.info("Recovered structured output for agent '%s' from a malformed message", agent.name)
     return salvaged
+
+
+def build_error_handlers(agent: Agent) -> RunErrorHandlers[Any] | None:
+    """Build the SDK run error handlers *agent* needs, or None when defaults apply.
+
+    An agent that answers in plain text has no schema to fail, so there is
+    nothing for :func:`recover_invalid_final_output` to salvage and the run
+    keeps the SDK defaults.
+
+    Args:
+        agent: A built agent, from the registry factory or assembled by hand.
+
+    Returns:
+        Configured handlers, or None when the agent declares no output type.
+    """
+    if not _is_structured_output(agent.output_type):
+        return None
+
+    return invalid_final_output_handlers()
+
+
+def invalid_final_output_handlers() -> RunErrorHandlers[Any]:
+    """Build the handler bundle that salvages a malformed structured final output.
+
+    Returns:
+        A fresh mapping registering :func:`recover_invalid_final_output` under
+        the SDK's ``invalid_final_output`` key. Callers get their own dict
+        rather than a shared one.
+    """
+    handlers: RunErrorHandlers[Any] = {
+        "invalid_final_output": recover_invalid_final_output,
+    }
+    return handlers
+
+
+def _is_structured_output(output_type: Any) -> bool:
+    """Whether *output_type* declares a payload a schema has to validate."""
+    return bool(output_type) and output_type is not str
 
 
 def _last_message_text(items: list[RunItem]) -> str | None:

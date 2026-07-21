@@ -48,6 +48,7 @@ from .core import (
     ToolOutputTrimConfig,
     ToolTracer,
     TurnBudget,
+    build_error_handlers,
     build_run_config,
     classify_run_error,
     recover_invalid_final_output,
@@ -109,6 +110,7 @@ from .utils import tool_error, tool_response, unwrap_context
 __all__ = [
     # Core
     "BaseAgentRunner",
+    "build_error_handlers",
     "build_run_config",
     "Capability",
     "classify_run_error",

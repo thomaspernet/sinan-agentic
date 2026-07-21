@@ -11,7 +11,9 @@ from agents import (
     function_tool,
     tool_input_guardrail,
 )
+from pydantic import BaseModel
 
+from sinan_agentic_core.core.output_recovery import recover_invalid_final_output
 from sinan_agentic_core.services.chat import _usage_to_dict
 from sinan_agentic_core.services.events import (
     AgentCompleteEvent,
@@ -204,9 +206,20 @@ class TestUsageToDict:
 # -- chat() with mocked Runner ------------------------------------------------
 
 
+class _Extraction(BaseModel):
+    """Output type that gives an agent a schema to validate against."""
+
+    answer: str
+
+
 def _agent_double():
-    """An agent stub with the empty ``tools`` list a real ``Agent`` starts with."""
-    return Mock(tools=[])
+    """An agent stub carrying the ``tools`` and ``output_type`` defaults of a real ``Agent``."""
+    return Mock(tools=[], output_type=None)
+
+
+def _structured_agent():
+    """A real agent whose declared output type needs schema validation."""
+    return Agent(name="extractor", output_type=_Extraction)
 
 
 def _guarded_agent():
@@ -369,6 +382,31 @@ class TestChat:
         run_config = mock_runner.run.call_args.kwargs["run_config"]
         assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
 
+    async def test_structured_output_agent_gets_recovery_handler(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "Runner") as mock_runner:
+            mock_runner.run = AsyncMock(return_value=_run_result())
+
+            await chat_mod.chat("Hi", agent=_structured_agent(), session=session)
+
+        handlers = mock_runner.run.call_args.kwargs["error_handlers"]
+        assert handlers["invalid_final_output"] is recover_invalid_final_output
+
+    async def test_plain_text_agent_gets_no_error_handlers(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(return_value=_run_result())
+
+                await chat_mod.chat("Hi", agent_name="a", session=session)
+
+        assert "error_handlers" not in mock_runner.run.call_args.kwargs
+
 
 # -- chat_with_hooks() --------------------------------------------------------
 
@@ -480,6 +518,35 @@ class TestChatWithHooks:
                     pass
 
         assert "run_config" not in mock_runner.run.call_args.kwargs
+
+    async def test_structured_output_agent_gets_recovery_handler(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "Runner") as mock_runner:
+            mock_runner.run = AsyncMock(return_value=_run_result())
+
+            async for _ in chat_mod.chat_with_hooks(
+                "Hi", agent=_structured_agent(), session=session
+            ):
+                pass
+
+        handlers = mock_runner.run.call_args.kwargs["error_handlers"]
+        assert handlers["invalid_final_output"] is recover_invalid_final_output
+
+    async def test_plain_text_agent_gets_no_error_handlers(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(return_value=_run_result())
+
+                async for _ in chat_mod.chat_with_hooks("Hi", agent_name="a", session=session):
+                    pass
+
+        assert "error_handlers" not in mock_runner.run.call_args.kwargs
 
     async def test_error_yields_error_event(self):
         chat_mod = self._get_chat_module()
@@ -654,6 +721,33 @@ class TestChatStreamed:
                     pass
 
         assert "run_config" not in mock_runner.run_streamed.call_args.kwargs
+
+    async def test_structured_output_agent_gets_recovery_handler(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "Runner") as mock_runner:
+            mock_runner.run_streamed.return_value = _streamed_result()
+
+            async for _ in chat_mod.chat_streamed("Hi", agent=_structured_agent(), session=session):
+                pass
+
+        handlers = mock_runner.run_streamed.call_args.kwargs["error_handlers"]
+        assert handlers["invalid_final_output"] is recover_invalid_final_output
+
+    async def test_plain_text_agent_gets_no_error_handlers(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run_streamed.return_value = _streamed_result()
+
+                async for _ in chat_mod.chat_streamed("Hi", agent_name="a", session=session):
+                    pass
+
+        assert "error_handlers" not in mock_runner.run_streamed.call_args.kwargs
 
     async def test_error_yields_error_event(self):
         chat_mod = self._get_chat_module()
