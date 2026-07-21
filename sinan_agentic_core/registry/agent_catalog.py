@@ -83,6 +83,7 @@ class AgentYamlEntry(BaseModel):
     model: str
     description: str
     tools: list[str] = []
+    guardrails: list[str] = []
     knowledge_text: str = ""
     max_turns: int | None = None
     turn_budget: TurnBudgetConfig | None = None
@@ -302,6 +303,7 @@ class AgentCatalog:
             model=raw["model"],
             description=raw["description"],
             tools=_resolve_tools(raw.get("tools", []), self._tool_groups, config),
+            guardrails=raw.get("guardrails", []),
             knowledge_text=_resolve_knowledge(raw.get("knowledge", []), self._knowledge),
             max_turns=raw.get("max_turns"),
             turn_budget=budget_cfg,

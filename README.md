@@ -294,6 +294,79 @@ if catalog.is_enabled("web_search_agent", config=my_config):
 | `catalog.is_enabled(name, config=None)` | `bool` | Check agent-level `when` condition |
 | `catalog.list_agents()` | `list[str]` | All agent names in the catalog |
 
+## Guardrails
+
+A guardrail's `category` decides where it is wired into the SDK. Register the guardrail once in Python, then list it by name on any agent — in `agents.yaml` or directly on an `AgentDefinition`.
+
+| Category | SDK slot | Runs |
+|----------|----------|------|
+| `input` | `Agent(input_guardrails=...)` | Before the agent starts, on the run input |
+| `output` | `Agent(output_guardrails=...)` | After the agent finishes, on the final output |
+| `tool_input` | `FunctionTool(tool_input_guardrails=...)` | Before a tool executes, on the tool call arguments |
+
+`tool_input` guardrails are proactive: a rejecting guardrail returns its message as the tool output and the tool never runs. Agents that declare one also run their tool-input guardrails *before* the SDK emits a pending human-approval interruption, so a bad call is stopped without bothering a reviewer.
+
+```python
+from agents import (
+    GuardrailFunctionOutput,
+    ToolGuardrailFunctionOutput,
+    input_guardrail,
+    tool_input_guardrail,
+)
+from sinan_agentic_core import GuardrailCategory, register_guardrail
+
+@register_guardrail(
+    name="block_empty_query",
+    description="Reject empty user queries",
+    category=GuardrailCategory.INPUT,
+)
+@input_guardrail
+async def block_empty_query(ctx, agent, agent_input):
+    return GuardrailFunctionOutput(
+        output_info=None,
+        tripwire_triggered=not str(agent_input).strip(),
+    )
+
+@register_guardrail(
+    name="block_destructive_cypher",
+    description="Reject write clauses in read-only queries",
+    category=GuardrailCategory.TOOL_INPUT,
+)
+@tool_input_guardrail
+def block_destructive_cypher(data):
+    if "DELETE" in data.context.tool_arguments.upper():
+        return ToolGuardrailFunctionOutput.reject_content(
+            message="Destructive Cypher is not allowed. Use a read-only MATCH query.",
+        )
+    return ToolGuardrailFunctionOutput.allow()
+```
+
+```yaml
+# agents.yaml
+agents:
+  graph_agent:
+    model: reasoning
+    description: Queries the knowledge graph
+    tools: [run_cypher]
+    guardrails:
+      - block_empty_query
+      - block_destructive_cypher
+```
+
+```python
+cfg = catalog.get("graph_agent")
+register_agent(AgentDefinition(
+    name="graph_agent",
+    model=cfg.model,
+    description=cfg.description,
+    instructions="...",
+    tools=cfg.tools,
+    guardrails=cfg.guardrails,
+))
+```
+
+Tool-input guardrails attach to every local function tool the agent resolves. Registry tools are copied first, so one agent's guardrails never leak into another agent using the same tool. Hosted tools (web search, file search) are left untouched — the SDK runs tool-input guardrails for local function tools only.
+
 ## Tool Catalog (YAML-driven tool metadata)
 
 Keep static tool metadata (description, category, parameters, recovery hints) in a YAML file instead of repeating it in every `@register_tool()` decorator. The Python decorator becomes minimal - just a name linking the function to its YAML entry.

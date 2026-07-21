@@ -1,14 +1,30 @@
 """Tests for BaseAgentRunner (core/base_runner.py)."""
 
+import copy
 import json
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from agents import (
+    Agent,
+    GuardrailFunctionOutput,
+    ToolGuardrailFunctionOutput,
+    Usage,
+    function_tool,
+    input_guardrail,
+    output_guardrail,
+    tool_input_guardrail,
+)
 
 from sinan_agentic_core.core.base_runner import BaseAgentRunner, _CollectingSessionWrapper
 from sinan_agentic_core.models.context import AgentContext
 from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
-from sinan_agentic_core.registry.guardrail_registry import GuardrailDefinition, GuardrailRegistry
+from sinan_agentic_core.registry.guardrail_registry import (
+    GuardrailCategory,
+    GuardrailDefinition,
+    GuardrailRegistry,
+    ResolvedGuardrails,
+)
 from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
 from sinan_agentic_core.session.agent_session import AgentSession
 
@@ -76,8 +92,8 @@ class TestBaseAgentRunnerInit:
     def test_loads_tool_map(self, runner):
         assert "test_tool" in runner.tool_map
 
-    def test_loads_guardrail_map(self, runner):
-        assert "test_guard" in runner.guardrail_map
+    def test_loads_guardrail_registry(self, runner):
+        assert runner.guardrail_registry.get_guardrail("test_guard") is not None
 
     def test_is_not_abstract(self):
         """BaseAgentRunner should be instantiable directly (not ABC)."""
@@ -1000,14 +1016,6 @@ class TestPrivateHelpers:
         result = runner._resolve_output_type("NonexistentType")
         assert result is str
 
-    def test_build_guardrails_found(self, runner):
-        guardrails = runner._build_guardrails(["test_guard"])
-        assert len(guardrails) == 1
-
-    def test_build_guardrails_not_found(self, runner):
-        guardrails = runner._build_guardrails(["nonexistent_guard"])
-        assert len(guardrails) == 0
-
     def test_build_model_settings_none(self, runner):
         agent_def = Mock()
         agent_def.model_settings_fn = None
@@ -1026,12 +1034,14 @@ class TestPrivateHelpers:
             agent_def=agent_def,
             instructions="inst",
             tools=[],
-            guardrails=[],
+            guardrails=ResolvedGuardrails(),
             handoffs=[],
             output_type=str,
             model_settings=None,
         )
         assert kwargs["name"] == "test"
+        assert kwargs["input_guardrails"] == []
+        assert kwargs["output_guardrails"] == []
         assert "handoffs" not in kwargs
         assert "model_settings" not in kwargs
 
@@ -1043,7 +1053,7 @@ class TestPrivateHelpers:
             agent_def=agent_def,
             instructions="inst",
             tools=[],
-            guardrails=[],
+            guardrails=ResolvedGuardrails(),
             handoffs=["handoff1"],
             output_type=str,
             model_settings={"temperature": 0.5},
@@ -1202,3 +1212,188 @@ class TestStructuredToolError:
         result = structured_tool_error(None, RuntimeError("something weird"))
         data = json.loads(result)
         assert "retry" in data["retry_hint"].lower()
+
+
+# ------------------------------------------------------------------ #
+# Guardrail category wiring
+# ------------------------------------------------------------------ #
+
+
+@pytest.fixture
+def _guardrail_registries():
+    """Registries holding one guardrail per category and a real function tool."""
+    agent_reg = AgentRegistry()
+    tool_reg = ToolRegistry()
+    guardrail_reg = GuardrailRegistry()
+
+    @function_tool
+    def echo(value: str) -> str:
+        """Echo a value.
+
+        Args:
+            value: Text to echo back.
+        """
+        return value
+
+    tool_reg.register(ToolDefinition(name="echo", function=echo))
+
+    @input_guardrail
+    def guard_input(ctx, agent, agent_input):
+        return GuardrailFunctionOutput(output_info=None, tripwire_triggered=False)
+
+    @output_guardrail
+    def guard_output(ctx, agent, agent_output):
+        return GuardrailFunctionOutput(output_info=None, tripwire_triggered=False)
+
+    @tool_input_guardrail
+    def guard_tool_input(data):
+        return ToolGuardrailFunctionOutput.allow()
+
+    guardrail_reg.register(GuardrailDefinition("g_in", "d", guard_input, GuardrailCategory.INPUT))
+    guardrail_reg.register(
+        GuardrailDefinition("g_out", "d", guard_output, GuardrailCategory.OUTPUT)
+    )
+    guardrail_reg.register(
+        GuardrailDefinition("g_tool", "d", guard_tool_input, GuardrailCategory.TOOL_INPUT)
+    )
+
+    agent_reg.register(
+        AgentDefinition(
+            name="guarded_agent",
+            description="guarded",
+            instructions="You are guarded",
+            tools=["echo"],
+            guardrails=["g_in", "g_out", "g_tool"],
+        )
+    )
+    agent_reg.register(
+        AgentDefinition(
+            name="plain_agent",
+            description="plain",
+            instructions="You are plain",
+            tools=["echo"],
+            guardrails=["g_in", "g_out"],
+        )
+    )
+
+    return agent_reg, tool_reg, guardrail_reg, echo
+
+
+@pytest.fixture
+def guardrail_runner(_guardrail_registries):
+    agent_reg, tool_reg, guardrail_reg, _ = _guardrail_registries
+
+    with (
+        patch("sinan_agentic_core.core.base_runner.get_agent_registry", return_value=agent_reg),
+        patch("sinan_agentic_core.core.base_runner.get_tool_registry", return_value=tool_reg),
+        patch(
+            "sinan_agentic_core.core.base_runner.get_guardrail_registry", return_value=guardrail_reg
+        ),
+    ):
+        return BaseAgentRunner()
+
+
+class TestGuardrailCategoryWiring:
+    async def test_create_agent_splits_input_and_output_guardrails(self, guardrail_runner):
+        agent = await guardrail_runner.create_agent(
+            "guarded_agent", context=AgentContext(database_connector=Mock())
+        )
+
+        assert [g.get_name() for g in agent.input_guardrails] == ["guard_input"]
+        assert [g.get_name() for g in agent.output_guardrails] == ["guard_output"]
+
+    async def test_create_agent_attaches_tool_input_guardrails(self, guardrail_runner):
+        agent = await guardrail_runner.create_agent(
+            "guarded_agent", context=AgentContext(database_connector=Mock())
+        )
+
+        tool = agent.tools[0]
+        assert [g.get_name() for g in tool.tool_input_guardrails] == ["guard_tool_input"]
+
+    async def test_registry_tool_is_not_mutated(self, guardrail_runner, _guardrail_registries):
+        _, _, _, echo = _guardrail_registries
+        await guardrail_runner.create_agent(
+            "guarded_agent", context=AgentContext(database_connector=Mock())
+        )
+
+        assert echo.tool_input_guardrails is None
+
+    async def test_agent_without_tool_guardrails_keeps_tools_untouched(self, guardrail_runner):
+        agent = await guardrail_runner.create_agent(
+            "plain_agent", context=AgentContext(database_connector=Mock())
+        )
+
+        assert agent.tools[0].tool_input_guardrails is None
+
+    def test_attach_skips_non_function_tools(self, guardrail_runner):
+        hosted = object()
+        result = BaseAgentRunner._attach_tool_input_guardrails([hosted], ["g"])
+        assert result == [hosted]
+
+    def test_attach_without_guardrails_returns_same_list(self, guardrail_runner):
+        tools = [object()]
+        assert BaseAgentRunner._attach_tool_input_guardrails(tools, []) is tools
+
+    def test_attach_preserves_existing_tool_guardrails(self, _guardrail_registries):
+        _, _, _, echo = _guardrail_registries
+        preset = copy.copy(echo)
+        preset.tool_input_guardrails = ["existing"]
+
+        result = BaseAgentRunner._attach_tool_input_guardrails([preset], ["added"])
+
+        assert result[0].tool_input_guardrails == ["existing", "added"]
+
+    def test_build_run_config_enables_pre_approval(self, guardrail_runner):
+        agent_def = guardrail_runner._get_agent_definition("guarded_agent")
+        run_config = guardrail_runner._build_run_config(agent_def)
+
+        assert run_config is not None
+        assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
+
+    def test_build_run_config_none_without_tool_guardrails(self, guardrail_runner):
+        agent_def = guardrail_runner._get_agent_definition("plain_agent")
+        assert guardrail_runner._build_run_config(agent_def) is None
+
+    async def test_execute_basic_passes_run_config(self, guardrail_runner):
+        session = AgentSession(session_id="s1")
+        result = Mock(final_output="ok", context_wrapper=Mock(usage=Usage()))
+
+        with patch(
+            "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
+        ) as mock_run:
+            await guardrail_runner.execute(
+                "guarded_agent", AgentContext(database_connector=Mock()), session
+            )
+
+        run_config = mock_run.call_args.kwargs["run_config"]
+        assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
+
+    async def test_execute_basic_omits_run_config_without_tool_guardrails(self, guardrail_runner):
+        session = AgentSession(session_id="s1")
+        result = Mock(final_output="ok", context_wrapper=Mock(usage=Usage()))
+
+        with patch(
+            "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
+        ) as mock_run:
+            await guardrail_runner.execute(
+                "plain_agent", AgentContext(database_connector=Mock()), session
+            )
+
+        assert "run_config" not in mock_run.call_args.kwargs
+
+    async def test_agent_as_tool_receives_pre_approval_run_config(self, guardrail_runner):
+        ctx = AgentContext(database_connector=Mock())
+
+        with patch.object(Agent, "as_tool", return_value=Mock()) as mock_as_tool:
+            await guardrail_runner._build_tools(["guarded_agent"], ctx)
+
+        run_config = mock_as_tool.call_args.kwargs["run_config"]
+        assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
+
+    async def test_agent_as_tool_omits_run_config_without_tool_guardrails(self, guardrail_runner):
+        ctx = AgentContext(database_connector=Mock())
+
+        with patch.object(Agent, "as_tool", return_value=Mock()) as mock_as_tool:
+            await guardrail_runner._build_tools(["plain_agent"], ctx)
+
+        assert "run_config" not in mock_as_tool.call_args.kwargs
