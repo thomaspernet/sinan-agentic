@@ -6,10 +6,10 @@ schedules a retry. Writing that callback means importing ``agents.retry`` and
 wiring a ``ModelRetrySettings`` by hand at every agent.
 
 This module carries the same choice as data: an attempt count, the error classes
-to retry on, and an optional backoff schedule. ``BaseAgentRunner`` translates it
-into the SDK object at the single point where ``ModelSettings`` is assembled, so
-retries stay declarative in ``agents.yaml`` and consumers never reach into
-``agents.*`` to get them.
+to retry on, and an optional backoff schedule. ``apply_model_retry`` translates it
+into the SDK object at the point each agent-building path assembles
+``ModelSettings``, so retries stay declarative in ``agents.yaml`` and consumers
+never reach into ``agents.*`` to get them.
 
 Retry is off unless declared: retrying costs latency and duplicate billed
 requests, so it is opt-in per agent.
@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from enum import Enum
 
-from agents import ModelRetryBackoffSettings, ModelRetrySettings
+from agents import ModelRetryBackoffSettings, ModelRetrySettings, ModelSettings
 from agents.retry import RetryPolicy, retry_policies
 from pydantic import BaseModel, Field
 
@@ -108,3 +108,31 @@ class ModelRetryConfig(BaseModel):
             else None
         )
         return ModelRetrySettings(max_retries=self.max_retries, backoff=backoff, policy=policy)
+
+
+def apply_model_retry(
+    retry: ModelRetryConfig | None,
+    model_settings: ModelSettings | None = None,
+) -> ModelSettings | None:
+    """Overlay a declared retry policy onto the model settings an agent will carry.
+
+    Both agent-building paths call this where they assemble ``ModelSettings`` —
+    ``BaseAgentRunner.create_agent()`` and ``create_agent_from_registry()`` — so a
+    declared policy reaches the SDK the same way whichever path built the agent.
+
+    Args:
+        retry: The agent's declared policy, or None when it opts out.
+        model_settings: Settings already computed for the agent, if any.
+
+    Returns:
+        Settings carrying the policy, *model_settings* untouched when nothing is
+        declared, or None when there is neither. Callers omit the
+        ``model_settings=`` kwarg on None so the SDK default applies.
+    """
+    if retry is None:
+        return model_settings
+
+    # resolve() overlays the settings in hand on top of the declared retry
+    # policy, so a caller that sets its own retry still wins field-by-field
+    # while every other declared agent keeps the policy.
+    return ModelSettings(retry=retry.build()).resolve(model_settings)

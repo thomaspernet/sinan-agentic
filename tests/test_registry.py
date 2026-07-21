@@ -12,6 +12,7 @@ from agents import (
     tool_input_guardrail,
 )
 
+from sinan_agentic_core.core.model_retry import ModelRetryConfig
 from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
 from sinan_agentic_core.registry.guardrail_registry import (
     GuardrailCategory,
@@ -597,3 +598,54 @@ class TestAgentFactoryGuardrails:
         assert agent.input_guardrails == []
         assert agent.output_guardrails == []
         assert agent.tools[0].tool_input_guardrails is None
+
+
+# -- AgentFactory model retry wiring -------------------------------------------
+
+
+@pytest.fixture
+def factory_retry():
+    """Global registry carrying one agent declaring a retry policy and one without."""
+    from sinan_agentic_core.registry.agent_registry import get_agent_registry
+
+    get_agent_registry().register(
+        AgentDefinition(
+            name="_fr_retrying_agent",
+            description="retries",
+            instructions="You retry",
+            model_retry=ModelRetryConfig(max_retries=4),
+        )
+    )
+    get_agent_registry().register(
+        AgentDefinition(
+            name="_fr_plain_agent",
+            description="plain",
+            instructions="You are plain",
+        )
+    )
+
+
+class TestAgentFactoryModelRetry:
+    def test_declared_policy_rides_on_the_agent_model_settings(self, factory_retry):
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+
+        agent = create_agent_from_registry("_fr_retrying_agent")
+
+        assert agent.model_settings.retry.max_retries == 4
+        assert agent.model_settings.retry.policy is not None
+
+    def test_agent_without_a_policy_keeps_the_sdk_default_settings(self, factory_retry):
+        """Omitting the kwarg matters: Agent.model_settings must stay a real object."""
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+
+        agent = create_agent_from_registry("_fr_plain_agent")
+
+        assert agent.model_settings.retry is None
+
+    def test_model_override_leaves_the_policy_in_place(self, factory_retry):
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+
+        agent = create_agent_from_registry("_fr_retrying_agent", model_override="gpt-4o")
+
+        assert agent.model == "gpt-4o"
+        assert agent.model_settings.retry.max_retries == 4

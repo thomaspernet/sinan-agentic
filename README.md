@@ -966,7 +966,7 @@ Sub-agents built with `as_tool()` are the one gap — the SDK's `as_tool()` has 
 
 A rate limit, a 503, or a dropped connection fails the whole run — even though the next attempt would have succeeded. The SDK can retry the model call itself, but only when `ModelSettings.retry` carries both an attempt budget *and* a policy callback; with either missing it never retries.
 
-Declare `model_retry` on an agent and the runner builds that object for you. It reaches every execution path — `execute()` in all three modes, `run_agent()`, handoffs, and `as_tool()` sub-agents — because retry rides on the agent's model settings rather than on a per-run argument.
+Declare `model_retry` on an agent and the framework builds that object for you. It reaches every execution path — `execute()` in all three modes, `run_agent()`, handoffs, and `as_tool()` sub-agents — because retry rides on the agent's model settings rather than on a per-run argument.
 
 Retry is off unless declared: a retried call costs latency and a second billed request.
 
@@ -1005,6 +1005,8 @@ register_agent(AgentDefinition(
 | `retry_after` | The error carries an explicit `Retry-After` delay, and waits exactly that long. |
 
 Triggers combine: the call is retried when any listed trigger matches. A delay supplied by the error (`Retry-After`) always wins over the `backoff` schedule.
+
+Both agent-building paths attach the declared policy the same way: `BaseAgentRunner.create_agent()` and `create_agent_from_registry()`. An agent resolved by name in `chat()`, `chat_with_hooks()`, or `chat_streamed()` therefore retries too. Settings supplied by the caller still win field by field, so an explicit `retry` on a `model_settings` override replaces the declared one.
 
 The overflow-fallback path is the one partial case. Its rescue call goes straight to the OpenAI client instead of through the runner, so it honors `max_retries` but not `retry_on` or `backoff`.
 
