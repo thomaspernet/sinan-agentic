@@ -4,8 +4,11 @@ import asyncio
 import copy
 from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
 from agents import (
     Agent,
+    MaxTurnsExceeded,
+    ModelRefusalError,
     ToolGuardrailFunctionOutput,
     Usage,
     function_tool,
@@ -14,6 +17,7 @@ from agents import (
 from pydantic import BaseModel
 
 from sinan_agentic_core.core.output_recovery import recover_invalid_final_output
+from sinan_agentic_core.core.run_errors import RunErrorKind
 from sinan_agentic_core.services.chat import _usage_to_dict
 from sinan_agentic_core.services.events import (
     AgentCompleteEvent,
@@ -28,6 +32,15 @@ from sinan_agentic_core.services.events import (
 )
 from sinan_agentic_core.services.hooks import StreamingRunHooks
 from sinan_agentic_core.session.agent_session import AgentSession
+from tests.conftest import make_context_overflow_error
+
+# Every run failure a chat function classifies, and the kind it must report.
+RUN_FAILURES = [
+    (MaxTurnsExceeded("Max turns (10) exceeded"), RunErrorKind.MAX_TURNS),
+    (ModelRefusalError("I can't help with that."), RunErrorKind.MODEL_REFUSAL),
+    (make_context_overflow_error(), RunErrorKind.CONTEXT_OVERFLOW),
+    (RuntimeError("Something else broke"), RunErrorKind.UNKNOWN),
+]
 
 # -- Event dataclasses ---------------------------------------------------------
 
@@ -314,6 +327,23 @@ class TestChat:
 
         assert result["success"] is False
         assert "Agent not found" in result["error"]
+        assert result["error_kind"] == RunErrorKind.UNKNOWN.value
+
+    @pytest.mark.parametrize(("error", "expected"), RUN_FAILURES)
+    async def test_run_failure_reports_its_kind(self, error, expected):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(side_effect=error)
+
+                result = await chat_mod.chat("Hi", agent_name="a", session=session)
+
+        assert result["success"] is False
+        assert result["error"] == str(error)
+        assert result["error_kind"] == expected.value
 
     async def test_chat_with_context(self):
         from agents import Usage
@@ -563,6 +593,28 @@ class TestChatWithHooks:
 
         assert any(e["event"] == "error" for e in events)
 
+    @pytest.mark.parametrize(("error", "expected"), RUN_FAILURES)
+    async def test_run_failure_reports_its_kind(self, error, expected):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(side_effect=error)
+
+                events = [
+                    event
+                    async for event in chat_mod.chat_with_hooks(
+                        "Hi", agent_name="a", session=session
+                    )
+                ]
+
+        errors = [e for e in events if e["event"] == "error"]
+        assert errors == [
+            {"event": "error", "data": {"error": str(error), "error_kind": expected.value}}
+        ]
+
 
 # -- chat_streamed() ----------------------------------------------------------
 
@@ -761,3 +813,23 @@ class TestChatStreamed:
                 events.append(event)
 
         assert any(e["event"] == "error" for e in events)
+
+    @pytest.mark.parametrize(("error", "expected"), RUN_FAILURES)
+    async def test_run_failure_reports_its_kind(self, error, expected):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run_streamed.side_effect = error
+
+                events = [
+                    event
+                    async for event in chat_mod.chat_streamed("Hi", agent_name="a", session=session)
+                ]
+
+        errors = [e for e in events if e["event"] == "error"]
+        assert errors == [
+            {"event": "error", "data": {"error": str(error), "error_kind": expected.value}}
+        ]

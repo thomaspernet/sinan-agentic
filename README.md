@@ -98,6 +98,26 @@ async for event in chat_streamed("What's the weather?", "weather_assistant", ses
         print(f"\nTools used: {event['data']['tools_called']}")
 ```
 
+### Reporting a failed run
+
+None of the three raises on a failed run — the failure comes back as data. Alongside the rendered message, each reports the *kind* of failure, classified by exception type through `classify_run_error()` (see [Structured error handling](#structured-error-handling)). `AgentOrchestrator.run_workflow()` reports it the same way.
+
+```python
+from sinan_agentic_core import RunErrorKind
+
+result = await chat("What's the weather?", "weather_assistant", session)
+# {"success": False, "error": "Max turns (10) exceeded", "error_kind": "max_turns", "session_id": "..."}
+
+async for event in chat_streamed("What's the weather?", "weather_assistant", session):
+    if event["event"] == "error":
+        # {"error": "Model refused to produce output: I can't help with that.",
+        #  "error_kind": "model_refusal"}
+        if event["data"]["error_kind"] == RunErrorKind.MODEL_REFUSAL:
+            ...
+```
+
+`error_kind` is a `RunErrorKind` value — `max_turns`, `context_overflow`, `model_refusal`, `model_behavior`, or `unknown` — carried as a plain string so the payload stays JSON-serializable. `RunErrorKind` is a `str` enum, so a comparison against either the member or its value works. Branch on it to decide whether a retry is worth attempting; an API layer that matched the message text instead would break the next time upstream rewords it.
+
 ## Token Usage Tracking
 
 All three chat functions and `BaseAgentRunner.run_agent()` return token usage automatically.
