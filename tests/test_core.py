@@ -8,6 +8,7 @@ import pytest
 from agents import (
     Agent,
     GuardrailFunctionOutput,
+    ModelBehaviorError,
     ToolGuardrailFunctionOutput,
     Usage,
     function_tool,
@@ -17,6 +18,7 @@ from agents import (
 )
 
 from sinan_agentic_core.core.base_runner import BaseAgentRunner, _CollectingSessionWrapper
+from sinan_agentic_core.core.output_recovery import recover_invalid_final_output
 from sinan_agentic_core.models.context import AgentContext
 from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
 from sinan_agentic_core.registry.guardrail_registry import (
@@ -1424,3 +1426,176 @@ class TestGuardrailCategoryWiring:
             )
 
         assert "run_config" not in mock_run.call_args.kwargs
+
+
+# ------------------------------------------------------------------ #
+# Invalid structured output recovery (error_handlers wiring)
+# ------------------------------------------------------------------ #
+
+
+@pytest.fixture
+def recovery_runner(_registries):
+    """Runner with one recovering agent and one that opts out."""
+    from pydantic import BaseModel
+
+    class Extraction(BaseModel):
+        answer: str
+
+    agent_reg, tool_reg, guardrail_reg = _registries
+    for name, recovery in (("recovering_agent", True), ("strict_agent", False)):
+        agent_reg.register(
+            AgentDefinition(
+                name=name,
+                description="structured",
+                instructions="extract data",
+                output_dataclass=Extraction,
+                invalid_output_recovery=recovery,
+            )
+        )
+
+    with (
+        patch("sinan_agentic_core.core.base_runner.get_agent_registry", return_value=agent_reg),
+        patch("sinan_agentic_core.core.base_runner.get_tool_registry", return_value=tool_reg),
+        patch(
+            "sinan_agentic_core.core.base_runner.get_guardrail_registry", return_value=guardrail_reg
+        ),
+    ):
+        return BaseAgentRunner()
+
+
+class TestInvalidOutputRecoveryWiring:
+    def test_build_error_handlers_registers_invalid_final_output(self, recovery_runner):
+        agent_def = recovery_runner._get_agent_definition("recovering_agent")
+        handlers = recovery_runner._build_error_handlers(agent_def)
+
+        assert handlers is not None
+        assert handlers["invalid_final_output"] is recover_invalid_final_output
+
+    def test_build_error_handlers_none_when_opted_out(self, recovery_runner):
+        agent_def = recovery_runner._get_agent_definition("strict_agent")
+        assert recovery_runner._build_error_handlers(agent_def) is None
+
+    async def test_execute_basic_passes_error_handlers(self, recovery_runner):
+        session = AgentSession(session_id="s1")
+        result = Mock(final_output="ok", raw_responses=[])
+
+        with patch(
+            "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
+        ) as mock_run:
+            await recovery_runner.execute(
+                "recovering_agent", AgentContext(database_connector=Mock()), session
+            )
+
+        handlers = mock_run.call_args.kwargs["error_handlers"]
+        assert handlers["invalid_final_output"] is recover_invalid_final_output
+
+    async def test_execute_basic_omits_error_handlers_when_opted_out(self, recovery_runner):
+        session = AgentSession(session_id="s1")
+        result = Mock(final_output="ok", raw_responses=[])
+
+        with patch(
+            "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
+        ) as mock_run:
+            await recovery_runner.execute(
+                "strict_agent", AgentContext(database_connector=Mock()), session
+            )
+
+        assert "error_handlers" not in mock_run.call_args.kwargs
+
+    async def test_execute_with_fallback_passes_error_handlers(self, recovery_runner):
+        session = AgentSession(session_id="s1")
+        result = Mock(final_output="ok", raw_responses=[])
+
+        with patch(
+            "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
+        ) as mock_run:
+            await recovery_runner.execute(
+                "recovering_agent",
+                AgentContext(database_connector=Mock()),
+                session,
+                fallback_on_overflow=True,
+            )
+
+        handlers = mock_run.call_args.kwargs["error_handlers"]
+        assert handlers["invalid_final_output"] is recover_invalid_final_output
+
+    async def test_execute_streamed_passes_error_handlers(self, recovery_runner):
+        session = AgentSession(session_id="s1")
+
+        async def stream_events():
+            return
+            yield
+
+        stream = Mock(final_output="ok", raw_responses=[], stream_events=stream_events)
+
+        with patch(
+            "sinan_agentic_core.core.base_runner.Runner.run_streamed", return_value=stream
+        ) as mock_run:
+            await recovery_runner.execute(
+                "recovering_agent",
+                AgentContext(database_connector=Mock()),
+                session,
+                streaming=True,
+                on_event=Mock(),
+            )
+
+        handlers = mock_run.call_args.kwargs["error_handlers"]
+        assert handlers["invalid_final_output"] is recover_invalid_final_output
+
+    async def test_run_agent_passes_error_handlers(self, recovery_runner):
+        session = AgentSession(session_id="s1")
+        result = Mock(final_output="ok", raw_responses=[])
+
+        with patch(
+            "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
+        ) as mock_run:
+            await recovery_runner.run_agent(
+                "recovering_agent", session, AgentContext(database_connector=Mock())
+            )
+
+        handlers = mock_run.call_args.kwargs["error_handlers"]
+        assert handlers["invalid_final_output"] is recover_invalid_final_output
+
+
+class TestFallbackBranchOutputRecovery:
+    """The recovery branch bypasses Runner.run, so it salvages directly."""
+
+    async def _run_fallback(self, runner, agent_name, content):
+        completion = Mock(usage=None)
+        completion.choices = [Mock()]
+        completion.choices[0].message.content = content
+
+        with (
+            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("openai.AsyncOpenAI") as mock_openai,
+        ):
+            mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Max turns exceeded"))
+            client = AsyncMock()
+            client.chat.completions.create = AsyncMock(return_value=completion)
+            mock_openai.return_value = client
+
+            return await runner._execute_with_fallback(
+                agent_name,
+                AgentContext(database_connector=Mock()),
+                AgentSession(session_id="s1"),
+                10,
+                "hello",
+                None,
+            )
+
+    async def test_salvages_fenced_fallback_response(self, recovery_runner):
+        result = await self._run_fallback(
+            recovery_runner, "recovering_agent", '```json\n{"answer": "yes"}\n```'
+        )
+        assert result.answer == "yes"
+
+    async def test_raises_when_nothing_salvageable(self, recovery_runner):
+        with pytest.raises(ModelBehaviorError):
+            await self._run_fallback(recovery_runner, "recovering_agent", "not json at all")
+
+    async def test_raises_when_opted_out(self, recovery_runner):
+        with pytest.raises(ModelBehaviorError):
+            await self._run_fallback(
+                recovery_runner, "strict_agent", '```json\n{"answer": "yes"}\n```'
+            )

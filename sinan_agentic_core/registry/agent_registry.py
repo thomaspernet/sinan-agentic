@@ -26,6 +26,9 @@ class AgentDefinition:
     capabilities: list[Capability] = field(default_factory=list)  # Pluggable agent behaviors
 
     model: str = "gpt-4o-mini"
+    # Re-parse a final message whose structured payload is wrapped in prose or
+    # a code fence instead of failing the run. Never fabricates a value.
+    invalid_output_recovery: bool = True
     requires_schema_injection: bool = False  # If True, inject {schema} dynamically
     knowledge_text: str = ""  # Domain knowledge from catalog (injected via domain_knowledge())
     as_tool_parameters: Any | None = (
