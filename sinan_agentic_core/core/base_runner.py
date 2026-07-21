@@ -37,6 +37,7 @@ from ..registry.guardrail_registry import (
     attach_tool_input_guardrails,
 )
 from ..session import AgentSession, ConversationHistory
+from ..utils.turn_budget_context import set_turn_budget
 from .capabilities import Capability
 from .errors import structured_tool_error
 from .model_retry import apply_model_retry
@@ -263,7 +264,7 @@ class BaseAgentRunner:
                 sdk_max_turns = cap.absolute_max
                 # Wire the budget so InstructionBuilder.turn_budget_section
                 # and the request_extension tool can locate it.
-                context._turn_budget = cap
+                set_turn_budget(context, cap)
                 break
 
         if streaming:

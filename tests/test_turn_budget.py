@@ -1,5 +1,6 @@
 """Tests for the turn budget system (core/turn_budget.py + turn_budget_tool.py)."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -7,6 +8,7 @@ from agents import RunContextWrapper
 
 from sinan_agentic_core.core.capabilities import Capability
 from sinan_agentic_core.core.turn_budget import TurnBudget
+from sinan_agentic_core.utils import get_turn_budget, set_turn_budget
 
 # ------------------------------------------------------------------ #
 # TurnBudget dataclass
@@ -237,6 +239,46 @@ class TestTurnBudgetOnLlmStart:
 
 
 # ------------------------------------------------------------------ #
+# Context accessor
+# ------------------------------------------------------------------ #
+
+
+class TestTurnBudgetContextAccessor:
+    def test_set_then_get_round_trip(self):
+        budget = TurnBudget(default_turns=7)
+        context = SimpleNamespace()
+
+        set_turn_budget(context, budget)
+
+        assert get_turn_budget(context) is budget
+
+    def test_get_returns_none_when_unset(self):
+        assert get_turn_budget(SimpleNamespace()) is None
+
+    def test_get_returns_none_on_none_context(self):
+        assert get_turn_budget(None) is None
+
+    def test_set_overwrites_previous_budget(self):
+        first = TurnBudget(default_turns=3)
+        second = TurnBudget(default_turns=9)
+        context = SimpleNamespace()
+
+        set_turn_budget(context, first)
+        set_turn_budget(context, second)
+
+        assert get_turn_budget(context) is second
+
+    def test_stored_under_public_attribute(self):
+        budget = TurnBudget()
+        context = SimpleNamespace()
+
+        set_turn_budget(context, budget)
+
+        assert context.turn_budget is budget
+        assert not hasattr(context, "_turn_budget")
+
+
+# ------------------------------------------------------------------ #
 # InstructionBuilder integration
 # ------------------------------------------------------------------ #
 
@@ -254,10 +296,10 @@ class TestInstructionBuilderTurnBudget:
         budget = TurnBudget(default_turns=8)
         budget.turns_used = 6
 
-        class FakeCtx:
-            _turn_budget = budget
+        context = SimpleNamespace()
+        set_turn_budget(context, budget)
 
-        builder = InstructionBuilder(FakeCtx(), None)
+        builder = InstructionBuilder(context, None)
         section = builder.turn_budget_section()
         assert section is not None
         assert "2" in section and "8" in section
@@ -267,14 +309,14 @@ class TestInstructionBuilderTurnBudget:
 
         budget = TurnBudget(default_turns=10)
 
-        class FakeCtx:
-            _turn_budget = budget
+        context = SimpleNamespace()
+        set_turn_budget(context, budget)
 
         class TestBuilder(InstructionBuilder):
             def persona(self):
                 return "You are a test agent."
 
-        result = TestBuilder(FakeCtx(), None).build()
+        result = TestBuilder(context, None).build()
         assert "You are a test agent." in result
         assert "10 turns" in result
 
@@ -427,7 +469,7 @@ class TestBaseAgentRunnerTurnBudget:
                 turn_budget=budget,
             )
 
-            assert context._turn_budget is budget
+            assert get_turn_budget(context) is budget
 
     @pytest.mark.asyncio
     async def test_execute_resets_budget(self, runner):

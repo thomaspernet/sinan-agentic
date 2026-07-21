@@ -30,6 +30,8 @@ Why use InstructionBuilder:
 
 from typing import Any
 
+from ..utils.turn_budget_context import get_turn_budget
+
 
 class InstructionBuilder:
     """Base instruction builder with section-based assembly.
@@ -80,10 +82,11 @@ class InstructionBuilder:
     def turn_budget_section(self) -> str | None:
         """Turn budget awareness injected into instructions.
 
-        Reads ``_turn_budget`` from context (set by BaseAgentRunner when
-        a TurnBudget is configured). Returns None if no budget is active.
+        Reads the active budget from context via ``get_turn_budget`` (the
+        runner carries it there when a TurnBudget is configured). Returns
+        None if no budget is active.
         """
-        budget = self._ctx_attr("_turn_budget")
+        budget = get_turn_budget(self.ctx)
         if budget is None:
             return None
         section: str = budget.build_instruction_section()
