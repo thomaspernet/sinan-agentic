@@ -649,3 +649,51 @@ class TestAgentFactoryModelRetry:
 
         assert agent.model == "gpt-4o"
         assert agent.model_settings.retry.max_retries == 4
+
+
+# -- AgentFactory run-level settings -------------------------------------------
+
+
+class TestAgentFactoryRunLevelSettings:
+    """What ``build_run_config`` / ``build_error_handlers`` resolve off a factory agent.
+
+    The factory docstring tells callers driving ``Runner`` themselves to pass
+    both resolvers, and states that error handlers stay ``None`` because the
+    factory does not carry ``output_dataclass`` onto the agent. These pin that
+    claim to the code, so wiring an output type later fails here rather than
+    leaving the docstring wrong.
+    """
+
+    def test_guarded_agent_resolves_a_run_config(self, factory_guardrails):
+        from sinan_agentic_core.core.run_config import build_run_config
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+
+        run_config = build_run_config(create_agent_from_registry("_fg_guarded_agent"))
+
+        assert run_config is not None
+        assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
+
+    def test_declared_output_dataclass_resolves_no_error_handlers(self):
+        from dataclasses import dataclass
+
+        from sinan_agentic_core.core.output_recovery import build_error_handlers
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+        from sinan_agentic_core.registry.agent_registry import get_agent_registry
+
+        @dataclass
+        class _Extraction:
+            value: str
+
+        get_agent_registry().register(
+            AgentDefinition(
+                name="_frl_structured_agent",
+                description="structured",
+                instructions="You extract",
+                output_dataclass=_Extraction,
+            )
+        )
+
+        agent = create_agent_from_registry("_frl_structured_agent")
+
+        assert agent.output_type is None
+        assert build_error_handlers(agent) is None

@@ -398,7 +398,6 @@ class TestBaseAgentRunnerTurnBudget:
         assert "Dynamic base." in result
         assert "5 turns" in result
 
-    @pytest.mark.asyncio
     async def test_execute_basic_with_budget(self, runner):
         from sinan_agentic_core.core.base_runner import _CompositeHooks
 
@@ -432,7 +431,6 @@ class TestBaseAgentRunnerTurnBudget:
                 assert isinstance(call_kwargs["hooks"], _CompositeHooks)
                 assert call_kwargs["max_turns"] == 25
 
-    @pytest.mark.asyncio
     async def test_execute_sets_absolute_max(self, runner):
         budget = TurnBudget(default_turns=10, absolute_max=25)
         context = Mock()
@@ -454,7 +452,6 @@ class TestBaseAgentRunnerTurnBudget:
             assert call_args[0][3] == 25  # max_turns positional arg
             assert budget in call_args[1]["capabilities"]
 
-    @pytest.mark.asyncio
     async def test_execute_attaches_budget_to_context(self, runner):
         budget = TurnBudget(default_turns=10)
         context = Mock(spec=[])  # no existing attributes
@@ -471,7 +468,6 @@ class TestBaseAgentRunnerTurnBudget:
 
             assert get_turn_budget(context) is budget
 
-    @pytest.mark.asyncio
     async def test_execute_resets_budget(self, runner):
         budget = TurnBudget(default_turns=10)
         budget.turns_used = 5
@@ -492,7 +488,6 @@ class TestBaseAgentRunnerTurnBudget:
             assert budget.turns_used == 0
             assert budget.extensions_used == 0
 
-    @pytest.mark.asyncio
     async def test_execute_without_budget_uses_max_turns(self, runner):
         context = Mock()
         session = Mock()

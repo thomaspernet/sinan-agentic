@@ -474,7 +474,6 @@ class TestBaseAgentRunnerIntegration:
         hooks = BaseAgentRunner._build_hooks([TurnBudget(), ToolErrorRecovery()])
         assert isinstance(hooks, _CompositeHooks)
 
-    @pytest.mark.asyncio
     async def test_execute_basic_with_recovery(self, runner):
         from sinan_agentic_core.core.base_runner import _CompositeHooks
 
@@ -506,7 +505,6 @@ class TestBaseAgentRunnerIntegration:
                 call_kwargs = mock_runner_cls.run.call_args[1]
                 assert isinstance(call_kwargs["hooks"], _CompositeHooks)
 
-    @pytest.mark.asyncio
     async def test_execute_resets_recovery(self, runner):
         recovery = ToolErrorRecovery()
         recovery.record_tool_result("t", json.dumps({"error": "old"}))
@@ -531,7 +529,6 @@ class TestBaseAgentRunnerIntegration:
 
 
 class TestCompositeHooks:
-    @pytest.mark.asyncio
     async def test_delegates_to_all_capabilities(self):
         from sinan_agentic_core.core.base_runner import _CompositeHooks
 
@@ -550,7 +547,6 @@ class TestCompositeHooks:
         cap_a.on_llm_start.assert_called_once()
         cap_b.on_llm_start.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_extracts_tool_arguments_from_context(self):
         from sinan_agentic_core.core.base_runner import _CompositeHooks
 
