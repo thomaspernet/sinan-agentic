@@ -4,10 +4,20 @@ Resolves an AgentDefinition + its registered tools and guardrails into a
 ready-to-use OpenAI Agents SDK ``Agent`` instance.
 
 Usage:
-    from sinan_agentic_core import create_agent_from_registry
+    from sinan_agentic_core import (
+        build_error_handlers,
+        build_run_config,
+        create_agent_from_registry,
+    )
+    from agents import Runner
 
     agent = create_agent_from_registry("weather_assistant")
-    result = await Runner.run(agent, "What's the weather?")
+    result = await Runner.run(
+        agent,
+        "What's the weather?",
+        run_config=build_run_config(agent),
+        error_handlers=build_error_handlers(agent),
+    )
 """
 
 from typing import Any
@@ -34,14 +44,22 @@ def create_agent_from_registry(
     on the agent's model settings, so transient model-API failures retry inside
     the SDK instead of failing the run.
 
-    NOTE: the run-level ``pre_approval_tool_input_guardrails`` setting is not
-    wired here — it lives on ``RunConfig``, which belongs to the run, not the
-    agent. Declared tool-input guardrails still run before their tool executes;
-    without that setting they run after the SDK emits a pending human-approval
-    interruption rather than before it (``openai-agents`` 0.18.3,
-    ``agents.run_internal.tool_execution``). Callers that need the earlier
-    ordering pass ``build_run_config(agent)`` to ``Runner.run()``;
-    ``BaseAgentRunner.execute()`` and the chat service set it automatically.
+    NOTE: run-level settings are not wired here — they belong to the run, not
+    the agent, so a caller driving ``Runner`` themselves passes them in.
+    ``build_run_config(agent)`` carries the
+    ``pre_approval_tool_input_guardrails`` setting: declared tool-input
+    guardrails still run before their tool executes, but without it they run
+    after the SDK emits a pending human-approval interruption rather than
+    before it (``openai-agents`` 0.18.3, ``agents.run_internal.tool_execution``).
+    ``build_error_handlers(agent)`` carries the ``invalid_final_output``
+    handler, which re-parses a structured payload the model wrapped in prose or
+    a code fence instead of failing the run; it reads the decision off
+    ``Agent.output_type``, which this factory does not set from the
+    definition's ``output_dataclass``, so it returns ``None`` until the caller
+    gives the agent an output type. Both return ``None`` when nothing differs
+    from the SDK defaults, which ``Runner.run()`` accepts. Consumers that do
+    not drive ``Runner`` themselves need neither call:
+    ``BaseAgentRunner.execute()`` and the chat service set both automatically.
 
     Args:
         agent_name: Name of a previously registered agent.
@@ -55,11 +73,20 @@ def create_agent_from_registry(
 
     Example::
 
-        from sinan_agentic_core import create_agent_from_registry
+        from sinan_agentic_core import (
+            build_error_handlers,
+            build_run_config,
+            create_agent_from_registry,
+        )
         from agents import Runner
 
         agent = create_agent_from_registry("my_agent")
-        result = await Runner.run(agent, "Hello!")
+        result = await Runner.run(
+            agent,
+            "Hello!",
+            run_config=build_run_config(agent),
+            error_handlers=build_error_handlers(agent),
+        )
     """
     agent_registry = get_agent_registry()
     tool_registry = get_tool_registry()
