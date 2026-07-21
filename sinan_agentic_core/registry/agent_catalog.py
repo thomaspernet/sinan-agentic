@@ -30,7 +30,7 @@ Usage::
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel
 
@@ -259,6 +259,30 @@ def _parse_capabilities(agent_name: str, raw: Any) -> list[CapabilityRef]:
 
 
 # ---------------------------------------------------------------------------
+# Optional config blocks
+# ---------------------------------------------------------------------------
+
+_ConfigT = TypeVar("_ConfigT", bound=BaseModel)
+
+
+def _parse_optional_block(
+    raw: dict[str, Any],
+    key: str,
+    model: type[_ConfigT],
+) -> _ConfigT | None:
+    """Build *model* from an optional config block on an agent entry.
+
+    Every optional block is fully defaulted, so an empty mapping is a
+    declaration — ``turn_budget: {}`` opts in with defaults. Only a missing
+    key (or an explicitly null one) means the agent opts out.
+    """
+    block = raw.get(key)
+    if block is None:
+        return None
+    return model(**block)
+
+
+# ---------------------------------------------------------------------------
 # Catalog
 # ---------------------------------------------------------------------------
 
@@ -299,16 +323,9 @@ class AgentCatalog:
             available = ", ".join(sorted(self._raw_agents.keys()))
             raise KeyError(f"Agent '{name}' not found in agents.yaml. " f"Available: {available}")
         raw = self._raw_agents[name]
-        raw_budget = raw.get("turn_budget")
-        budget_cfg = TurnBudgetConfig(**raw_budget) if raw_budget else None
-
-        raw_retry = raw.get("model_retry")
-        retry_cfg = ModelRetryConfig(**raw_retry) if raw_retry else None
-
-        # ``tool_output_trim: {}`` opts in with SDK defaults, so an empty mapping
-        # is a declaration — only a missing key means the agent opts out.
-        raw_trim = raw.get("tool_output_trim")
-        trim_cfg = ToolOutputTrimConfig(**raw_trim) if raw_trim is not None else None
+        budget_cfg = _parse_optional_block(raw, "turn_budget", TurnBudgetConfig)
+        retry_cfg = _parse_optional_block(raw, "model_retry", ModelRetryConfig)
+        trim_cfg = _parse_optional_block(raw, "tool_output_trim", ToolOutputTrimConfig)
 
         capabilities = _parse_capabilities(name, raw.get("capabilities", []))
 

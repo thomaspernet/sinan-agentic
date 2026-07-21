@@ -984,6 +984,8 @@ agents:
         max_delay: 8.0
 ```
 
+Every field is optional, so `model_retry: {}` opts in with the defaults — two attempts after the initial request, on the triggers listed below. Only a missing key means the agent opts out.
+
 ```python
 from sinan_agentic_core import AgentDefinition, ModelRetryConfig, register_agent
 
@@ -1166,6 +1168,8 @@ agents:
     tools: [think]
     # No turn_budget -- uses plain max_turns cutoff
 ```
+
+Every field is optional, so `turn_budget: {}` opts in with the defaults above. Only a missing key means the agent opts out.
 
 Then use `build_turn_budget()` to create a `TurnBudget` from the catalog entry:
 
