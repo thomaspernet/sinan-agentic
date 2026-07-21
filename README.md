@@ -1245,7 +1245,7 @@ print(budget.extension_reasons) # ["Need to process 5 remaining papers"]
 When a `TurnBudget` is provided, the runner:
 
 1. Sets the SDK's `max_turns` to `budget.absolute_max` (hard safety ceiling)
-2. Attaches `budget` to the context as `_turn_budget`
+2. Carries `budget` on the run context via `set_turn_budget()` (read back with `get_turn_budget()`)
 3. Adds the `request_extension` tool to the agent
 4. Wraps agent instructions as a dynamic callable that appends budget status each turn
 5. Uses `TurnBudgetHooks` (a `RunHooks` subclass) to count turns via `on_llm_start`
