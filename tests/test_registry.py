@@ -345,6 +345,33 @@ class TestRegisterGuardrailDecorator:
                 return "checked"
 
 
+class TestGuardrailPackageExports:
+    """The guardrail surface is reachable from the package root, not just the sub-package."""
+
+    GUARDRAIL_SYMBOLS = (
+        "GuardrailCategory",
+        "GuardrailDefinition",
+        "GuardrailRegistry",
+        "ResolvedGuardrails",
+        "get_guardrail_registry",
+        "register_guardrail",
+    )
+
+    @pytest.mark.parametrize("symbol", GUARDRAIL_SYMBOLS)
+    def test_exported_from_package_root(self, symbol):
+        import sinan_agentic_core as pkg
+
+        assert hasattr(pkg, symbol)
+        assert symbol in pkg.__all__
+
+    @pytest.mark.parametrize("symbol", GUARDRAIL_SYMBOLS)
+    def test_exported_from_registry_package(self, symbol):
+        import sinan_agentic_core.registry as registry
+
+        assert hasattr(registry, symbol)
+        assert symbol in registry.__all__
+
+
 # -- AgentFactory --------------------------------------------------------------
 
 

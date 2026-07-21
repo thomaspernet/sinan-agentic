@@ -62,6 +62,7 @@ from .registry import (
     GuardrailCategory,
     GuardrailDefinition,
     GuardrailRegistry,
+    ResolvedGuardrails,
     ToolCatalog,
     ToolDefinition,
     ToolRegistry,
@@ -140,6 +141,7 @@ __all__ = [
     "GuardrailCategory",
     "GuardrailDefinition",
     "GuardrailRegistry",
+    "ResolvedGuardrails",
     "get_guardrail_registry",
     "register_guardrail",
     # Services
