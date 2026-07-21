@@ -8,7 +8,9 @@ import pytest
 from agents import (
     Agent,
     GuardrailFunctionOutput,
+    MaxTurnsExceeded,
     ModelBehaviorError,
+    ModelRefusalError,
     ModelRetrySettings,
     ModelSettings,
     ToolGuardrailFunctionOutput,
@@ -33,6 +35,7 @@ from sinan_agentic_core.registry.guardrail_registry import (
 )
 from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
 from sinan_agentic_core.session.agent_session import AgentSession
+from tests.conftest import make_context_overflow_error
 
 
 @pytest.fixture
@@ -547,6 +550,42 @@ class TestExecuteWithFallback:
             with pytest.raises(RuntimeError, match="Something else broke"):
                 await runner._execute_with_fallback("basic_agent", ctx, session, 10, "hello", None)
 
+    async def test_refusal_propagates_instead_of_being_rescued(self, runner):
+        """A refusal is the model's answer, not an out-of-room failure -- the
+        rescue call would re-ask it through a path that bypasses the run."""
+        ctx = AgentContext(database_connector=Mock())
+        session = AgentSession(session_id="test")
+
+        with (
+            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("openai.AsyncOpenAI") as mock_openai,
+        ):
+            mock_runner_cls.run = AsyncMock(side_effect=ModelRefusalError("I can't help."))
+            with pytest.raises(ModelRefusalError):
+                await runner._execute_with_fallback("basic_agent", ctx, session, 10, "hello", None)
+
+        mock_openai.assert_not_called()
+
+    async def test_error_quoting_the_old_needle_propagates(self, runner):
+        """Regression for #47 -- recovery keys off the exception type, so an
+        unrelated error whose text mentions the limit is no longer rescued."""
+        ctx = AgentContext(database_connector=Mock())
+        session = AgentSession(session_id="test")
+
+        with (
+            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("openai.AsyncOpenAI") as mock_openai,
+        ):
+            mock_runner_cls.run = AsyncMock(
+                side_effect=RuntimeError("tool output mentioned context_length_exceeded")
+            )
+            with pytest.raises(RuntimeError, match="context_length_exceeded"):
+                await runner._execute_with_fallback("basic_agent", ctx, session, 10, "hello", None)
+
+        mock_openai.assert_not_called()
+
     async def test_fallback_on_max_turns(self, runner):
         """Fallback with str output_type returns raw text."""
         ctx = AgentContext(database_connector=Mock())
@@ -561,7 +600,7 @@ class TestExecuteWithFallback:
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
             patch("openai.AsyncOpenAI") as mock_openai,
         ):
-            mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Max turns exceeded"))
+            mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
             mock_client = AsyncMock()
             mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
             mock_openai.return_value = mock_client
@@ -600,7 +639,7 @@ class TestExecuteWithFallback:
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
             patch("openai.AsyncOpenAI") as mock_openai,
         ):
-            mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Max turns exceeded"))
+            mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
             mock_client = AsyncMock()
             mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
             mock_openai.return_value = mock_client
@@ -644,7 +683,7 @@ class TestExecuteWithFallback:
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
             patch("openai.AsyncOpenAI") as mock_openai,
         ):
-            mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("context_length_exceeded"))
+            mock_runner_cls.run = AsyncMock(side_effect=make_context_overflow_error())
             mock_client = AsyncMock()
             mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
             mock_openai.return_value = mock_client
@@ -670,7 +709,7 @@ class TestExecuteWithFallback:
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
             patch("openai.AsyncOpenAI") as mock_openai,
         ):
-            mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Max turns exceeded"))
+            mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
             mock_client = AsyncMock()
             mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
             mock_openai.return_value = mock_client
@@ -769,7 +808,7 @@ class TestExecuteWithFallback:
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
             patch("openai.AsyncOpenAI") as mock_openai,
         ):
-            mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Max turns exceeded"))
+            mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
             mock_client = AsyncMock()
             mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
             mock_openai.return_value = mock_client
@@ -893,7 +932,7 @@ class TestExecuteWithFallback:
             ),
             patch("openai.AsyncOpenAI") as mock_async_openai,
         ):
-            mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Max turns (2) exceeded"))
+            mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (2) exceeded"))
 
             result = await runner._execute_with_fallback(
                 "basic_agent",
@@ -935,7 +974,7 @@ class TestExecuteWithFallback:
             ),
             patch("openai.AsyncOpenAI") as mock_async_openai,
         ):
-            mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Max turns exceeded"))
+            mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
             mock_client = AsyncMock()
             mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
             mock_async_openai.return_value = mock_client
@@ -1194,9 +1233,48 @@ class TestStructuredToolError:
     def test_max_turns_hint(self):
         from sinan_agentic_core.core.errors import structured_tool_error
 
-        result = structured_tool_error(None, RuntimeError("Max turns exceeded"))
+        result = structured_tool_error(None, MaxTurnsExceeded("Max turns (10) exceeded"))
         data = json.loads(result)
         assert "simplify" in data["retry_hint"].lower() or "turns" in data["retry_hint"].lower()
+
+    def test_context_overflow_hint(self):
+        from sinan_agentic_core.core.errors import structured_tool_error
+
+        result = structured_tool_error(None, make_context_overflow_error())
+        data = json.loads(result)
+        assert "overflow" in data["retry_hint"].lower()
+
+    def test_refusal_hint_tells_the_parent_not_to_re_send(self):
+        from sinan_agentic_core.core.errors import structured_tool_error
+
+        result = structured_tool_error(None, ModelRefusalError("I can't help with that."))
+        data = json.loads(result)
+        assert data["error_type"] == "ModelRefusalError"
+        assert "refused" in data["retry_hint"].lower()
+
+    def test_model_behavior_hint(self):
+        from sinan_agentic_core.core.errors import structured_tool_error
+
+        result = structured_tool_error(None, ModelBehaviorError("Invalid JSON"))
+        data = json.loads(result)
+        assert "schema" in data["retry_hint"].lower()
+
+    def test_typed_hint_wins_over_message_text(self):
+        """Regression for #47 -- the hint comes from the exception class, so a
+        refusal whose text says "not found" still gets the refusal hint."""
+        from sinan_agentic_core.core.errors import structured_tool_error
+
+        result = structured_tool_error(None, ModelRefusalError("that record is not found"))
+        data = json.loads(result)
+        assert "refused" in data["retry_hint"].lower()
+
+    def test_plain_error_quoting_max_turns_gets_the_generic_hint(self):
+        """Regression for #47 -- message text alone no longer picks a hint."""
+        from sinan_agentic_core.core.errors import structured_tool_error
+
+        result = structured_tool_error(None, RuntimeError("Max turns mentioned in a log line"))
+        data = json.loads(result)
+        assert data["retry_hint"] == "Review the error message and retry with corrected input."
 
     def test_not_found_hint(self):
         from sinan_agentic_core.core.errors import structured_tool_error
@@ -1574,7 +1652,7 @@ class TestFallbackBranchOutputRecovery:
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
             patch("openai.AsyncOpenAI") as mock_openai,
         ):
-            mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Max turns exceeded"))
+            mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
             client = AsyncMock()
             client.chat.completions.create = AsyncMock(return_value=completion)
             mock_openai.return_value = client
@@ -1710,7 +1788,7 @@ class TestModelRetryWiring:
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
             patch("openai.AsyncOpenAI", return_value=client),
         ):
-            mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Max turns exceeded"))
+            mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
             await runner._execute_with_fallback(
                 agent_name,
                 AgentContext(database_connector=Mock()),

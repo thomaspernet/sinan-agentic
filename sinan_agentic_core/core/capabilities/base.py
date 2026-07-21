@@ -124,9 +124,11 @@ class Capability:
         """Called immediately before the summarize-and-extract recovery LLM call.
 
         Fires only on the recovery branch of ``_execute_with_fallback`` — when
-        the agent loop has raised a recoverable overflow (``Max turns`` /
-        ``context_length_exceeded``) and the runner is about to send a single
-        condensed chat-completions request that bypasses ``Runner.run``.
+        the agent loop has failed with a kind the fallback rescues
+        (``RunErrorKind.MAX_TURNS`` or ``RunErrorKind.CONTEXT_OVERFLOW``, see
+        ``core.run_errors``) and the runner is about to send a single condensed
+        chat-completions request that bypasses ``Runner.run``. A refusal or any
+        other failure never reaches this hook — it propagates instead.
 
         ``prompt`` is the fully-rendered recovery prompt; ``collected_items``
         is the list of raw session items gathered during the failed agent
