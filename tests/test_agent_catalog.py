@@ -202,6 +202,24 @@ class TestAgentCatalog:
         with pytest.raises(KeyError, match="not found"):
             catalog.get("nonexistent")
 
+    def test_get_resolves_guardrails(self):
+        catalog = AgentCatalog(
+            tool_groups={},
+            raw_agents={
+                "guarded": {
+                    "model": "reasoning",
+                    "description": "Guarded agent",
+                    "guardrails": ["block_pii", "block_destructive_cypher"],
+                },
+            },
+        )
+        entry = catalog.get("guarded")
+        assert entry.guardrails == ["block_pii", "block_destructive_cypher"]
+
+    def test_get_defaults_guardrails_to_empty(self):
+        catalog = self._make_catalog()
+        assert catalog.get("always_on").guardrails == []
+
     def test_is_enabled_true(self):
         catalog = self._make_catalog()
         cfg = _make_config(**{"web.enabled": True})

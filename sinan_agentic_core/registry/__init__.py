@@ -17,8 +17,10 @@ from .capability_registry import (
     register_capability,
 )
 from .guardrail_registry import (
+    GuardrailCategory,
     GuardrailDefinition,
     GuardrailRegistry,
+    ResolvedGuardrails,
     get_guardrail_registry,
     register_guardrail,
 )
@@ -54,8 +56,10 @@ __all__ = [
     "ToolYamlEntry",
     "load_tool_catalog",
     "ToolDefinition",
+    "GuardrailCategory",
     "GuardrailRegistry",
     "get_guardrail_registry",
     "register_guardrail",
     "GuardrailDefinition",
+    "ResolvedGuardrails",
 ]

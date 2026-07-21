@@ -6,6 +6,7 @@ execute() with flags for streaming, fallback_on_overflow, etc.
 Also retains run_agent() for backward compatibility.
 """
 
+import copy
 import json
 import logging
 from collections.abc import Callable
@@ -13,11 +14,15 @@ from typing import Any
 
 from agents import (
     Agent,
+    FunctionTool,
     ItemHelpers,
     ModelSettings,
+    RunConfig,
     RunContextWrapper,
     RunHooks,
     Runner,
+    ToolExecutionConfig,
+    ToolInputGuardrail,
     Usage,
 )
 from agents.items import TResponseInputItem
@@ -27,6 +32,7 @@ from ..models import outputs as output_models
 from ..models.context import AgentContext
 from ..registry import get_agent_registry, get_guardrail_registry, get_tool_registry
 from ..registry.agent_registry import AgentDefinition
+from ..registry.guardrail_registry import GuardrailCategory, ResolvedGuardrails
 from ..session import AgentSession, ConversationHistory
 from .capabilities import Capability
 from .errors import structured_tool_error
@@ -60,15 +66,9 @@ class BaseAgentRunner:
             name: tool_def.function for name, tool_def in self.tool_registry._tools.items()
         }
 
-        self.guardrail_map = {
-            name: guardrail_def.function
-            for name, guardrail_def in self.guardrail_registry._guardrails.items()
-        }
-
+        guardrail_names = self.guardrail_registry.list_names()
         logger.debug(f"Loaded {len(self.tool_map)} tools: {list(self.tool_map.keys())}")
-        logger.debug(
-            f"Loaded {len(self.guardrail_map)} guardrails: {list(self.guardrail_map.keys())}"
-        )
+        logger.debug(f"Loaded {len(guardrail_names)} guardrails: {guardrail_names}")
 
     def setup_context(self, **context_data: Any) -> AgentContext:
         """Setup context with provided data.
@@ -140,7 +140,10 @@ class BaseAgentRunner:
         agent_tools.extend(hosted)
         for cap in capabilities or agent_def.capabilities:
             agent_tools.extend(cap.tools())
-        agent_guardrails = self._build_guardrails(agent_def.guardrails)
+        agent_guardrails = self.guardrail_registry.resolve(agent_def.guardrails)
+        agent_tools = self._attach_tool_input_guardrails(
+            agent_tools, agent_guardrails.tool_input_guardrails
+        )
         handoffs = await self._build_handoffs(agent_def.handoffs, context)
         output_type = self._resolve_output_type(agent_def.output_dataclass)
 
@@ -301,6 +304,7 @@ class BaseAgentRunner:
     ) -> Any:
         """Run agent via Runner.run() and return final_output."""
         capabilities = capabilities or []
+        agent_def = self._get_agent_definition(agent_name)
         agent = await self.create_agent(
             agent_name=agent_name,
             context=context,
@@ -324,6 +328,10 @@ class BaseAgentRunner:
         hooks = self._build_hooks(capabilities)
         if hooks:
             run_kwargs["hooks"] = hooks
+
+        run_config = self._build_run_config(agent_def)
+        if run_config is not None:
+            run_kwargs["run_config"] = run_config
 
         result = await Runner.run(**run_kwargs)
 
@@ -372,6 +380,10 @@ class BaseAgentRunner:
         hooks = self._build_hooks(capabilities)
         if hooks:
             run_kwargs["hooks"] = hooks
+
+        run_config = self._build_run_config(agent_def)
+        if run_config is not None:
+            run_kwargs["run_config"] = run_config
 
         try:
             run_result = await Runner.run(**run_kwargs)
@@ -490,6 +502,7 @@ class BaseAgentRunner:
         and returns final_output.
         """
         capabilities = capabilities or []
+        agent_def = self._get_agent_definition(agent_name)
         agent = await self.create_agent(
             agent_name=agent_name,
             context=context,
@@ -516,6 +529,10 @@ class BaseAgentRunner:
         hooks = self._build_hooks(capabilities)
         if hooks:
             run_kwargs["hooks"] = hooks
+
+        run_config = self._build_run_config(agent_def)
+        if run_config is not None:
+            run_kwargs["run_config"] = run_config
 
         result = Runner.run_streamed(**run_kwargs)
 
@@ -664,6 +681,7 @@ class BaseAgentRunner:
             Dict with ``output`` (agent's structured output) and ``usage``
             (token usage dict).
         """
+        agent_def = self._get_agent_definition(agent_name)
         agent = await self.create_agent(
             agent_name=agent_name,
             context=context,
@@ -671,12 +689,18 @@ class BaseAgentRunner:
 
         logger.info(f"Running agent: {agent_name}")
 
-        result = await Runner.run(
-            starting_agent=agent,
-            input=input_message,
-            session=session,
-            context=context,
-        )
+        run_kwargs: dict[str, Any] = {
+            "starting_agent": agent,
+            "input": input_message,
+            "session": session,
+            "context": context,
+        }
+
+        run_config = self._build_run_config(agent_def)
+        if run_config is not None:
+            run_kwargs["run_config"] = run_config
+
+        result = await Runner.run(**run_kwargs)
 
         logger.info(f"Agent '{agent_name}' completed successfully")
 
@@ -753,6 +777,10 @@ class BaseAgentRunner:
                 if agent_def.as_tool_parameters is not None:
                     as_tool_kwargs["parameters"] = agent_def.as_tool_parameters
 
+                sub_run_config = self._build_run_config(agent_def)
+                if sub_run_config is not None:
+                    as_tool_kwargs["run_config"] = sub_run_config
+
                 budget = agent_def.as_tool_turn_budget
                 if budget:
                     budget.reset()
@@ -799,24 +827,60 @@ class BaseAgentRunner:
 
         return tools
 
-    def _build_guardrails(self, guardrail_names: list[str]) -> list[Any]:
-        """Build agent guardrails list.
+    @staticmethod
+    def _attach_tool_input_guardrails(
+        tools: list[Any], guardrails: list[ToolInputGuardrail[Any]]
+    ) -> list[Any]:
+        """Attach tool-input guardrails to every local function tool.
+
+        Registry tools are shared across agents, so each one is copied before
+        its guardrails are set — mutating in place would leak one agent's
+        guardrails into every other agent using the same tool. Non-function
+        tools (hosted tools) pass through untouched: the SDK runs tool-input
+        guardrails for local function tools only.
 
         Args:
-            guardrail_names: List of guardrail names from agent definition
+            tools: Tools already resolved for the agent
+            guardrails: Tool-input guardrails to run before each tool executes
 
         Returns:
-            List of configured guardrail functions
+            The tools list with guardrails attached to its function tools
         """
-        agent_guardrails: list[Any] = []
+        if not guardrails:
+            return tools
 
-        for guardrail_name in guardrail_names:
-            if guardrail_name in self.guardrail_map:
-                agent_guardrails.append(self.guardrail_map[guardrail_name])
-            else:
-                logger.warning(f"Guardrail '{guardrail_name}' not found in registry")
+        guarded_tools: list[Any] = []
+        for tool in tools:
+            if not isinstance(tool, FunctionTool):
+                guarded_tools.append(tool)
+                continue
+            guarded = copy.copy(tool)
+            guarded.tool_input_guardrails = [*(tool.tool_input_guardrails or []), *guardrails]
+            guarded_tools.append(guarded)
 
-        return agent_guardrails
+        return guarded_tools
+
+    def _build_run_config(self, agent_def: Any) -> RunConfig | None:
+        """Build the SDK run config for an agent, or None when defaults apply.
+
+        Declaring a tool-input guardrail opts the agent into running those
+        guardrails *before* the SDK emits a pending-approval interruption, so a
+        rejected call never reaches the tool or a human approver.
+
+        Args:
+            agent_def: Agent definition whose guardrails decide the config
+
+        Returns:
+            Configured RunConfig, or None when no setting differs from the default
+        """
+        if not self.guardrail_registry.has_category(
+            agent_def.guardrails, GuardrailCategory.TOOL_INPUT
+        ):
+            return None
+
+        return RunConfig(
+            tool_execution=ToolExecutionConfig(pre_approval_tool_input_guardrails=True)
+        )
 
     async def _build_handoffs(self, handoff_names: list[str], context: Any) -> list[Any]:
         """Build agent handoffs list.
@@ -892,7 +956,7 @@ class BaseAgentRunner:
         agent_def: Any,
         instructions: str,
         tools: list[Any],
-        guardrails: list[Any],
+        guardrails: ResolvedGuardrails,
         handoffs: list[Any],
         output_type: Any,
         model_settings: Any,
@@ -904,7 +968,9 @@ class BaseAgentRunner:
             agent_def: Agent definition
             instructions: Processed instructions
             tools: Configured tools list
-            guardrails: Configured guardrails list
+            guardrails: Guardrails bucketed by category. Tool-input guardrails
+                are already attached to *tools*, so only the run-level slots
+                are wired here.
             handoffs: Configured handoffs list
             output_type: Resolved output type
             model_settings: Model settings or None
@@ -917,7 +983,8 @@ class BaseAgentRunner:
             "name": agent_def.name,
             "instructions": instructions,
             "tools": tools,
-            "output_guardrails": guardrails if guardrails else [],
+            "input_guardrails": guardrails.input_guardrails,
+            "output_guardrails": guardrails.output_guardrails,
             "model": model_override or agent_def.model,
             "output_type": output_type,
         }

@@ -3,7 +3,11 @@
 import pytest
 
 from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
-from sinan_agentic_core.registry.guardrail_registry import GuardrailDefinition, GuardrailRegistry
+from sinan_agentic_core.registry.guardrail_registry import (
+    GuardrailCategory,
+    GuardrailDefinition,
+    GuardrailRegistry,
+)
 from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
 
 # -- AgentDefinition -----------------------------------------------------------
@@ -234,6 +238,65 @@ class TestGuardrailRegistry:
         all_fns = reg.get_all_functions()
         assert set(all_fns.keys()) == {"a", "b"}
 
+    def test_list_names(self):
+        reg = GuardrailRegistry()
+        reg.register(GuardrailDefinition("a", "d", lambda: None, "input"))
+        reg.register(GuardrailDefinition("b", "d", lambda: None, "output"))
+        assert reg.list_names() == ["a", "b"]
+
+
+# -- Guardrail categories ------------------------------------------------------
+
+
+class TestGuardrailCategory:
+    def test_string_category_is_coerced(self):
+        guard = GuardrailDefinition("g", "d", lambda: None, "tool_input")
+        assert guard.category is GuardrailCategory.TOOL_INPUT
+
+    def test_unknown_category_raises(self):
+        with pytest.raises(ValueError, match="unknown category 'sideways'"):
+            GuardrailDefinition("g", "d", lambda: None, "sideways")
+
+    def test_error_lists_valid_categories(self):
+        with pytest.raises(ValueError, match="input, output, tool_input"):
+            GuardrailDefinition("g", "d", lambda: None, "sideways")
+
+
+class TestResolveGuardrails:
+    @staticmethod
+    def _registry():
+        reg = GuardrailRegistry()
+        reg.register(GuardrailDefinition("gi", "d", lambda: "in", GuardrailCategory.INPUT))
+        reg.register(GuardrailDefinition("go", "d", lambda: "out", GuardrailCategory.OUTPUT))
+        reg.register(GuardrailDefinition("gt", "d", lambda: "tool", GuardrailCategory.TOOL_INPUT))
+        return reg
+
+    def test_splits_by_category(self):
+        resolved = self._registry().resolve(["gi", "go", "gt"])
+        assert [f() for f in resolved.input_guardrails] == ["in"]
+        assert [f() for f in resolved.output_guardrails] == ["out"]
+        assert [f() for f in resolved.tool_input_guardrails] == ["tool"]
+
+    def test_unknown_names_are_skipped(self):
+        resolved = self._registry().resolve(["gi", "missing"])
+        assert len(resolved.input_guardrails) == 1
+        assert resolved.output_guardrails == []
+
+    def test_empty_names_resolve_to_empty_buckets(self):
+        resolved = self._registry().resolve([])
+        assert resolved.input_guardrails == []
+        assert resolved.output_guardrails == []
+        assert resolved.tool_input_guardrails == []
+
+    def test_has_category_true(self):
+        assert self._registry().has_category(["go", "gt"], GuardrailCategory.TOOL_INPUT) is True
+
+    def test_has_category_false(self):
+        assert self._registry().has_category(["gi", "go"], GuardrailCategory.TOOL_INPUT) is False
+
+    def test_has_category_ignores_unknown_names(self):
+        assert self._registry().has_category(["missing"], GuardrailCategory.INPUT) is False
+
 
 # -- register_guardrail decorator + get_guardrail_registry ---------------------
 
@@ -266,7 +329,47 @@ class TestRegisterGuardrailDecorator:
         guard = reg.get_guardrail("_deco_guard")
         assert guard is not None
         assert guard.function is my_guard
-        assert guard.category == "input"
+        assert guard.category is GuardrailCategory.INPUT
+
+    def test_decorator_reports_unknown_category_with_guardrail_name(self):
+        from sinan_agentic_core.registry.guardrail_registry import register_guardrail
+
+        with pytest.raises(ValueError, match="Guardrail '_bad_guard' has unknown category"):
+
+            @register_guardrail(
+                name="_bad_guard",
+                description="bad category",
+                category="sideways",
+            )
+            def my_guard():
+                return "checked"
+
+
+class TestGuardrailPackageExports:
+    """The guardrail surface is reachable from the package root, not just the sub-package."""
+
+    GUARDRAIL_SYMBOLS = (
+        "GuardrailCategory",
+        "GuardrailDefinition",
+        "GuardrailRegistry",
+        "ResolvedGuardrails",
+        "get_guardrail_registry",
+        "register_guardrail",
+    )
+
+    @pytest.mark.parametrize("symbol", GUARDRAIL_SYMBOLS)
+    def test_exported_from_package_root(self, symbol):
+        import sinan_agentic_core as pkg
+
+        assert hasattr(pkg, symbol)
+        assert symbol in pkg.__all__
+
+    @pytest.mark.parametrize("symbol", GUARDRAIL_SYMBOLS)
+    def test_exported_from_registry_package(self, symbol):
+        import sinan_agentic_core.registry as registry
+
+        assert hasattr(registry, symbol)
+        assert symbol in registry.__all__
 
 
 # -- AgentFactory --------------------------------------------------------------
