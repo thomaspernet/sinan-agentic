@@ -82,5 +82,5 @@ class AgentOrchestrator(BaseAgentRunner):
 
         except Exception as e:
             payload = run_error_payload(e)
-            logger.error("Orchestration failed with %s: %s", payload["error_kind"], e)
+            logger.error("Orchestration failed (%s): %s", payload["error_kind"], e, exc_info=True)
             return {"success": False, **payload, "session_id": session.session_id}
