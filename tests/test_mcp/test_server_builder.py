@@ -92,11 +92,25 @@ def mcp_config():
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def listed_tools(server):
+    """Map the server's advertised MCP tools by name.
+
+    Uses the server's public tool-listing API — the same view an MCP client
+    gets — rather than reading the SDK's internal tool manager.
+    """
+    return {tool.name: tool for tool in await server.list_tools()}
+
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
 
-def test_build_server_read_only(registry, catalog, mcp_config):
+async def test_build_server_read_only(registry, catalog, mcp_config):
     """Read-only server should have only read tools."""
     catalog.enrich_registry(registry)
 
@@ -109,13 +123,13 @@ def test_build_server_read_only(registry, catalog, mcp_config):
         include_write_tools=False,
     )
 
-    tools = server._tool_manager._tools
+    tools = await listed_tools(server)
     assert "discover" in tools
     assert "search" in tools
     assert "create_page" not in tools
 
 
-def test_build_server_with_writes(registry, catalog, mcp_config):
+async def test_build_server_with_writes(registry, catalog, mcp_config):
     """With include_write_tools, write tools should be registered."""
     catalog.enrich_registry(registry)
 
@@ -128,13 +142,13 @@ def test_build_server_with_writes(registry, catalog, mcp_config):
         include_write_tools=True,
     )
 
-    tools = server._tool_manager._tools
+    tools = await listed_tools(server)
     assert "discover" in tools
     assert "search" in tools
     assert "create_page" in tools
 
 
-def test_build_server_descriptions_from_yaml(registry, catalog, mcp_config):
+async def test_build_server_descriptions_from_yaml(registry, catalog, mcp_config):
     """Descriptions should come from YAML (via catalog enrichment), not code."""
     catalog.enrich_registry(registry)
 
@@ -146,11 +160,11 @@ def test_build_server_descriptions_from_yaml(registry, catalog, mcp_config):
         context_factory=FakeFactory(),
     )
 
-    discover_tool = server._tool_manager._tools["discover"]
-    assert discover_tool.description == "Discover what's available in the graph"
+    tools = await listed_tools(server)
+    assert tools["discover"].description == "Discover what's available in the graph"
 
 
-def test_build_server_annotations(registry, catalog, mcp_config):
+async def test_build_server_annotations(registry, catalog, mcp_config):
     """MCP annotations should be applied from YAML config."""
     catalog.enrich_registry(registry)
 
@@ -162,12 +176,12 @@ def test_build_server_annotations(registry, catalog, mcp_config):
         context_factory=FakeFactory(),
     )
 
-    discover_tool = server._tool_manager._tools["discover"]
-    assert discover_tool.annotations is not None
-    assert discover_tool.annotations.readOnlyHint is True
+    annotations = (await listed_tools(server))["discover"].annotations
+    assert annotations is not None
+    assert annotations.readOnlyHint is True
 
 
-def test_build_server_missing_tool_skipped(registry, catalog):
+async def test_build_server_missing_tool_skipped(registry, catalog):
     """Tools listed in config but not registered should be skipped."""
     catalog.enrich_registry(registry)
 
@@ -184,12 +198,12 @@ def test_build_server_missing_tool_skipped(registry, catalog):
         context_factory=FakeFactory(),
     )
 
-    tools = server._tool_manager._tools
+    tools = await listed_tools(server)
     assert "discover" in tools
     assert "nonexistent_tool" not in tools
 
 
-def test_build_server_tool_schema(registry, catalog, mcp_config):
+async def test_build_server_tool_schema(registry, catalog, mcp_config):
     """Tool parameters schema should be correct."""
     catalog.enrich_registry(registry)
 
@@ -201,13 +215,11 @@ def test_build_server_tool_schema(registry, catalog, mcp_config):
         context_factory=FakeFactory(),
     )
 
-    search_tool = server._tool_manager._tools["search"]
-    schema = search_tool.parameters
+    schema = (await listed_tools(server))["search"].inputSchema
     assert "query" in schema["properties"]
     assert "limit" in schema["properties"]
 
 
-@pytest.mark.asyncio
 async def test_build_server_tool_invocable(registry, catalog, mcp_config):
     """Built MCP tools should be callable and return correct results."""
     catalog.enrich_registry(registry)
@@ -220,8 +232,7 @@ async def test_build_server_tool_invocable(registry, catalog, mcp_config):
         context_factory=FakeFactory(),
     )
 
-    # Get the tool's handler and call it
-    discover_tool = server._tool_manager._tools["discover"]
-    result = await discover_tool.fn(target="entities")
-    data = json.loads(result)
+    # Dispatch through the server the way an MCP client would
+    content, _structured = await server.call_tool("discover", {"target": "entities"})
+    data = json.loads(content[0].text)
     assert data["target"] == "entities"
