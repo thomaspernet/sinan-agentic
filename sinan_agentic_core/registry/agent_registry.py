@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..core.capabilities import Capability
+from ..core.model_retry import ModelRetryConfig
 
 
 @dataclass
@@ -29,6 +30,9 @@ class AgentDefinition:
     # Re-parse a final message whose structured payload is wrapped in prose or
     # a code fence instead of failing the run. Never fabricates a value.
     invalid_output_recovery: bool = True
+    # Retry transient model-API failures inside the SDK instead of failing the
+    # run. Off unless declared — retries cost latency and duplicate requests.
+    model_retry: ModelRetryConfig | None = None
     requires_schema_injection: bool = False  # If True, inject {schema} dynamically
     knowledge_text: str = ""  # Domain knowledge from catalog (injected via domain_knowledge())
     as_tool_parameters: Any | None = (

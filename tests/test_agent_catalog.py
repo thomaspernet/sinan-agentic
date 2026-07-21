@@ -6,8 +6,10 @@ from typing import Any
 
 import pytest
 from agents import RunContextWrapper
+from pydantic import ValidationError
 
 from sinan_agentic_core.core.capabilities import Capability
+from sinan_agentic_core.core.model_retry import RetryTrigger
 from sinan_agentic_core.core.tool_error_recovery import ToolErrorRecovery
 from sinan_agentic_core.core.turn_budget import TurnBudget
 from sinan_agentic_core.registry.agent_catalog import (
@@ -904,3 +906,62 @@ class TestInvalidOutputRecovery:
                     invalid_output_recovery: false
             """))
         assert load_agent_catalog(path).get("extractor").invalid_output_recovery is False
+
+
+# ---------------------------------------------------------------------------
+# model_retry key
+# ---------------------------------------------------------------------------
+
+
+class TestModelRetry:
+    def _catalog(self, entry: dict) -> AgentCatalog:
+        return AgentCatalog(tool_groups={}, raw_agents={"researcher": entry})
+
+    def test_defaults_to_off(self) -> None:
+        catalog = self._catalog({"model": "fast", "description": "Reads papers"})
+        assert catalog.get("researcher").model_retry is None
+
+    def test_parses_the_declared_policy(self) -> None:
+        catalog = self._catalog(
+            {
+                "model": "fast",
+                "description": "Reads papers",
+                "model_retry": {"max_retries": 3, "retry_on": ["retry_after"]},
+            }
+        )
+        retry = catalog.get("researcher").model_retry
+
+        assert retry.max_retries == 3
+        assert retry.retry_on == [RetryTrigger.RETRY_AFTER]
+
+    def test_rejects_an_unknown_trigger(self) -> None:
+        catalog = self._catalog(
+            {
+                "model": "fast",
+                "description": "Reads papers",
+                "model_retry": {"retry_on": ["sometimes"]},
+            }
+        )
+        with pytest.raises(ValidationError):
+            catalog.get("researcher")
+
+    def test_loads_from_yaml(self, tmp_path) -> None:
+        path = tmp_path / "agents.yaml"
+        path.write_text(textwrap.dedent("""\
+                agents:
+                  researcher:
+                    model: fast
+                    description: Reads papers
+                    model_retry:
+                      max_retries: 3
+                      retry_on: [provider_suggested]
+                      backoff:
+                        initial_delay: 0.5
+                        max_delay: 8.0
+            """))
+        retry = load_agent_catalog(path).get("researcher").model_retry
+
+        assert retry.max_retries == 3
+        assert retry.retry_on == [RetryTrigger.PROVIDER_SUGGESTED]
+        assert retry.backoff.initial_delay == 0.5
+        assert retry.backoff.max_delay == 8.0

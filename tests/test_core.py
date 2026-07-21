@@ -9,6 +9,8 @@ from agents import (
     Agent,
     GuardrailFunctionOutput,
     ModelBehaviorError,
+    ModelRetrySettings,
+    ModelSettings,
     ToolGuardrailFunctionOutput,
     Usage,
     function_tool,
@@ -18,6 +20,7 @@ from agents import (
 )
 
 from sinan_agentic_core.core.base_runner import BaseAgentRunner, _CollectingSessionWrapper
+from sinan_agentic_core.core.model_retry import ModelRetryConfig
 from sinan_agentic_core.core.output_recovery import recover_invalid_final_output
 from sinan_agentic_core.models.context import AgentContext
 from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
@@ -1599,3 +1602,131 @@ class TestFallbackBranchOutputRecovery:
             await self._run_fallback(
                 recovery_runner, "strict_agent", '```json\n{"answer": "yes"}\n```'
             )
+
+
+# ------------------------------------------------------------------ #
+# Model retry policies (ModelSettings.retry wiring)
+# ------------------------------------------------------------------ #
+
+
+@pytest.fixture
+def retry_runner(_registries):
+    """Runner with one agent declaring a retry policy and one leaving it off."""
+    agent_reg, tool_reg, guardrail_reg = _registries
+    agent_reg.register(
+        AgentDefinition(
+            name="retrying_agent",
+            description="retries",
+            instructions="answer",
+            model_retry=ModelRetryConfig(max_retries=4),
+        )
+    )
+    agent_reg.register(
+        AgentDefinition(name="plain_agent", description="plain", instructions="answer")
+    )
+
+    with (
+        patch("sinan_agentic_core.core.base_runner.get_agent_registry", return_value=agent_reg),
+        patch("sinan_agentic_core.core.base_runner.get_tool_registry", return_value=tool_reg),
+        patch(
+            "sinan_agentic_core.core.base_runner.get_guardrail_registry", return_value=guardrail_reg
+        ),
+    ):
+        return BaseAgentRunner()
+
+
+class TestModelRetryWiring:
+    def test_build_model_retry_translates_the_declared_config(self, retry_runner):
+        agent_def = retry_runner._get_agent_definition("retrying_agent")
+        settings = retry_runner._build_model_retry(agent_def)
+
+        assert settings.max_retries == 4
+        assert settings.policy is not None
+
+    def test_build_model_retry_none_when_not_declared(self, retry_runner):
+        agent_def = retry_runner._get_agent_definition("plain_agent")
+        assert retry_runner._build_model_retry(agent_def) is None
+
+    async def test_create_agent_attaches_retry(self, retry_runner, context):
+        agent = await retry_runner.create_agent("retrying_agent", context)
+
+        assert agent.model_settings.retry.max_retries == 4
+
+    async def test_create_agent_leaves_retry_unset_when_not_declared(self, retry_runner, context):
+        agent = await retry_runner.create_agent("plain_agent", context)
+
+        assert agent.model_settings.retry is None
+
+    async def test_retry_merges_with_computed_model_settings(self, retry_runner, context):
+        """A dynamic model_settings_fn keeps its values and gains the retry policy."""
+        agent_def = retry_runner._get_agent_definition("retrying_agent")
+        agent_def.model_settings_fn = lambda ctx: ModelSettings(temperature=0.2)
+
+        agent = await retry_runner.create_agent("retrying_agent", context)
+
+        assert agent.model_settings.temperature == 0.2
+        assert agent.model_settings.retry.max_retries == 4
+
+    async def test_retry_survives_a_model_settings_override(self, retry_runner, context):
+        """An override replaces the computed settings but must not drop the policy."""
+        agent = await retry_runner.create_agent(
+            "retrying_agent", context, model_settings_override=ModelSettings(temperature=0.9)
+        )
+
+        assert agent.model_settings.temperature == 0.9
+        assert agent.model_settings.retry.max_retries == 4
+
+    async def test_agent_as_tool_sub_agent_carries_the_policy(self, retry_runner, context):
+        """Retry rides on model settings, so it reaches the branch error_handlers cannot."""
+        with patch.object(Agent, "as_tool", autospec=True, return_value=Mock()) as mock_as_tool:
+            await retry_runner._build_tools(["retrying_agent"], context)
+
+        sub_agent = mock_as_tool.call_args.args[0]
+        assert sub_agent.model_settings.retry.max_retries == 4
+
+    async def test_explicit_retry_on_an_override_wins(self, retry_runner, context):
+        agent = await retry_runner.create_agent(
+            "retrying_agent",
+            context,
+            model_settings_override=ModelSettings(retry=ModelRetrySettings(max_retries=9)),
+        )
+
+        assert agent.model_settings.retry.max_retries == 9
+
+    async def _run_fallback(self, runner, agent_name):
+        """Drive the SDK-bypassing recovery branch and return its OpenAI client mock."""
+        completion = Mock()
+        completion.choices = [Mock()]
+        completion.choices[0].message.content = "rescued"
+        completion.usage = None
+
+        client = AsyncMock()
+        client.chat.completions.create = AsyncMock(return_value=completion)
+        client.with_options = Mock(return_value=client)
+
+        with (
+            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("openai.AsyncOpenAI", return_value=client),
+        ):
+            mock_runner_cls.run = AsyncMock(side_effect=RuntimeError("Max turns exceeded"))
+            await runner._execute_with_fallback(
+                agent_name,
+                AgentContext(database_connector=Mock()),
+                AgentSession(session_id="s1"),
+                10,
+                "hello",
+                None,
+            )
+        return client
+
+    async def test_fallback_branch_honors_the_declared_attempt_count(self, retry_runner):
+        """The branch bypasses Runner.run, so the budget rides the client's own retry."""
+        client = await self._run_fallback(retry_runner, "retrying_agent")
+
+        client.with_options.assert_called_once_with(max_retries=4)
+
+    async def test_fallback_branch_leaves_the_client_alone_when_not_declared(self, retry_runner):
+        client = await self._run_fallback(retry_runner, "plain_agent")
+
+        client.with_options.assert_not_called()

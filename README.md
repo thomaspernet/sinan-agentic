@@ -24,6 +24,7 @@ A framework for building AI agents using the OpenAI Agents SDK. Fork this reposi
 - **Tool Catalog** - Load tool metadata (description, category, recovery hints) from a YAML file
 - **Knowledge Store** - Inject domain knowledge from YAML files into agent system prompts
 - **Structured Agent-as-Tool** - Typed input schemas and structured error handling for sub-agent calls
+- **Model Retry Policies** - Declare `model_retry` on an agent and transient model-API failures retry inside the SDK instead of failing the run
 - **Capabilities** - Pluggable agent behaviors (turn budgets, error recovery, tool tracing, custom hooks) - write a `Capability` subclass and attach it to an `AgentDefinition`. See [`documentation/project/capabilities.md`](documentation/project/capabilities.md).
 - **MCP Server** - Expose registered tools as an MCP server (stdio or HTTP) with zero description duplication - all metadata comes from `tools.yaml`
 
@@ -938,6 +939,52 @@ result = await Runner.run(
 ```
 
 Sub-agents built with `as_tool()` are the one gap — the SDK's `as_tool()` has no `error_handlers` parameter, so a nested agent's invalid structured output still raises.
+
+## Model Retry Policies
+
+A rate limit, a 503, or a dropped connection fails the whole run — even though the next attempt would have succeeded. The SDK can retry the model call itself, but only when `ModelSettings.retry` carries both an attempt budget *and* a policy callback; with either missing it never retries.
+
+Declare `model_retry` on an agent and the runner builds that object for you. It reaches every execution path — `execute()` in all three modes, `run_agent()`, handoffs, and `as_tool()` sub-agents — because retry rides on the agent's model settings rather than on a per-run argument.
+
+Retry is off unless declared: a retried call costs latency and a second billed request.
+
+```yaml
+# agents.yaml
+agents:
+  researcher:
+    model: gpt-4o-mini
+    description: Reads papers and summarizes findings
+    model_retry:
+      max_retries: 3               # attempts after the initial request
+      retry_on: [provider_suggested, network_error]
+      backoff:                     # optional — SDK defaults fill any unset field
+        initial_delay: 0.5
+        max_delay: 8.0
+```
+
+```python
+from sinan_agentic_core import AgentDefinition, ModelRetryConfig, register_agent
+
+register_agent(AgentDefinition(
+    name="researcher",
+    description=cfg.description,
+    instructions=build_researcher_instructions,
+    model_retry=cfg.model_retry,          # from agents.yaml
+    # ...or inline: ModelRetryConfig(max_retries=3)
+))
+```
+
+`retry_on` lists the error classes worth another attempt. Defaults to `[provider_suggested, network_error]`.
+
+| Trigger | Retries when |
+|---------|--------------|
+| `provider_suggested` | The model adapter advises it. For OpenAI: 408, 409, 429, every 5xx, connection errors and timeouts — honoring an `x-should-retry` header or a `Retry-After` delay when one is sent. |
+| `network_error` | The call failed with a connection error or a timeout, whatever the provider advises. |
+| `retry_after` | The error carries an explicit `Retry-After` delay, and waits exactly that long. |
+
+Triggers combine: the call is retried when any listed trigger matches. A delay supplied by the error (`Retry-After`) always wins over the `backoff` schedule.
+
+The overflow-fallback path is the one partial case. Its rescue call goes straight to the OpenAI client instead of through the runner, so it honors `max_retries` but not `retry_on` or `backoff`.
 
 ## Tool Tracer (Non-Streaming Observability)
 
