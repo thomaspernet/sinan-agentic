@@ -1,0 +1,156 @@
+"""Tests for declarative tool-output trimming (core/tool_output_trim.py)."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+from agents import Agent
+from agents.extensions import ToolOutputTrimmer
+from agents.run_config import CallModelData, ModelInputData
+from pydantic import ValidationError
+
+from sinan_agentic_core.core.tool_output_trim import ToolOutputTrimConfig
+
+BULKY_OUTPUT = "x" * 3000
+
+
+def _conversation(tool_name: str = "web_search", output: str = BULKY_OUTPUT) -> list[Any]:
+    """One answered tool call from an older turn, followed by a newer user turn."""
+    return [
+        {"role": "user", "content": "first question"},
+        {"type": "function_call", "call_id": "c1", "name": tool_name, "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": output},
+        {"role": "user", "content": "second question"},
+    ]
+
+
+def _filtered(trimmer: ToolOutputTrimmer, items: list[Any]) -> list[Any]:
+    """Run the trimmer the way the SDK does before a model call."""
+    data: CallModelData[None] = CallModelData(
+        model_data=ModelInputData(input=items, instructions=None),
+        agent=Agent(name="agent"),
+        context=None,
+    )
+    return trimmer(data).input
+
+
+def _tool_output(items: list[Any]) -> str:
+    return next(item["output"] for item in items if item.get("type") == "function_call_output")
+
+
+class TestConfigDefaults:
+    def test_declaring_nothing_leaves_every_field_to_the_sdk(self) -> None:
+        """``tool_output_trim: {}`` is a valid opt-in that takes SDK defaults."""
+        assert ToolOutputTrimConfig().build() == ToolOutputTrimmer()
+
+    def test_unset_tools_make_every_tool_eligible(self) -> None:
+        assert ToolOutputTrimConfig().build().trimmable_tools is None
+
+
+class TestConfigValidation:
+    def test_rejects_empty_tool_list(self) -> None:
+        """No eligible tool would run the filter on every call and trim nothing."""
+        with pytest.raises(ValidationError):
+            ToolOutputTrimConfig(trimmable_tools=[])
+
+    def test_rejects_a_preview_at_least_as_large_as_the_cap(self) -> None:
+        """Such a preview never shortens an output, so the filter is a no-op."""
+        with pytest.raises(ValidationError):
+            ToolOutputTrimConfig(max_output_chars=500, preview_chars=500)
+
+    def test_rejects_zero_recent_turns(self) -> None:
+        with pytest.raises(ValidationError):
+            ToolOutputTrimConfig(recent_turns=0)
+
+    def test_rejects_zero_max_output_chars(self) -> None:
+        with pytest.raises(ValidationError):
+            ToolOutputTrimConfig(max_output_chars=0)
+
+    def test_rejects_negative_preview_chars(self) -> None:
+        with pytest.raises(ValidationError):
+            ToolOutputTrimConfig(preview_chars=-1)
+
+    def test_allows_a_preview_below_the_cap(self) -> None:
+        config = ToolOutputTrimConfig(max_output_chars=500, preview_chars=200)
+
+        assert config.preview_chars == 200
+
+
+class TestBuild:
+    def test_declared_fields_map_onto_the_sdk_filter(self) -> None:
+        trimmer = ToolOutputTrimConfig(
+            recent_turns=3,
+            max_output_chars=4000,
+            preview_chars=500,
+            trimmable_tools=["web_search"],
+        ).build()
+
+        assert isinstance(trimmer, ToolOutputTrimmer)
+        assert trimmer.recent_turns == 3
+        assert trimmer.max_output_chars == 4000
+        assert trimmer.preview_chars == 500
+        assert trimmer.trimmable_tools == frozenset({"web_search"})
+
+    def test_a_partial_config_leaves_unset_fields_to_the_sdk(self) -> None:
+        trimmer = ToolOutputTrimConfig(max_output_chars=4000).build()
+
+        assert trimmer.max_output_chars == 4000
+        assert trimmer.recent_turns == ToolOutputTrimmer().recent_turns
+        assert trimmer.preview_chars == ToolOutputTrimmer().preview_chars
+
+
+class TestFilterBehavior:
+    """The built filter is what the SDK actually calls before each model call."""
+
+    def test_an_oversized_older_output_is_replaced_by_a_preview(self) -> None:
+        trimmer = ToolOutputTrimConfig(
+            recent_turns=1, max_output_chars=500, preview_chars=100
+        ).build()
+
+        output = _tool_output(_filtered(trimmer, _conversation()))
+
+        assert len(output) < len(BULKY_OUTPUT)
+        assert "web_search" in output
+
+    def test_an_output_under_the_cap_is_left_alone(self) -> None:
+        trimmer = ToolOutputTrimConfig(
+            recent_turns=1, max_output_chars=500, preview_chars=100
+        ).build()
+
+        items = _filtered(trimmer, _conversation(output="short answer"))
+
+        assert _tool_output(items) == "short answer"
+
+    def test_recent_turns_are_never_trimmed(self) -> None:
+        """The tool call sits inside the window, so its size does not matter."""
+        trimmer = ToolOutputTrimConfig(
+            recent_turns=2, max_output_chars=500, preview_chars=100
+        ).build()
+
+        items = _filtered(trimmer, _conversation())
+
+        assert _tool_output(items) == BULKY_OUTPUT
+
+    def test_a_tool_outside_the_declared_list_is_left_alone(self) -> None:
+        trimmer = ToolOutputTrimConfig(
+            recent_turns=1,
+            max_output_chars=500,
+            preview_chars=100,
+            trimmable_tools=["web_search"],
+        ).build()
+
+        items = _filtered(trimmer, _conversation(tool_name="read_file"))
+
+        assert _tool_output(items) == BULKY_OUTPUT
+
+    def test_the_original_items_are_not_mutated(self) -> None:
+        """The SDK replays session items, so the filter must copy rather than edit."""
+        trimmer = ToolOutputTrimConfig(
+            recent_turns=1, max_output_chars=500, preview_chars=100
+        ).build()
+        items = _conversation()
+
+        _filtered(trimmer, items)
+
+        assert _tool_output(items) == BULKY_OUTPUT

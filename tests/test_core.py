@@ -22,6 +22,7 @@ from agents import (
 from sinan_agentic_core.core.base_runner import BaseAgentRunner, _CollectingSessionWrapper
 from sinan_agentic_core.core.model_retry import ModelRetryConfig
 from sinan_agentic_core.core.output_recovery import recover_invalid_final_output
+from sinan_agentic_core.core.tool_output_trim import ToolOutputTrimConfig
 from sinan_agentic_core.models.context import AgentContext
 from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
 from sinan_agentic_core.registry.guardrail_registry import (
@@ -1730,3 +1731,150 @@ class TestModelRetryWiring:
         client = await self._run_fallback(retry_runner, "plain_agent")
 
         client.with_options.assert_not_called()
+
+
+# ------------------------------------------------------------------ #
+# Tool-output trimming (RunConfig.call_model_input_filter wiring)
+# ------------------------------------------------------------------ #
+
+
+@pytest.fixture
+def trim_runner(_registries):
+    """Runner with agents covering each combination of trimming and tool guardrails."""
+    agent_reg, tool_reg, guardrail_reg = _registries
+    guardrail_reg.register(
+        GuardrailDefinition(
+            "guard_tool_input",
+            "desc",
+            tool_input_guardrail(lambda data: ToolGuardrailFunctionOutput()),
+            "tool_input",
+        )
+    )
+    agent_reg.register(
+        AgentDefinition(
+            name="trimming_agent",
+            description="trims",
+            instructions="answer",
+            tool_output_trim=ToolOutputTrimConfig(recent_turns=3, max_output_chars=4000),
+        )
+    )
+    agent_reg.register(
+        AgentDefinition(
+            name="trimming_guarded_agent",
+            description="trims and guards",
+            instructions="answer",
+            guardrails=["guard_tool_input"],
+            tool_output_trim=ToolOutputTrimConfig(max_output_chars=4000),
+        )
+    )
+    agent_reg.register(
+        AgentDefinition(name="plain_agent", description="plain", instructions="answer")
+    )
+
+    with (
+        patch("sinan_agentic_core.core.base_runner.get_agent_registry", return_value=agent_reg),
+        patch("sinan_agentic_core.core.base_runner.get_tool_registry", return_value=tool_reg),
+        patch(
+            "sinan_agentic_core.core.base_runner.get_guardrail_registry", return_value=guardrail_reg
+        ),
+    ):
+        return BaseAgentRunner()
+
+
+class TestToolOutputTrimWiring:
+    def test_build_trimmer_translates_the_declared_config(self, trim_runner):
+        agent_def = trim_runner._get_agent_definition("trimming_agent")
+        trimmer = trim_runner._build_tool_output_trimmer(agent_def)
+
+        assert trimmer.recent_turns == 3
+        assert trimmer.max_output_chars == 4000
+
+    def test_build_trimmer_none_when_not_declared(self, trim_runner):
+        agent_def = trim_runner._get_agent_definition("plain_agent")
+        assert trim_runner._build_tool_output_trimmer(agent_def) is None
+
+    def test_run_config_carries_the_filter(self, trim_runner):
+        agent_def = trim_runner._get_agent_definition("trimming_agent")
+        run_config = trim_runner._build_run_config(agent_def)
+
+        assert run_config.call_model_input_filter.max_output_chars == 4000
+
+    def test_run_config_omits_the_filter_when_not_declared(self, trim_runner):
+        agent_def = trim_runner._get_agent_definition("plain_agent")
+        assert trim_runner._build_run_config(agent_def) is None
+
+    def test_trimming_composes_with_tool_input_pre_approval(self, trim_runner):
+        """Both settings share one RunConfig — declaring either must not drop the other."""
+        agent_def = trim_runner._get_agent_definition("trimming_guarded_agent")
+        run_config = trim_runner._build_run_config(agent_def)
+
+        assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
+        assert run_config.call_model_input_filter.max_output_chars == 4000
+
+    async def test_execute_basic_passes_the_filter(self, trim_runner, context):
+        result = Mock(final_output="ok", context_wrapper=Mock(usage=Usage()))
+
+        with patch(
+            "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
+        ) as mock_run:
+            await trim_runner.execute("trimming_agent", context, AgentSession(session_id="s1"))
+
+        run_config = mock_run.call_args.kwargs["run_config"]
+        assert run_config.call_model_input_filter.max_output_chars == 4000
+
+    async def test_execute_with_fallback_passes_the_filter(self, trim_runner, context):
+        result = Mock(final_output="ok", context_wrapper=Mock(usage=Usage()))
+
+        with patch(
+            "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
+        ) as mock_run:
+            await trim_runner.execute(
+                "trimming_agent",
+                context,
+                AgentSession(session_id="s1"),
+                fallback_on_overflow=True,
+            )
+
+        run_config = mock_run.call_args.kwargs["run_config"]
+        assert run_config.call_model_input_filter.max_output_chars == 4000
+
+    async def test_execute_streamed_passes_the_filter(self, trim_runner, context):
+        stream = Mock(final_output="ok", raw_responses=[])
+
+        async def no_events():
+            return
+            yield
+
+        stream.stream_events = no_events
+
+        with patch(
+            "sinan_agentic_core.core.base_runner.Runner.run_streamed", return_value=stream
+        ) as mock_run:
+            await trim_runner.execute(
+                "trimming_agent",
+                context,
+                AgentSession(session_id="s1"),
+                streaming=True,
+                on_event=lambda e: None,
+            )
+
+        run_config = mock_run.call_args.kwargs["run_config"]
+        assert run_config.call_model_input_filter.max_output_chars == 4000
+
+    async def test_run_agent_passes_the_filter(self, trim_runner, context):
+        result = Mock(final_output="ok", raw_responses=[])
+
+        with patch(
+            "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
+        ) as mock_run:
+            await trim_runner.run_agent("trimming_agent", AgentSession(session_id="s1"), context)
+
+        run_config = mock_run.call_args.kwargs["run_config"]
+        assert run_config.call_model_input_filter.max_output_chars == 4000
+
+    async def test_agent_as_tool_sub_agent_passes_the_filter(self, trim_runner, context):
+        with patch.object(Agent, "as_tool", return_value=Mock()) as mock_as_tool:
+            await trim_runner._build_tools(["trimming_agent"], context)
+
+        run_config = mock_as_tool.call_args.kwargs["run_config"]
+        assert run_config.call_model_input_filter.max_output_chars == 4000
