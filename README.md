@@ -897,6 +897,48 @@ After repeated identical failures:
 | `mcp_hints` | `{}` | Dict mapping MCP tool names to hint strings |
 | `max_identical_before_stop` | 3 | Stop threshold for identical-argument retries |
 
+## Structured Output Recovery
+
+An agent with an `output_dataclass` fails its whole run when the model's final message does not parse — including when the payload itself is fine but the model wrapped it in a ```` ```json ```` fence or a "Here is the result:" preamble. The SDK hands the raw message straight to Pydantic, so those runs raise `ModelBehaviorError` even though the answer is right there.
+
+Every run started through `BaseAgentRunner` installs a recovery handler that re-reads the message, finds the embedded payload, and validates it against the agent's own output schema. It never fabricates a value: anything that does not satisfy the schema is not recovered, and the run raises as before.
+
+Recovery is on by default and covers `execute()` in all three modes plus the overflow-fallback LLM call. Turn it off per agent when a malformed response must fail loudly:
+
+```yaml
+# agents.yaml
+agents:
+  extractor:
+    model: gpt-4o-mini
+    description: Extracts structured records
+    invalid_output_recovery: false
+```
+
+```python
+register_agent(AgentDefinition(
+    name="extractor",
+    description=cfg.description,
+    instructions=build_extractor_instructions,
+    output_dataclass=ExtractionResult,
+    invalid_output_recovery=cfg.invalid_output_recovery,
+))
+```
+
+Running `Runner.run()` directly instead of through `BaseAgentRunner`? Pass the same handler to get the same behavior:
+
+```python
+from agents import Runner
+from sinan_agentic_core import recover_invalid_final_output
+
+result = await Runner.run(
+    agent,
+    "Extract the records",
+    error_handlers={"invalid_final_output": recover_invalid_final_output},
+)
+```
+
+Sub-agents built with `as_tool()` are the one gap — the SDK's `as_tool()` has no `error_handlers` parameter, so a nested agent's invalid structured output still raises.
+
 ## Tool Tracer (Non-Streaming Observability)
 
 The streaming path emits per-tool events through `on_event`, but non-streaming runs (`streaming=False`, the default) have no equivalent channel. `ToolTracer` is a built-in `Capability` that prints one line per tool call and agent boundary, so non-streaming consumers can see what the agent is doing without leaving the framework or reading `session.history` after the fact.
@@ -1162,6 +1204,7 @@ sinan_agentic_core/
 │   │   ├── __init__.py
 │   │   └── base.py               # Capability base class + lifecycle hooks
 │   ├── errors.py                 # structured_tool_error for agent-as-tool failures
+│   ├── output_recovery.py        # invalid_final_output handler (salvages structured output)
 │   ├── tool_error_recovery.py    # ToolErrorRecovery capability
 │   ├── tool_tracer.py            # ToolTracer capability (non-streaming tool-call tracing)
 │   ├── turn_budget.py            # TurnBudget capability + TurnBudgetHooks

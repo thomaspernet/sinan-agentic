@@ -88,6 +88,7 @@ class AgentYamlEntry(BaseModel):
     max_turns: int | None = None
     turn_budget: TurnBudgetConfig | None = None
     error_recovery: bool = True
+    invalid_output_recovery: bool = True
     capabilities: list[CapabilityRef] = []
     effort: str | None = None
     tool_rules: dict[str, dict[str, Any]] = {}
@@ -308,6 +309,7 @@ class AgentCatalog:
             max_turns=raw.get("max_turns"),
             turn_budget=budget_cfg,
             error_recovery=raw.get("error_recovery", True),
+            invalid_output_recovery=raw.get("invalid_output_recovery", True),
             capabilities=capabilities,
             tool_rules=raw.get("tool_rules", {}),
             effort=raw.get("effort"),

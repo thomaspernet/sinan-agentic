@@ -873,3 +873,34 @@ class TestCatalogIntegrationWithCapabilities:
         assert built[0].default_turns == 12
         assert built[2].label == "from_yaml"
         assert built[2].level == 9
+
+
+# ---------------------------------------------------------------------------
+# invalid_output_recovery key
+# ---------------------------------------------------------------------------
+
+
+class TestInvalidOutputRecovery:
+    def _catalog(self, entry: dict) -> AgentCatalog:
+        return AgentCatalog(tool_groups={}, raw_agents={"extractor": entry})
+
+    def test_defaults_to_enabled(self) -> None:
+        catalog = self._catalog({"model": "fast", "description": "Extracts"})
+        assert catalog.get("extractor").invalid_output_recovery is True
+
+    def test_can_be_disabled(self) -> None:
+        catalog = self._catalog(
+            {"model": "fast", "description": "Extracts", "invalid_output_recovery": False}
+        )
+        assert catalog.get("extractor").invalid_output_recovery is False
+
+    def test_loads_from_yaml(self, tmp_path) -> None:
+        path = tmp_path / "agents.yaml"
+        path.write_text(textwrap.dedent("""\
+                agents:
+                  extractor:
+                    model: fast
+                    description: Extracts
+                    invalid_output_recovery: false
+            """))
+        assert load_agent_catalog(path).get("extractor").invalid_output_recovery is False

@@ -7,7 +7,6 @@ Also retains run_agent() for backward compatibility.
 """
 
 import copy
-import json
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -16,9 +15,11 @@ from agents import (
     Agent,
     FunctionTool,
     ItemHelpers,
+    ModelBehaviorError,
     ModelSettings,
     RunConfig,
     RunContextWrapper,
+    RunErrorHandlers,
     RunHooks,
     Runner,
     ToolExecutionConfig,
@@ -36,6 +37,11 @@ from ..registry.guardrail_registry import GuardrailCategory, ResolvedGuardrails
 from ..session import AgentSession, ConversationHistory
 from .capabilities import Capability
 from .errors import structured_tool_error
+from .output_recovery import (
+    build_output_schema,
+    recover_invalid_final_output,
+    salvage_structured_output,
+)
 from .tool_error_recovery import ToolErrorRecovery
 from .turn_budget import TurnBudget
 from .turn_budget_tool import request_extension_tool
@@ -333,6 +339,10 @@ class BaseAgentRunner:
         if run_config is not None:
             run_kwargs["run_config"] = run_config
 
+        error_handlers = self._build_error_handlers(agent_def)
+        if error_handlers is not None:
+            run_kwargs["error_handlers"] = error_handlers
+
         result = await Runner.run(**run_kwargs)
 
         self.last_usage = self._aggregate_usage(result)
@@ -385,6 +395,10 @@ class BaseAgentRunner:
         if run_config is not None:
             run_kwargs["run_config"] = run_config
 
+        error_handlers = self._build_error_handlers(agent_def)
+        if error_handlers is not None:
+            run_kwargs["error_handlers"] = error_handlers
+
         try:
             run_result = await Runner.run(**run_kwargs)
             self.last_usage = self._aggregate_usage(run_result)
@@ -419,23 +433,15 @@ class BaseAgentRunner:
 
                 client = AsyncOpenAI()
 
-            output_type = self._resolve_output_type(agent_def.output_dataclass)
-            use_json = output_type and output_type is not str
-
             # Reuse or build the SDK's AgentOutputSchema so the fallback
             # LLM sees the identical JSON schema (including the "response"
             # wrapper for dataclass output types) and we can parse correctly.
-            output_schema = None
-            if use_json:
-                from agents.agent_output import AgentOutputSchema, AgentOutputSchemaBase
-
-                if isinstance(output_type, AgentOutputSchemaBase):
-                    output_schema = output_type
-                else:
-                    output_schema = AgentOutputSchema(
-                        output_type,
-                        strict_json_schema=False,
-                    )
+            # Non-strict: the schema is sent to the provider as a
+            # response_format, which rejects strict-mode constructs.
+            output_schema = build_output_schema(
+                self._resolve_output_type(agent_def.output_dataclass),
+                strict_json_schema=False,
+            )
 
             messages: list[dict[str, str]] = []
             messages.append({"role": "user", "content": prompt})
@@ -445,7 +451,7 @@ class BaseAgentRunner:
                 "messages": messages,
                 "temperature": 0.3,
             }
-            if output_schema:
+            if output_schema is not None:
                 kwargs["response_format"] = {
                     "type": "json_schema",
                     "json_schema": {
@@ -453,8 +459,6 @@ class BaseAgentRunner:
                         "schema": output_schema.json_schema(),
                     },
                 }
-            elif use_json:
-                kwargs["response_format"] = {"type": "json_object"}
 
             response = await client.chat.completions.create(**kwargs)
             content = response.choices[0].message.content
@@ -475,14 +479,26 @@ class BaseAgentRunner:
             for cap in capabilities:
                 cap.on_fallback_end(ctx_wrapper, content, fallback_usage)
 
-            if not use_json:
+            if output_schema is None:
                 return content
 
-            # Use the SDK's schema to parse — handles "response" unwrapping
-            if output_schema:
-                return output_schema.validate_json(content)
-
-            return json.loads(content)
+            # Use the SDK's schema to parse — handles "response" unwrapping.
+            # This branch bypasses Runner.run, so the SDK's invalid_final_output
+            # handler cannot reach it; apply the same salvage directly.
+            try:
+                return output_schema.validate_json(content or "")
+            except ModelBehaviorError:
+                if not agent_def.invalid_output_recovery:
+                    raise
+                salvaged = salvage_structured_output(content, output_schema)
+                if salvaged is None:
+                    raise
+                logger.info(
+                    "Recovered structured output for agent '%s' from a malformed "
+                    "fallback response",
+                    agent_name,
+                )
+                return salvaged
 
     async def _execute_streamed(
         self,
@@ -533,6 +549,10 @@ class BaseAgentRunner:
         run_config = self._build_run_config(agent_def)
         if run_config is not None:
             run_kwargs["run_config"] = run_config
+
+        error_handlers = self._build_error_handlers(agent_def)
+        if error_handlers is not None:
+            run_kwargs["error_handlers"] = error_handlers
 
         result = Runner.run_streamed(**run_kwargs)
 
@@ -700,6 +720,10 @@ class BaseAgentRunner:
         if run_config is not None:
             run_kwargs["run_config"] = run_config
 
+        error_handlers = self._build_error_handlers(agent_def)
+        if error_handlers is not None:
+            run_kwargs["error_handlers"] = error_handlers
+
         result = await Runner.run(**run_kwargs)
 
         logger.info(f"Agent '{agent_name}' completed successfully")
@@ -780,6 +804,11 @@ class BaseAgentRunner:
                 sub_run_config = self._build_run_config(agent_def)
                 if sub_run_config is not None:
                     as_tool_kwargs["run_config"] = sub_run_config
+
+                # NOTE: no error_handlers here — Agent.as_tool() accepts
+                # run_config but has no error_handlers parameter, so a
+                # sub-agent's invalid structured output still raises. Wire it
+                # the moment the SDK exposes it.
 
                 budget = agent_def.as_tool_turn_budget
                 if budget:
@@ -881,6 +910,29 @@ class BaseAgentRunner:
         return RunConfig(
             tool_execution=ToolExecutionConfig(pre_approval_tool_input_guardrails=True)
         )
+
+    def _build_error_handlers(self, agent_def: Any) -> RunErrorHandlers[Any] | None:
+        """Build the SDK run error handlers for an agent, or None when defaults apply.
+
+        Agents keep ``invalid_output_recovery`` on by default: a final message
+        whose payload is valid but wrapped in prose or a code fence is
+        re-parsed instead of failing the run. Recovery only ever returns a
+        payload the agent's own output schema accepts, so an agent that must
+        fail loudly on any malformed output sets the flag to ``False``.
+
+        Args:
+            agent_def: Agent definition whose recovery flag decides the handlers
+
+        Returns:
+            Configured handlers, or None when the agent opts out
+        """
+        if not agent_def.invalid_output_recovery:
+            return None
+
+        handlers: RunErrorHandlers[Any] = {
+            "invalid_final_output": recover_invalid_final_output,
+        }
+        return handlers
 
     async def _build_handoffs(self, handoff_names: list[str], context: Any) -> list[Any]:
         """Build agent handoffs list.
