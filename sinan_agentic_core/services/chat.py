@@ -7,7 +7,9 @@ Three flavours of chat, from simplest to most granular:
 - ``chat_streamed()``   — yields token-level deltas via ``Runner.run_streamed()``
 
 All three handle session history, error handling, and return structured
-events so your API layer stays thin.
+events so your API layer stays thin.  They also apply the run-level SDK
+settings the resolved agent needs — an agent whose tools carry tool-input
+guardrails runs them ahead of any human-approval interruption.
 
 Each function accepts either ``agent_name`` (resolved via the registry)
 or a pre-built ``agent`` instance.  Use the latter when you need
@@ -36,6 +38,7 @@ from typing import Any
 from agents import Agent, ItemHelpers, Runner, Usage
 from openai.types.responses import ResponseTextDeltaEvent
 
+from ..core.run_config import build_run_config
 from ..registry.agent_factory import create_agent_from_registry
 from ..session import AgentSession
 from .hooks import StreamingRunHooks
@@ -131,6 +134,10 @@ async def chat(
         if context is not None:
             run_kwargs["context"] = context
 
+        run_config = build_run_config(resolved)
+        if run_config is not None:
+            run_kwargs["run_config"] = run_config
+
         result = await Runner.run(**run_kwargs)
         response = result.final_output
 
@@ -203,6 +210,11 @@ async def chat_with_hooks(
             }
             if context is not None:
                 run_kwargs["context"] = context
+
+            run_config = build_run_config(resolved)
+            if run_config is not None:
+                run_kwargs["run_config"] = run_config
+
             return await Runner.run(**run_kwargs)
 
         task = asyncio.create_task(_run())
@@ -282,6 +294,10 @@ async def chat_streamed(
         run_kwargs: dict[str, Any] = {"starting_agent": resolved, "input": history}
         if context is not None:
             run_kwargs["context"] = context
+
+        run_config = build_run_config(resolved)
+        if run_config is not None:
+            run_kwargs["run_config"] = run_config
 
         result = Runner.run_streamed(**run_kwargs)
 

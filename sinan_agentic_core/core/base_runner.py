@@ -21,7 +21,6 @@ from agents import (
     RunErrorHandlers,
     RunHooks,
     Runner,
-    ToolExecutionConfig,
     Usage,
 )
 from agents.extensions import ToolOutputTrimmer
@@ -45,6 +44,7 @@ from .output_recovery import (
     recover_invalid_final_output,
     salvage_structured_output,
 )
+from .run_config import tool_input_pre_approval
 from .run_errors import FALLBACK_RECOVERABLE_KINDS, classify_run_error
 from .tool_error_recovery import ToolErrorRecovery
 from .turn_budget import TurnBudget
@@ -908,9 +908,7 @@ class BaseAgentRunner:
         config_kwargs: dict[str, Any] = {}
 
         if self.guardrail_registry.has_category(agent_def.guardrails, GuardrailCategory.TOOL_INPUT):
-            config_kwargs["tool_execution"] = ToolExecutionConfig(
-                pre_approval_tool_input_guardrails=True
-            )
+            config_kwargs["tool_execution"] = tool_input_pre_approval()
 
         trimmer = self._build_tool_output_trimmer(agent_def)
         if trimmer is not None:

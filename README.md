@@ -306,7 +306,17 @@ A guardrail's `category` decides where it is wired into the SDK. Register the gu
 | `output` | `Agent(output_guardrails=...)` | After the agent finishes, on the final output |
 | `tool_input` | `FunctionTool(tool_input_guardrails=...)` | Before a tool executes, on the tool call arguments |
 
-`tool_input` guardrails are proactive: a rejecting guardrail returns its message as the tool output and the tool never runs. Agents run through `BaseAgentRunner` also run their tool-input guardrails *before* the SDK emits a pending human-approval interruption, so a bad call is stopped without bothering a reviewer. That ordering is a run-level setting (`RunConfig.tool_execution`), so an agent built with `create_agent_from_registry()` and passed to your own `Runner.run()` still runs its tool-input guardrails before the tool executes — just after the approval interruption rather than before it.
+`tool_input` guardrails are proactive: a rejecting guardrail returns its message as the tool output and the tool never runs. Agents run through `BaseAgentRunner` or the chat functions also run their tool-input guardrails *before* the SDK emits a pending human-approval interruption, so a bad call is stopped without bothering a reviewer. That ordering is a run-level setting (`RunConfig.tool_execution`), so driving `Runner` yourself means passing it in — `build_run_config()` reads it off the agent:
+
+```python
+from agents import Runner
+from sinan_agentic_core import build_run_config, create_agent_from_registry
+
+agent = create_agent_from_registry("my_agent")
+result = await Runner.run(agent, "Hello!", run_config=build_run_config(agent))
+```
+
+It returns `None` when the agent needs no run-level setting, which `Runner.run()` accepts as "use the defaults".
 
 ```python
 from agents import (
@@ -1303,6 +1313,7 @@ sinan_agentic_core/
 │   │   └── base.py               # Capability base class + lifecycle hooks
 │   ├── errors.py                 # structured_tool_error for agent-as-tool failures
 │   ├── output_recovery.py        # invalid_final_output handler (salvages structured output)
+│   ├── run_config.py             # build_run_config() — run-level SDK settings for a built agent
 │   ├── tool_error_recovery.py    # ToolErrorRecovery capability
 │   ├── tool_tracer.py            # ToolTracer capability (non-streaming tool-call tracing)
 │   ├── turn_budget.py            # TurnBudget capability + TurnBudgetHooks
