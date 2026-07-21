@@ -329,7 +329,20 @@ class TestRegisterGuardrailDecorator:
         guard = reg.get_guardrail("_deco_guard")
         assert guard is not None
         assert guard.function is my_guard
-        assert guard.category == "input"
+        assert guard.category is GuardrailCategory.INPUT
+
+    def test_decorator_reports_unknown_category_with_guardrail_name(self):
+        from sinan_agentic_core.registry.guardrail_registry import register_guardrail
+
+        with pytest.raises(ValueError, match="Guardrail '_bad_guard' has unknown category"):
+
+            @register_guardrail(
+                name="_bad_guard",
+                description="bad category",
+                category="sideways",
+            )
+            def my_guard():
+                return "checked"
 
 
 # -- AgentFactory --------------------------------------------------------------

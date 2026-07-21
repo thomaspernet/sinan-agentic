@@ -39,7 +39,12 @@ class GuardrailDefinition:
     category: GuardrailCategory
 
     def __post_init__(self) -> None:
-        """Coerce the category to :class:`GuardrailCategory` and reject unknowns."""
+        """Coerce the category to :class:`GuardrailCategory` and reject unknowns.
+
+        This is the only place a category is validated. Callers that hold a raw
+        string (a config loader, an untyped consumer) may pass it straight in —
+        a valid one is normalized to the enum, an invalid one raises here.
+        """
         try:
             self.category = GuardrailCategory(self.category)
         except ValueError as exc:
@@ -76,9 +81,7 @@ class GuardrailRegistry:
         """Get a specific guardrail by name."""
         return self._guardrails.get(name)
 
-    def get_guardrails_by_category(
-        self, category: GuardrailCategory | str
-    ) -> list[GuardrailDefinition]:
+    def get_guardrails_by_category(self, category: GuardrailCategory) -> list[GuardrailDefinition]:
         """Get all guardrails in a category."""
         return [g for g in self._guardrails.values() if g.category == category]
 
@@ -142,7 +145,7 @@ def get_guardrail_registry() -> GuardrailRegistry:
 def register_guardrail(
     name: str,
     description: str,
-    category: GuardrailCategory | str,
+    category: GuardrailCategory,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator to register a guardrail.
 
@@ -167,6 +170,9 @@ def register_guardrail(
         @tool_input_guardrail
         def block_destructive_cypher(data):
             ...
+
+    Raises:
+        ValueError: If *category* is not a known :class:`GuardrailCategory`.
     """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -174,7 +180,7 @@ def register_guardrail(
             name=name,
             description=description,
             function=func,
-            category=GuardrailCategory(category),
+            category=category,
         )
         _global_registry.register(guardrail_def)
         return func

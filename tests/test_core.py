@@ -1397,3 +1397,30 @@ class TestGuardrailCategoryWiring:
             await guardrail_runner._build_tools(["plain_agent"], ctx)
 
         assert "run_config" not in mock_as_tool.call_args.kwargs
+
+    async def test_run_agent_passes_run_config(self, guardrail_runner):
+        session = AgentSession(session_id="s1")
+        result = Mock(final_output="ok", raw_responses=[])
+
+        with patch(
+            "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
+        ) as mock_run:
+            await guardrail_runner.run_agent(
+                "guarded_agent", session, AgentContext(database_connector=Mock())
+            )
+
+        run_config = mock_run.call_args.kwargs["run_config"]
+        assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
+
+    async def test_run_agent_omits_run_config_without_tool_guardrails(self, guardrail_runner):
+        session = AgentSession(session_id="s1")
+        result = Mock(final_output="ok", raw_responses=[])
+
+        with patch(
+            "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
+        ) as mock_run:
+            await guardrail_runner.run_agent(
+                "plain_agent", session, AgentContext(database_connector=Mock())
+            )
+
+        assert "run_config" not in mock_run.call_args.kwargs

@@ -681,6 +681,7 @@ class BaseAgentRunner:
             Dict with ``output`` (agent's structured output) and ``usage``
             (token usage dict).
         """
+        agent_def = self._get_agent_definition(agent_name)
         agent = await self.create_agent(
             agent_name=agent_name,
             context=context,
@@ -688,12 +689,18 @@ class BaseAgentRunner:
 
         logger.info(f"Running agent: {agent_name}")
 
-        result = await Runner.run(
-            starting_agent=agent,
-            input=input_message,
-            session=session,
-            context=context,
-        )
+        run_kwargs: dict[str, Any] = {
+            "starting_agent": agent,
+            "input": input_message,
+            "session": session,
+            "context": context,
+        }
+
+        run_config = self._build_run_config(agent_def)
+        if run_config is not None:
+            run_kwargs["run_config"] = run_config
+
+        result = await Runner.run(**run_kwargs)
 
         logger.info(f"Agent '{agent_name}' completed successfully")
 
