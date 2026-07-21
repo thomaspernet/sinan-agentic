@@ -16,6 +16,7 @@ from agents import (
     FunctionTool,
     ItemHelpers,
     ModelBehaviorError,
+    ModelRetrySettings,
     ModelSettings,
     RunConfig,
     RunContextWrapper,
@@ -158,6 +159,13 @@ class BaseAgentRunner:
             model_settings = model_settings_override
         else:
             model_settings = self._build_model_settings(agent_def, ctx_wrapper)
+
+        retry_settings = self._build_model_retry(agent_def)
+        if retry_settings is not None:
+            # resolve() overlays the settings in hand on top of the declared
+            # retry policy, so a caller that sets its own retry still wins
+            # field-by-field while every other declared agent keeps the policy.
+            model_settings = ModelSettings(retry=retry_settings).resolve(model_settings)
 
         effective_model = model_override or agent_def.model
 
@@ -432,6 +440,16 @@ class BaseAgentRunner:
                 from openai import AsyncOpenAI
 
                 client = AsyncOpenAI()
+
+            # NOTE: retry policies and backoff are runner-managed — the SDK reads
+            # them off the resolved ModelSettings inside Runner.run
+            # (agents.run_internal.model_retry, openai-agents==0.18.3), which this
+            # branch bypasses. Only the declared attempt count carries over, via
+            # the OpenAI client's own retry, so a rescue call is not left on the
+            # client default while every other branch honors the agent's budget.
+            retry_settings = self._build_model_retry(agent_def)
+            if retry_settings is not None and retry_settings.max_retries is not None:
+                client = client.with_options(max_retries=retry_settings.max_retries)
 
             # Reuse or build the SDK's AgentOutputSchema so the fallback
             # LLM sees the identical JSON schema (including the "response"
@@ -1002,6 +1020,24 @@ class BaseAgentRunner:
         except Exception as e:
             logger.error(f"Error building model settings: {e}")
             return None
+
+    def _build_model_retry(self, agent_def: Any) -> ModelRetrySettings | None:
+        """Build the SDK model retry settings for an agent, or None when it opts out.
+
+        Retry is off unless the agent declares ``model_retry``: retrying a model
+        call costs latency and a second billed request, so it is never implied.
+
+        Args:
+            agent_def: Agent definition whose ``model_retry`` config decides the settings
+
+        Returns:
+            Configured retry settings, or None when the agent declares no policy
+        """
+        if agent_def.model_retry is None:
+            return None
+
+        settings: ModelRetrySettings = agent_def.model_retry.build()
+        return settings
 
     def _build_agent_kwargs(
         self,

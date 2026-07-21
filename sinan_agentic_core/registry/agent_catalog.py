@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from ..core.capabilities import Capability
+from ..core.model_retry import ModelRetryConfig
 from .capability_registry import (
     CapabilityNotFoundError,
     get_capability_registry,
@@ -89,6 +90,7 @@ class AgentYamlEntry(BaseModel):
     turn_budget: TurnBudgetConfig | None = None
     error_recovery: bool = True
     invalid_output_recovery: bool = True
+    model_retry: ModelRetryConfig | None = None
     capabilities: list[CapabilityRef] = []
     effort: str | None = None
     tool_rules: dict[str, dict[str, Any]] = {}
@@ -298,6 +300,9 @@ class AgentCatalog:
         raw_budget = raw.get("turn_budget")
         budget_cfg = TurnBudgetConfig(**raw_budget) if raw_budget else None
 
+        raw_retry = raw.get("model_retry")
+        retry_cfg = ModelRetryConfig(**raw_retry) if raw_retry else None
+
         capabilities = _parse_capabilities(name, raw.get("capabilities", []))
 
         return AgentYamlEntry(
@@ -310,6 +315,7 @@ class AgentCatalog:
             turn_budget=budget_cfg,
             error_recovery=raw.get("error_recovery", True),
             invalid_output_recovery=raw.get("invalid_output_recovery", True),
+            model_retry=retry_cfg,
             capabilities=capabilities,
             tool_rules=raw.get("tool_rules", {}),
             effort=raw.get("effort"),

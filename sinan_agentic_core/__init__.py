@@ -40,6 +40,9 @@ Quick Start:
 from .core import (
     BaseAgentRunner,
     Capability,
+    ModelRetryConfig,
+    RetryBackoffConfig,
+    RetryTrigger,
     ToolErrorRecovery,
     ToolTracer,
     TurnBudget,
@@ -103,7 +106,10 @@ __all__ = [
     # Core
     "BaseAgentRunner",
     "Capability",
+    "ModelRetryConfig",
     "recover_invalid_final_output",
+    "RetryBackoffConfig",
+    "RetryTrigger",
     "ToolErrorRecovery",
     "ToolTracer",
     "TurnBudget",
