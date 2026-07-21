@@ -153,6 +153,23 @@ class TestToolRegistry:
         assert len(funcs) == 1
         assert funcs[0] is fn
 
+    def test_get_all_functions(self):
+        reg = ToolRegistry()
+
+        def fn1():
+            return 1
+
+        def fn2():
+            return 2
+
+        reg.register(ToolDefinition(name="a", function=fn1))
+        reg.register(ToolDefinition(name="b", function=fn2))
+        all_fns = reg.get_all_functions()
+        assert all_fns == {"a": fn1, "b": fn2}
+
+    def test_get_all_functions_empty(self):
+        assert ToolRegistry().get_all_functions() == {}
+
     def test_to_instruction_text(self):
         reg = ToolRegistry()
         reg.register(self._make_tool("my_tool", "search"))
