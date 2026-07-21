@@ -1,0 +1,68 @@
+"""Run-level SDK settings derived from a built agent.
+
+Some SDK settings belong to the *run*, not the agent: they live on ``RunConfig``
+and are passed to ``Runner.run()`` / ``Runner.run_streamed()``, so building an
+agent is not enough to get them. Tool-input pre-approval is one of these — an
+agent can carry tool-input guardrails on its function tools while the run they
+execute in still leaves them behind a human-approval interruption.
+
+``BaseAgentRunner`` derives its run config from the agent *definition*, which it
+has on every execution branch. Call sites that only hold a built ``Agent`` — the
+chat service, and consumers driving ``Runner`` themselves — read the same
+decision off the agent instead, so a pre-built agent gets the setting on the
+same terms as a registry-resolved one.
+
+Usage:
+    from sinan_agentic_core import build_run_config
+    from agents import Runner
+
+    agent = create_agent_from_registry("my_agent")
+    run_config = build_run_config(agent)
+    result = await Runner.run(agent, "Hello!", run_config=run_config)
+"""
+
+from __future__ import annotations
+
+from agents import Agent, FunctionTool, RunConfig, ToolExecutionConfig
+
+
+def build_run_config(agent: Agent) -> RunConfig | None:
+    """Build the SDK run config *agent* needs, or None when defaults apply.
+
+    An agent whose function tools carry tool-input guardrails runs with
+    pre-approval on, so a rejected call never reaches a human approver.
+
+    Args:
+        agent: A built agent, from the registry factory or assembled by hand.
+
+    Returns:
+        Configured RunConfig, or None when no setting differs from the default.
+    """
+    if not _has_tool_input_guardrails(agent):
+        return None
+
+    return RunConfig(tool_execution=tool_input_pre_approval())
+
+
+def tool_input_pre_approval() -> ToolExecutionConfig:
+    """Build the tool-execution setting that runs tool-input guardrails first.
+
+    With it, a tool call that needs human approval has its tool-input guardrails
+    run *before* the SDK emits the pending-approval interruption, and a rejecting
+    guardrail returns its message as the tool output — so a call the guardrail
+    would refuse never reaches an approver. Without it, those guardrails run only
+    once the approval is resolved, just before the tool executes
+    (``openai-agents`` 0.18.3, ``agents.run_internal.tool_execution``).
+
+    Returns:
+        A fresh ToolExecutionConfig with pre-approval enabled. The SDK dataclass
+        is mutable, so callers get their own instance rather than a shared one.
+    """
+    return ToolExecutionConfig(pre_approval_tool_input_guardrails=True)
+
+
+def _has_tool_input_guardrails(agent: Agent) -> bool:
+    """Whether any of *agent*'s local function tools carries a tool-input guardrail."""
+    return any(
+        isinstance(tool, FunctionTool) and tool.tool_input_guardrails for tool in agent.tools
+    )

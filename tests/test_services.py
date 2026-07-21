@@ -1,7 +1,16 @@
 """Tests for services: events, hooks, usage helper, and chat (mocked Runner)."""
 
 import asyncio
+import copy
 from unittest.mock import AsyncMock, Mock, patch
+
+from agents import (
+    Agent,
+    ToolGuardrailFunctionOutput,
+    Usage,
+    function_tool,
+    tool_input_guardrail,
+)
 
 from sinan_agentic_core.services.chat import _usage_to_dict
 from sinan_agentic_core.services.events import (
@@ -195,6 +204,54 @@ class TestUsageToDict:
 # -- chat() with mocked Runner ------------------------------------------------
 
 
+def _agent_double():
+    """An agent stub with the empty ``tools`` list a real ``Agent`` starts with."""
+    return Mock(tools=[])
+
+
+def _guarded_agent():
+    """A real agent whose one function tool carries a tool-input guardrail."""
+
+    @function_tool
+    def echo(value: str) -> str:
+        """Echo a value.
+
+        Args:
+            value: Text to echo back.
+        """
+        return value
+
+    @tool_input_guardrail
+    def block_nothing(data):
+        return ToolGuardrailFunctionOutput()
+
+    guarded = copy.copy(echo)
+    guarded.tool_input_guardrails = [block_nothing]
+    return Agent(name="guarded", tools=[guarded])
+
+
+def _run_result(response="ok"):
+    """A run result carrying one response — enough for the usage aggregation."""
+    raw = Mock()
+    raw.usage = Usage(requests=1, input_tokens=1, output_tokens=1, total_tokens=2)
+    result = Mock()
+    result.final_output = response
+    result.raw_responses = [raw]
+    return result
+
+
+def _streamed_result(response="ok"):
+    """A streaming run result that yields no events before its final output."""
+    result = _run_result(response)
+
+    async def no_events():
+        return
+        yield  # make it an async generator
+
+    result.stream_events = no_events
+    return result
+
+
 class TestChat:
     @staticmethod
     def _get_chat_module():
@@ -220,7 +277,7 @@ class TestChat:
         session = AgentSession(session_id="test")
 
         with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
-            mock_factory.return_value = Mock()
+            mock_factory.return_value = _agent_double()
             with patch.object(chat_mod, "Runner") as mock_runner:
                 mock_runner.run = AsyncMock(return_value=mock_result)
 
@@ -261,7 +318,7 @@ class TestChat:
         session = AgentSession(session_id="test")
 
         with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
-            mock_factory.return_value = Mock()
+            mock_factory.return_value = _agent_double()
             with patch.object(chat_mod, "Runner") as mock_runner:
                 mock_runner.run = AsyncMock(return_value=mock_result)
 
@@ -271,6 +328,46 @@ class TestChat:
         # Verify context was forwarded to Runner.run
         call_kwargs = mock_runner.run.call_args
         assert "context" in call_kwargs.kwargs
+
+    async def test_tool_input_guardrails_enable_pre_approval(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _guarded_agent()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(return_value=_run_result())
+
+                await chat_mod.chat("Hi", agent_name="a", session=session)
+
+        run_config = mock_runner.run.call_args.kwargs["run_config"]
+        assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
+
+    async def test_agent_without_guardrails_gets_no_run_config(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(return_value=_run_result())
+
+                await chat_mod.chat("Hi", agent_name="a", session=session)
+
+        assert "run_config" not in mock_runner.run.call_args.kwargs
+
+    async def test_prebuilt_agent_gets_pre_approval(self):
+        """The setting is read off the agent, so it reaches the pre-built path too."""
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "Runner") as mock_runner:
+            mock_runner.run = AsyncMock(return_value=_run_result())
+
+            await chat_mod.chat("Hi", agent=_guarded_agent(), session=session)
+
+        run_config = mock_runner.run.call_args.kwargs["run_config"]
+        assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
 
 
 # -- chat_with_hooks() --------------------------------------------------------
@@ -308,7 +405,7 @@ class TestChatWithHooks:
             return mock_result
 
         with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
-            mock_factory.return_value = Mock()
+            mock_factory.return_value = _agent_double()
             with patch.object(chat_mod, "Runner") as mock_runner:
                 mock_runner.run = AsyncMock(side_effect=run_with_hooks)
 
@@ -343,7 +440,7 @@ class TestChatWithHooks:
         session = AgentSession(session_id="test")
 
         with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
-            mock_factory.return_value = Mock()
+            mock_factory.return_value = _agent_double()
             with patch.object(chat_mod, "Runner") as mock_runner:
                 mock_runner.run = AsyncMock(return_value=mock_result)
 
@@ -354,6 +451,35 @@ class TestChatWithHooks:
                     events.append(event)
 
         assert any(e["event"] == "answer" for e in events)
+
+    async def test_tool_input_guardrails_enable_pre_approval(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _guarded_agent()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(return_value=_run_result())
+
+                async for _ in chat_mod.chat_with_hooks("Hi", agent_name="a", session=session):
+                    pass
+
+        run_config = mock_runner.run.call_args.kwargs["run_config"]
+        assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
+
+    async def test_agent_without_guardrails_gets_no_run_config(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(return_value=_run_result())
+
+                async for _ in chat_mod.chat_with_hooks("Hi", agent_name="a", session=session):
+                    pass
+
+        assert "run_config" not in mock_runner.run.call_args.kwargs
 
     async def test_error_yields_error_event(self):
         chat_mod = self._get_chat_module()
@@ -441,7 +567,7 @@ class TestChatStreamed:
         session = AgentSession(session_id="test")
 
         with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
-            mock_factory.return_value = Mock()
+            mock_factory.return_value = _agent_double()
             with patch.object(chat_mod, "Runner") as mock_runner:
                 mock_runner.run_streamed.return_value = mock_result
                 with patch.object(chat_mod, "ItemHelpers") as mock_helpers:
@@ -488,7 +614,7 @@ class TestChatStreamed:
         session = AgentSession(session_id="test")
 
         with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
-            mock_factory.return_value = Mock()
+            mock_factory.return_value = _agent_double()
             with patch.object(chat_mod, "Runner") as mock_runner:
                 mock_runner.run_streamed.return_value = mock_result
 
@@ -499,6 +625,35 @@ class TestChatStreamed:
                     events.append(event)
 
         assert any(e["event"] == "answer" for e in events)
+
+    async def test_tool_input_guardrails_enable_pre_approval(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _guarded_agent()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run_streamed.return_value = _streamed_result()
+
+                async for _ in chat_mod.chat_streamed("Hi", agent_name="a", session=session):
+                    pass
+
+        run_config = mock_runner.run_streamed.call_args.kwargs["run_config"]
+        assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
+
+    async def test_agent_without_guardrails_gets_no_run_config(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run_streamed.return_value = _streamed_result()
+
+                async for _ in chat_mod.chat_streamed("Hi", agent_name="a", session=session):
+                    pass
+
+        assert "run_config" not in mock_runner.run_streamed.call_args.kwargs
 
     async def test_error_yields_error_event(self):
         chat_mod = self._get_chat_module()

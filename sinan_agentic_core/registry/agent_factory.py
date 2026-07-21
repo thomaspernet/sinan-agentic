@@ -35,8 +35,8 @@ def create_agent_from_registry(
     without that setting they run after the SDK emits a pending human-approval
     interruption rather than before it (``openai-agents`` 0.18.3,
     ``agents.run_internal.tool_execution``). Callers that need the earlier
-    ordering pass their own ``RunConfig`` to ``Runner.run()``;
-    ``BaseAgentRunner.execute()`` sets it automatically.
+    ordering pass ``build_run_config(agent)`` to ``Runner.run()``;
+    ``BaseAgentRunner.execute()`` and the chat service set it automatically.
 
     Args:
         agent_name: Name of a previously registered agent.
