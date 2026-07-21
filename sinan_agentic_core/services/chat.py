@@ -13,6 +13,12 @@ guardrails runs them ahead of any human-approval interruption, and an agent
 with a structured ``output_type`` recovers a final message whose payload is
 valid but wrapped in prose or a code fence instead of failing the run.
 
+A failure never reaches the caller as an exception, so each of the three
+reports *why* it failed: the caught error is classified into a
+``RunErrorKind`` and travels as ``error_kind`` beside the rendered message.
+An API layer branches on that kind — retry a ``max_turns``, surface a
+``model_refusal`` — instead of matching the message text.
+
 Each function accepts either ``agent_name`` (resolved via the registry)
 or a pre-built ``agent`` instance.  Use the latter when you need
 features that ``create_agent_from_registry`` does not support, such as
@@ -42,6 +48,7 @@ from openai.types.responses import ResponseTextDeltaEvent
 
 from ..core.output_recovery import build_error_handlers
 from ..core.run_config import build_run_config
+from ..core.run_errors import run_error_payload
 from ..registry.agent_factory import create_agent_from_registry
 from ..session import AgentSession
 from .hooks import StreamingRunHooks
@@ -123,7 +130,9 @@ async def chat(
 
     Returns:
         ``{"success": True, "response": str, "session_id": str, "tools_called": list, "usage": dict}``
-        or ``{"success": False, "error": str, "session_id": str}`` on failure.
+        or ``{"success": False, "error": str, "error_kind": str, "session_id": str}``
+        on failure, where ``error_kind`` is a ``RunErrorKind`` value naming why
+        the run failed.
     """
     if session is None:
         raise ValueError("'session' is required")
@@ -158,8 +167,9 @@ async def chat(
             "usage": _usage_to_dict(result),
         }
     except Exception as e:
-        logger.error("Chat error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e), "session_id": session.session_id}
+        payload = run_error_payload(e)
+        logger.error("Chat error (%s): %s", payload["error_kind"], e, exc_info=True)
+        return {"success": False, **payload, "session_id": session.session_id}
 
 
 async def chat_with_hooks(
@@ -194,7 +204,9 @@ async def chat_with_hooks(
             {"event": "tool_end",   "data": {"tool": "...", ...}}
             {"event": "finalizing", "data": {"message": "..."}}
             {"event": "answer",     "data": {"response": "...", "tools_called": [...]}}
-            {"event": "error",      "data": {"error": "..."}}
+            {"event": "error",      "data": {"error": "...", "error_kind": "..."}}
+
+        ``error_kind`` is a ``RunErrorKind`` value naming why the run failed.
     """
     if session is None:
         raise ValueError("'session' is required")
@@ -257,8 +269,9 @@ async def chat_with_hooks(
             },
         }
     except Exception as e:
-        logger.error("Chat hooks error: %s", e, exc_info=True)
-        yield {"event": "error", "data": {"error": str(e)}}
+        payload = run_error_payload(e)
+        logger.error("Chat hooks error (%s): %s", payload["error_kind"], e, exc_info=True)
+        yield {"event": "error", "data": payload}
 
 
 async def chat_streamed(
@@ -293,7 +306,9 @@ async def chat_streamed(
             {"event": "message_output",  "data": {"text": "..."}}
             {"event": "agent_updated",   "data": {"agent": "..."}}
             {"event": "answer",          "data": {"response": "...", "tools_called": [...]}}
-            {"event": "error",           "data": {"error": "..."}}
+            {"event": "error",           "data": {"error": "...", "error_kind": "..."}}
+
+        ``error_kind`` is a ``RunErrorKind`` value naming why the run failed.
     """
     if session is None:
         raise ValueError("'session' is required")
@@ -371,5 +386,6 @@ async def chat_streamed(
             },
         }
     except Exception as e:
-        logger.error("Streaming error: %s", e, exc_info=True)
-        yield {"event": "error", "data": {"error": str(e)}}
+        payload = run_error_payload(e)
+        logger.error("Streaming error (%s): %s", payload["error_kind"], e, exc_info=True)
+        yield {"event": "error", "data": payload}

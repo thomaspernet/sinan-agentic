@@ -3,10 +3,13 @@
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from agents import MaxTurnsExceeded
 
+from sinan_agentic_core.core.run_errors import RunErrorKind
 from sinan_agentic_core.registry.agent_registry import AgentRegistry
 from sinan_agentic_core.registry.guardrail_registry import GuardrailRegistry
 from sinan_agentic_core.registry.tool_registry import ToolRegistry
+from tests.conftest import make_context_overflow_error
 
 
 @pytest.fixture
@@ -63,3 +66,28 @@ class TestOrchestratorRunWorkflow:
 
         assert result["success"] is False
         assert "Agent exploded" in result["error"]
+        assert result["error_kind"] == RunErrorKind.UNKNOWN.value
+
+
+class TestOrchestratorErrorKind:
+    """A failed workflow names why it failed, not just what the message said."""
+
+    @pytest.mark.parametrize(
+        ("error", "expected"),
+        [
+            (MaxTurnsExceeded("Max turns (10) exceeded"), RunErrorKind.MAX_TURNS),
+            (make_context_overflow_error(), RunErrorKind.CONTEXT_OVERFLOW),
+        ],
+    )
+    async def test_classified_kind_reaches_the_result(self, orchestrator, error, expected):
+        with patch.object(orchestrator, "run_agent", new_callable=AsyncMock) as mock_run:
+            mock_run.side_effect = error
+
+            result = await orchestrator.run_workflow(
+                user_query="bad query",
+                context_data={"database_connector": Mock()},
+            )
+
+        assert result["success"] is False
+        assert result["error_kind"] == expected.value
+        assert result["error"] == str(error)

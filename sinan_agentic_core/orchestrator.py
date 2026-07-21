@@ -9,6 +9,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .core import BaseAgentRunner
+from .core.run_errors import run_error_payload
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,10 @@ class AgentOrchestrator(BaseAgentRunner):
             event_callback: Optional callback for streaming events
 
         Returns:
-            Dict with workflow results
+            ``{"success": True, "result": ..., "usage": ..., "session_id": ...}``
+            on success, or ``{"success": False, "error": str, "error_kind": str,
+            "session_id": ...}`` on failure. ``error_kind`` is a
+            ``RunErrorKind`` value naming why the run failed.
         """
         # 1. Setup session and context using base class methods
         session = self.setup_session(session_id=session_id, initial_history=initial_history)
@@ -77,5 +81,6 @@ class AgentOrchestrator(BaseAgentRunner):
             }
 
         except Exception as e:
-            logger.error(f"Orchestration failed: {e}")
-            return {"success": False, "error": str(e), "session_id": session.session_id}
+            payload = run_error_payload(e)
+            logger.error("Orchestration failed with %s: %s", payload["error_kind"], e)
+            return {"success": False, **payload, "session_id": session.session_id}

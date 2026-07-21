@@ -17,6 +17,8 @@ provider's HTTP 400, whose machine-readable ``code`` field carries
 
 :func:`classify_run_error` is the single place that decides which kind an
 exception is; every branch that reacts to a failed run keys off the result.
+:func:`run_error_payload` carries that decision out to callers who receive a
+result dict rather than the exception itself.
 """
 
 from __future__ import annotations
@@ -82,3 +84,22 @@ def classify_run_error(error: BaseException) -> RunErrorKind:
     if isinstance(error, APIStatusError) and error.code == CONTEXT_OVERFLOW_ERROR_CODE:
         return RunErrorKind.CONTEXT_OVERFLOW
     return RunErrorKind.UNKNOWN
+
+
+def run_error_payload(error: BaseException) -> dict[str, str]:
+    """Describe a failed run for a caller that gets a result dict, not an exception.
+
+    An orchestration or chat call catches the failure and returns it, so the
+    caller never sees the exception class. The rendered message alone leaves
+    them string-matching the very text :func:`classify_run_error` exists to stop
+    branching on, so the classified kind travels alongside it.
+
+    Args:
+        error: The exception the run raised.
+
+    Returns:
+        ``{"error": <rendered message>, "error_kind": <RunErrorKind value>}``.
+        The kind is the enum's plain string value, so the payload stays
+        JSON-serializable across an API boundary.
+    """
+    return {"error": str(error), "error_kind": classify_run_error(error).value}

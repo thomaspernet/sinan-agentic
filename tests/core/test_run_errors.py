@@ -1,5 +1,7 @@
 """Tests for typed classification of agent-run failures (core/run_errors.py)."""
 
+import json
+
 import httpx
 import pytest
 from agents import MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError
@@ -9,6 +11,7 @@ from sinan_agentic_core.core.run_errors import (
     FALLBACK_RECOVERABLE_KINDS,
     RunErrorKind,
     classify_run_error,
+    run_error_payload,
 )
 from tests.conftest import make_context_overflow_error
 
@@ -81,3 +84,34 @@ class TestFallbackRecoverableKinds:
     )
     def test_excludes_everything_else(self, kind):
         assert kind not in FALLBACK_RECOVERABLE_KINDS
+
+
+class TestRunErrorPayload:
+    """The classified kind travels beside the message for callers that get a dict."""
+
+    def test_carries_message_and_kind(self):
+        assert run_error_payload(MaxTurnsExceeded("Max turns (10) exceeded")) == {
+            "error": "Max turns (10) exceeded",
+            "error_kind": RunErrorKind.MAX_TURNS.value,
+        }
+
+    @pytest.mark.parametrize(
+        ("error", "expected"),
+        [
+            (ModelRefusalError("I can't help with that."), RunErrorKind.MODEL_REFUSAL),
+            (ModelBehaviorError("Invalid JSON in final output"), RunErrorKind.MODEL_BEHAVIOR),
+            (RuntimeError("Something else broke"), RunErrorKind.UNKNOWN),
+        ],
+    )
+    def test_kind_matches_the_classification(self, error, expected):
+        assert run_error_payload(error)["error_kind"] == expected.value
+
+    def test_context_overflow_reaches_the_payload(self):
+        payload = run_error_payload(make_context_overflow_error())
+        assert payload["error_kind"] == RunErrorKind.CONTEXT_OVERFLOW.value
+
+    def test_payload_is_json_serializable(self):
+        """The payload crosses an API boundary, so the kind is a plain string."""
+        payload = run_error_payload(MaxTurnsExceeded("Max turns (10) exceeded"))
+        assert json.loads(json.dumps(payload)) == payload
+        assert type(payload["error_kind"]) is str
