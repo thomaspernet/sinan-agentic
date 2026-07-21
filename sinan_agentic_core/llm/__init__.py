@@ -14,7 +14,7 @@ from .config import (
     OpenAIProviderConfig,
     parse_llm_provider_config,
 )
-from .factory import configure_llm_provider
+from .factory import configure_llm_provider, resolve_openai_client
 from .yaml_loader import load_llm_provider_config
 
 __all__ = [
@@ -24,4 +24,5 @@ __all__ = [
     "configure_llm_provider",
     "load_llm_provider_config",
     "parse_llm_provider_config",
+    "resolve_openai_client",
 ]
