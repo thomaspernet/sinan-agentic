@@ -16,6 +16,11 @@ wrapped it: a ``` fence, a "Here is the JSON:" preamble, trailing commentary.
 verbatim, so those runs raise today even though the payload is valid. This
 module locates the embedded payload and validates it against the agent's own
 schema. Anything that does not validate is not recovered.
+
+The scan that locates the payload, :func:`iter_payload_candidates`, is the
+shared half: anything that has to read a payload out of a model message —
+recovery here, session persistence in ``session/agent_session.py`` — reads it
+the same way rather than handing the whole message to a parser.
 """
 
 from __future__ import annotations
@@ -84,12 +89,37 @@ def salvage_structured_output(
     if not raw_text:
         return None
 
-    for candidate in _iter_payload_candidates(raw_text.strip()):
+    for candidate in iter_payload_candidates(raw_text.strip()):
         try:
             return output_schema.validate_json(candidate)
         except ModelBehaviorError:
             continue
     return None
+
+
+def iter_payload_candidates(text: str) -> Iterator[str]:
+    """Yield *text* itself, then each balanced JSON container found inside it.
+
+    The whole message comes first, so text that is already a bare payload is
+    read exactly as it was written. The balanced spans that follow are what
+    survive a model wrapping its payload in a ``` fence, a preamble, or
+    trailing commentary. Delimiters inside JSON strings do not open or close
+    a span, so a payload whose values contain braces still ends where it
+    should.
+
+    Args:
+        text: Message text to scan. Callers strip it first when a padded
+            duplicate of the first candidate is not worth parsing twice.
+
+    Yields:
+        Candidate payloads, outermost first. Nothing at all for empty text.
+    """
+    if not text:
+        return
+    yield text
+    for span in _iter_balanced_spans(text):
+        if span != text:
+            yield span
 
 
 def recover_invalid_final_output(handler_input: RunErrorHandlerInput[Any]) -> Any | None:
@@ -128,16 +158,6 @@ def _last_message_text(items: list[RunItem]) -> str | None:
         if isinstance(item, MessageOutputItem):
             return ItemHelpers.extract_text(item.raw_item)
     return None
-
-
-def _iter_payload_candidates(text: str) -> Iterator[str]:
-    """Yield *text* itself, then each balanced JSON container found inside it."""
-    if not text:
-        return
-    yield text
-    for span in _iter_balanced_spans(text):
-        if span != text:
-            yield span
 
 
 def _iter_balanced_spans(text: str) -> Iterator[str]:
