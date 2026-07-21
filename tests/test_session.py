@@ -132,6 +132,58 @@ class TestAgentSession:
         assert len(items) == 1
         assert '"parsed answer"' in items[0]["content"]
 
+    async def test_unwraps_fenced_structured_output(self, session):
+        """A model that fences its payload still stores the answer, not the envelope."""
+        await session.add_items(
+            [
+                {
+                    "role": "assistant",
+                    "content": '```json\n{"response": "fenced answer"}\n```',
+                }
+            ]
+        )
+        items = await session.get_items()
+        assert items[0]["content"] == '"fenced answer"'
+
+    async def test_unwraps_structured_output_behind_a_preamble(self, session):
+        await session.add_items(
+            [
+                {
+                    "role": "assistant",
+                    "content": 'Here is the result:\n{"response": "prose answer"}',
+                }
+            ]
+        )
+        items = await session.get_items()
+        assert items[0]["content"] == '"prose answer"'
+
+    async def test_unwraps_structured_output_with_braces_in_the_value(self, session):
+        await session.add_items(
+            [
+                {
+                    "role": "assistant",
+                    "content": '```json\n{"response": "use {braces} freely"}\n```',
+                }
+            ]
+        )
+        items = await session.get_items()
+        assert items[0]["content"] == '"use {braces} freely"'
+
+    async def test_json_without_the_wrapper_key_is_stored_as_is(self, session):
+        await session.add_items([{"role": "assistant", "content": '{"answer": "yes"}'}])
+        items = await session.get_items()
+        assert items[0]["content"] == '{"answer": "yes"}'
+
+    async def test_plain_text_is_stored_as_is(self, session):
+        await session.add_items([{"role": "assistant", "content": "just a sentence"}])
+        items = await session.get_items()
+        assert items[0]["content"] == "just a sentence"
+
+    async def test_non_assistant_messages_are_never_unwrapped(self, session):
+        await session.add_items([{"role": "user", "content": '{"response": "verbatim"}'}])
+        items = await session.get_items()
+        assert items[0]["content"] == '{"response": "verbatim"}'
+
 
 # -- SQLiteSessionStore --------------------------------------------------------
 

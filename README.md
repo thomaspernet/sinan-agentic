@@ -922,6 +922,8 @@ An agent with an `output_dataclass` fails its whole run when the model's final m
 
 Every run started through `BaseAgentRunner` installs a recovery handler that re-reads the message, finds the embedded payload, and validates it against the agent's own output schema. It never fabricates a value: anything that does not satisfy the schema is not recovered, and the run raises as before.
 
+Session history reads messages the same way. An agent with a non-dict `output_dataclass` answers under a wrapper key, and `AgentSession` stores the answer rather than the envelope — including when the model fenced its payload or wrote a preamble around it, which previously left the fence markers and the wrapper in the conversation every later turn replays.
+
 Recovery is on by default and covers `execute()` in all three modes plus the overflow-fallback LLM call. Turn it off per agent when a malformed response must fail loudly:
 
 ```yaml

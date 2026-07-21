@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from sinan_agentic_core.core.output_recovery import (
     build_output_schema,
+    iter_payload_candidates,
     recover_invalid_final_output,
     salvage_structured_output,
 )
@@ -135,6 +136,37 @@ class TestSalvageStructuredOutput:
         wrapped = AgentOutputSchema(list[str])
         raw = '```json\n{"response": ["a", "b"]}\n```'
         assert salvage_structured_output(raw, wrapped) == ["a", "b"]
+
+
+# ------------------------------------------------------------------ #
+# iter_payload_candidates
+# ------------------------------------------------------------------ #
+
+
+class TestIterPayloadCandidates:
+    def test_whole_text_comes_first(self):
+        assert list(iter_payload_candidates('prose {"a": 1} more'))[0] == 'prose {"a": 1} more'
+
+    def test_yields_the_span_inside_a_fence(self):
+        candidates = list(iter_payload_candidates('```json\n{"a": 1}\n```'))
+        assert '{"a": 1}' in candidates
+
+    def test_bare_payload_is_not_yielded_twice(self):
+        assert list(iter_payload_candidates('{"a": 1}')) == ['{"a": 1}']
+
+    def test_yields_each_span_in_order(self):
+        candidates = list(iter_payload_candidates('{"a": 1} then ["b"]'))
+        assert candidates[1:] == ['{"a": 1}', '["b"]']
+
+    def test_delimiters_inside_strings_do_not_close_a_span(self):
+        candidates = list(iter_payload_candidates('see {"a": "use {braces}"} here'))
+        assert candidates[1] == '{"a": "use {braces}"}'
+
+    def test_unbalanced_container_yields_only_the_whole_text(self):
+        assert list(iter_payload_candidates('{"a": 1')) == ['{"a": 1']
+
+    def test_empty_text_yields_nothing(self):
+        assert list(iter_payload_candidates("")) == []
 
 
 # ------------------------------------------------------------------ #

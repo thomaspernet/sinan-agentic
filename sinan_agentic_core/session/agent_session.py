@@ -10,9 +10,15 @@ from typing import TYPE_CHECKING, Any, cast
 from agents.items import TResponseInputItem
 from agents.memory.session import SessionABC
 
+from ..core.output_recovery import iter_payload_candidates
+
 if TYPE_CHECKING:
     from ..core.capabilities import Capability
     from .sqlite_store import SQLiteSessionStore
+
+# Key the SDK's AgentOutputSchema wraps a non-dict output type under
+# (``agents.agent_output._WRAPPER_DICT_KEY``, openai-agents==0.18.3).
+_STRUCTURED_OUTPUT_WRAPPER_KEY = "response"
 
 
 class ConversationHistory:
@@ -122,12 +128,7 @@ class AgentSession(SessionABC):
 
             # For assistant messages with structured output, extract response
             if item.get("role") == "assistant" and isinstance(content, str):
-                try:
-                    parsed = json.loads(content)
-                    if isinstance(parsed, dict) and "response" in parsed:
-                        content = json.dumps(parsed["response"])
-                except (json.JSONDecodeError, ValueError):
-                    pass
+                content = _unwrap_structured_output(content)
 
             # Create message dict
             msg: dict[str, Any] = {"role": item.get("role"), "content": str(content)}
@@ -252,6 +253,34 @@ class AgentSession(SessionABC):
                 _capability_key(capability),
                 data,
             )
+
+
+def _unwrap_structured_output(content: str) -> str:
+    """Return the payload the SDK wrapped under its structured-output key.
+
+    An agent with a non-dict ``output_dataclass`` answers with the value
+    nested under a wrapper key; history should carry the answer, not the
+    envelope. The message is not always a bare payload — a model that fences
+    its JSON or writes a preamble around it produces text no parser accepts
+    whole — so the wrapped payload is located by the same balanced-span scan
+    that structured-output recovery uses, rather than by parsing the message
+    verbatim and giving up when that fails.
+
+    Args:
+        content: Text of an assistant message.
+
+    Returns:
+        The wrapped value re-serialized, or *content* unchanged when nothing
+        in it is a wrapped payload.
+    """
+    for candidate in iter_payload_candidates(content.strip()):
+        try:
+            parsed = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(parsed, dict) and _STRUCTURED_OUTPUT_WRAPPER_KEY in parsed:
+            return json.dumps(parsed[_STRUCTURED_OUTPUT_WRAPPER_KEY])
+    return content
 
 
 def _capability_key(capability: "Capability") -> str:
