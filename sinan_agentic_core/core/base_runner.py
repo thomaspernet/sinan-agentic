@@ -27,6 +27,7 @@ from agents.extensions import ToolOutputTrimmer
 from agents.items import TResponseInputItem
 from openai.types.responses import ResponseCompletedEvent, ResponseTextDeltaEvent
 
+from ..llm import resolve_openai_client
 from ..models import outputs as output_models
 from ..models.context import AgentContext
 from ..registry import get_agent_registry, get_guardrail_registry, get_tool_registry
@@ -441,13 +442,7 @@ class BaseAgentRunner:
             for cap in capabilities:
                 cap.on_fallback_start(ctx_wrapper, prompt, collecting.raw_items)
 
-            from agents.models._openai_shared import get_default_openai_client
-
-            client = get_default_openai_client()
-            if client is None:
-                from openai import AsyncOpenAI
-
-                client = AsyncOpenAI()
+            client = resolve_openai_client()
 
             # NOTE: retry policies and backoff are runner-managed — the SDK reads
             # them off the resolved ModelSettings inside Runner.run

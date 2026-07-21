@@ -61,6 +61,7 @@ from .llm import (
     configure_llm_provider,
     load_llm_provider_config,
     parse_llm_provider_config,
+    resolve_openai_client,
 )
 from .models.context import AgentContext
 from .models.outputs import ChatResponse, ToolOutput
@@ -132,6 +133,7 @@ __all__ = [
     "configure_llm_provider",
     "load_llm_provider_config",
     "parse_llm_provider_config",
+    "resolve_openai_client",
     # Session
     "AgentSession",
     "ConversationHistory",

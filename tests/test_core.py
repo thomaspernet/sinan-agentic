@@ -588,13 +588,13 @@ class TestExecuteWithFallback:
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-            patch("openai.AsyncOpenAI") as mock_openai,
+            patch("sinan_agentic_core.core.base_runner.resolve_openai_client") as mock_resolve,
         ):
             mock_runner_cls.run = AsyncMock(side_effect=ModelRefusalError("I can't help."))
             with pytest.raises(ModelRefusalError):
                 await runner._execute_with_fallback("basic_agent", ctx, session, 10, "hello", None)
 
-        mock_openai.assert_not_called()
+        mock_resolve.assert_not_called()
 
     async def test_error_quoting_the_old_needle_propagates(self, runner):
         """Regression for #47 -- recovery keys off the exception type, so an
@@ -605,7 +605,7 @@ class TestExecuteWithFallback:
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-            patch("openai.AsyncOpenAI") as mock_openai,
+            patch("sinan_agentic_core.core.base_runner.resolve_openai_client") as mock_resolve,
         ):
             mock_runner_cls.run = AsyncMock(
                 side_effect=RuntimeError("tool output mentioned context_length_exceeded")
@@ -613,7 +613,7 @@ class TestExecuteWithFallback:
             with pytest.raises(RuntimeError, match="context_length_exceeded"):
                 await runner._execute_with_fallback("basic_agent", ctx, session, 10, "hello", None)
 
-        mock_openai.assert_not_called()
+        mock_resolve.assert_not_called()
 
     async def test_fallback_on_max_turns(self, runner):
         """Fallback with str output_type returns raw text."""
@@ -627,12 +627,12 @@ class TestExecuteWithFallback:
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-            patch("openai.AsyncOpenAI") as mock_openai,
+            patch("sinan_agentic_core.core.base_runner.resolve_openai_client") as mock_resolve,
         ):
             mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
             mock_client = AsyncMock()
             mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
-            mock_openai.return_value = mock_client
+            mock_resolve.return_value = mock_client
 
             result = await runner._execute_with_fallback(
                 "basic_agent", ctx, session, 10, "hello", None
@@ -666,12 +666,12 @@ class TestExecuteWithFallback:
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-            patch("openai.AsyncOpenAI") as mock_openai,
+            patch("sinan_agentic_core.core.base_runner.resolve_openai_client") as mock_resolve,
         ):
             mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
             mock_client = AsyncMock()
             mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
-            mock_openai.return_value = mock_client
+            mock_resolve.return_value = mock_client
 
             result = await runner._execute_with_fallback(
                 "structured_agent", ctx, session, 10, "hello", None
@@ -710,12 +710,12 @@ class TestExecuteWithFallback:
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-            patch("openai.AsyncOpenAI") as mock_openai,
+            patch("sinan_agentic_core.core.base_runner.resolve_openai_client") as mock_resolve,
         ):
             mock_runner_cls.run = AsyncMock(side_effect=make_context_overflow_error())
             mock_client = AsyncMock()
             mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
-            mock_openai.return_value = mock_client
+            mock_resolve.return_value = mock_client
 
             result = await runner._execute_with_fallback(
                 "custom_fb_agent", ctx, session, 10, "hello", custom_builder
@@ -736,12 +736,12 @@ class TestExecuteWithFallback:
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-            patch("openai.AsyncOpenAI") as mock_openai,
+            patch("sinan_agentic_core.core.base_runner.resolve_openai_client") as mock_resolve,
         ):
             mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
             mock_client = AsyncMock()
             mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
-            mock_openai.return_value = mock_client
+            mock_resolve.return_value = mock_client
 
             result = await runner._execute_with_fallback(
                 "basic_agent", ctx, session, 10, "hello", None
@@ -835,12 +835,12 @@ class TestExecuteWithFallback:
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-            patch("openai.AsyncOpenAI") as mock_openai,
+            patch("sinan_agentic_core.core.base_runner.resolve_openai_client") as mock_resolve,
         ):
             mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
             mock_client = AsyncMock()
             mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
-            mock_openai.return_value = mock_client
+            mock_resolve.return_value = mock_client
 
             result = await runner._execute_with_fallback(
                 "basic_agent",
@@ -923,8 +923,8 @@ class TestExecuteWithFallback:
             assert "hooks" not in call_kwargs
 
     async def test_recovery_branch_reuses_configured_default_client(self, runner):
-        """Recovery branch routes the rescue call through the SDK's configured
-        default client (e.g. AsyncAzureOpenAI) instead of constructing a fresh
+        """Recovery branch routes the rescue call through the resolved provider
+        client (e.g. AsyncAzureOpenAI) instead of constructing a fresh
         AsyncOpenAI. Regression for #35.
         """
         from sinan_agentic_core.core.capabilities import Capability
@@ -956,10 +956,9 @@ class TestExecuteWithFallback:
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
             patch(
-                "agents.models._openai_shared.get_default_openai_client",
+                "sinan_agentic_core.core.base_runner.resolve_openai_client",
                 return_value=configured_client,
-            ),
-            patch("openai.AsyncOpenAI") as mock_async_openai,
+            ) as mock_resolve,
         ):
             mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (2) exceeded"))
 
@@ -975,45 +974,11 @@ class TestExecuteWithFallback:
 
         assert result == "Rescued via Azure"
         configured_client.chat.completions.create.assert_awaited_once()
-        # Must NOT have built a fresh AsyncOpenAI when a default is configured.
-        mock_async_openai.assert_not_called()
+        # The branch asks the provider layer for its client rather than building one.
+        mock_resolve.assert_called_once_with()
         # Capability hooks still fire exactly once each, in order.
         assert recorder.start_calls == 1
         assert recorder.end_calls == 1
-
-    async def test_recovery_branch_falls_back_to_async_openai_when_no_default(self, runner):
-        """When no default client is configured, fall back to constructing
-        AsyncOpenAI() with no api_key kwarg (the SDK reads OPENAI_API_KEY).
-        Regression for #35 — must not pass api_key=None into AsyncOpenAI().
-        """
-        ctx = AgentContext(database_connector=Mock())
-        session = AgentSession(session_id="test")
-
-        mock_completion = Mock()
-        mock_completion.choices = [Mock()]
-        mock_completion.choices[0].message.content = "Rescued via OpenAI"
-        mock_completion.usage = Mock(prompt_tokens=10, completion_tokens=5, total_tokens=15)
-
-        with (
-            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-            patch(
-                "agents.models._openai_shared.get_default_openai_client",
-                return_value=None,
-            ),
-            patch("openai.AsyncOpenAI") as mock_async_openai,
-        ):
-            mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
-            mock_client = AsyncMock()
-            mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
-            mock_async_openai.return_value = mock_client
-
-            result = await runner._execute_with_fallback(
-                "basic_agent", ctx, session, 10, "hello", None
-            )
-
-        assert result == "Rescued via OpenAI"
-        mock_async_openai.assert_called_once_with()
 
 
 # ------------------------------------------------------------------ #
@@ -1661,12 +1626,12 @@ class TestFallbackBranchOutputRecovery:
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-            patch("openai.AsyncOpenAI") as mock_openai,
+            patch("sinan_agentic_core.core.base_runner.resolve_openai_client") as mock_resolve,
         ):
             mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
             client = AsyncMock()
             client.chat.completions.create = AsyncMock(return_value=completion)
-            mock_openai.return_value = client
+            mock_resolve.return_value = client
 
             return await runner._execute_with_fallback(
                 agent_name,
@@ -1797,7 +1762,7 @@ class TestModelRetryWiring:
         with (
             patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
             patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-            patch("openai.AsyncOpenAI", return_value=client),
+            patch("sinan_agentic_core.core.base_runner.resolve_openai_client", return_value=client),
         ):
             mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
             await runner._execute_with_fallback(

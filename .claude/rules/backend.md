@@ -29,23 +29,21 @@ When adding a new execution branch, modifying an existing one, or reviewing chan
 
 ## Reuse the configured default OpenAI client on every SDK-bypassing branch in `BaseAgentRunner`
 
-Any execution branch in `sinan_agentic_core/core/base_runner.py` that issues a model call outside `Runner.run(...)` / `Runner.run_streamed(...)` (e.g. the summarize-and-extract recovery branch inside `_execute_with_fallback`) must obtain its OpenAI client from `agents.models._openai_shared.get_default_openai_client()` — the client that `configure_llm_provider(...)` installs via `set_default_openai_client(...)`. Construct a fresh `AsyncOpenAI(...)` only as a fallback when no default has been configured. Do not read provider keys, endpoints, or deployment names directly; do not call `AsyncOpenAI(api_key=get_default_openai_key())`.
+Any execution branch in `sinan_agentic_core/core/base_runner.py` that issues a model call outside `Runner.run(...)` / `Runner.run_streamed(...)` (e.g. the summarize-and-extract recovery branch inside `_execute_with_fallback`) must obtain its OpenAI client from `resolve_openai_client()` (`sinan_agentic_core/llm/factory.py`) — the owned wrapper that reads back the client `configure_llm_provider(...)` installed via `set_default_openai_client(...)`, and builds a bare `AsyncOpenAI()` only when no provider has been configured. Do not construct a client at the call site, do not read provider keys, endpoints, or deployment names directly, and do not call `AsyncOpenAI(api_key=get_default_openai_key())`.
+
+`resolve_openai_client()` is also the only place in the codebase allowed to import `agents.models._openai_shared` — `openai-agents==0.18.3` exports `set_default_openai_client` from the `agents` root but no matching getter, so reading the client back needs the private module. Confining that import to the module that already owns the setter side keeps the SDK-private surface at one site instead of one per call site (CLAUDE.md rule 5: consumers must not reach into `agents.*` internals). Re-check for a public getter when the SDK version bumps.
 
 **Why:** Issue #35 — the recovery branch built `AsyncOpenAI(api_key=get_default_openai_key())`, bypassing the configured default. Under `AzureOpenAIProviderConfig`, `configure_llm_provider` (`sinan_agentic_core/llm/factory.py:42`) installs an `AsyncAzureOpenAI` via `set_default_openai_client(...)` but never sets a default key, so the rescue call crashed at client construction with `OpenAIError: The api_key client option must be set...`. Under plain OpenAI it masked itself whenever `OPENAI_API_KEY` was exported in the environment, which is why CI stayed green and the regression only surfaced on the first Azure-hosted evaluation. The framework's contract is that `configure_llm_provider` is the single point that owns provider-specific client wiring; any model-call site that rebuilds its own client breaks that contract.
 
-**How to apply:** Use the pattern at `base_runner.py:402-407`:
+**How to apply:** One call, at the top of the bypass branch:
 
 ```python
-from agents.models._openai_shared import get_default_openai_client
+from ..llm import resolve_openai_client
 
-client = get_default_openai_client()
-if client is None:
-    from openai import AsyncOpenAI
-
-    client = AsyncOpenAI()
+client = resolve_openai_client()
 ```
 
-Apply this on every new SDK-bypassing branch — current and future — including recovery, repair, summarize-and-extract, and any provider-specific escape hatch added later. Tests that need to inject a stub client should patch `get_default_openai_client` (or `set_default_openai_client` upstream), not bypass the lookup.
+Apply this on every new SDK-bypassing branch — current and future — including recovery, repair, summarize-and-extract, and any provider-specific escape hatch added later. Tests that need to inject a stub client patch the resolver at its import site (`patch("sinan_agentic_core.core.base_runner.resolve_openai_client")`), not `openai.AsyncOpenAI` — the branch no longer constructs a client, so patching the constructor injects nothing. Tests for the resolver itself patch `sinan_agentic_core.llm.factory.get_default_openai_client`.
 
 ## Run-level SDK kwarg wiring on every `Runner`-calling site in `sinan_agentic_core`
 
