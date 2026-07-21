@@ -72,9 +72,7 @@ class BaseAgentRunner:
         self.guardrail_registry = get_guardrail_registry()
         self.last_usage: dict[str, Any] | None = None
 
-        self.tool_map = {
-            name: tool_def.function for name, tool_def in self.tool_registry._tools.items()
-        }
+        self.tool_map = self.tool_registry.get_all_functions()
 
         guardrail_names = self.guardrail_registry.list_names()
         logger.debug(f"Loaded {len(self.tool_map)} tools: {list(self.tool_map.keys())}")
@@ -818,43 +816,46 @@ class BaseAgentRunner:
         for tool_name in tool_names:
             if tool_name in self.tool_map:
                 agent_tools.append(self.tool_map[tool_name])
-            elif tool_name in self.agent_registry._agents:
-                tool_agent = await self.create_agent(
-                    agent_name=tool_name,
-                    context=context,
-                )
-                agent_def = self.agent_registry._agents[tool_name]
-                as_tool_kwargs: dict[str, Any] = {
-                    "tool_name": tool_name,
-                    "tool_description": agent_def.description,
-                    "failure_error_function": structured_tool_error,
-                }
-                if agent_def.as_tool_parameters is not None:
-                    as_tool_kwargs["parameters"] = agent_def.as_tool_parameters
+                continue
 
-                sub_run_config = self._build_run_config(agent_def)
-                if sub_run_config is not None:
-                    as_tool_kwargs["run_config"] = sub_run_config
-
-                # NOTE: no error_handlers here — Agent.as_tool() accepts
-                # run_config but has no error_handlers parameter, so a
-                # sub-agent's invalid structured output still raises. Wire it
-                # the moment the SDK exposes it.
-
-                budget = agent_def.as_tool_turn_budget
-                if budget:
-                    budget.reset()
-                    sub_caps: list[Capability] = [budget]
-                    self._apply_dynamic_instructions(tool_agent, sub_caps)
-                    tool_agent.tools.append(request_extension_tool)
-                    as_tool_kwargs["hooks"] = _CompositeHooks(sub_caps)
-                    as_tool_kwargs["max_turns"] = budget.absolute_max
-                elif agent_def.as_tool_max_turns is not None:
-                    as_tool_kwargs["max_turns"] = agent_def.as_tool_max_turns
-
-                agent_tools.append(tool_agent.as_tool(**as_tool_kwargs))
-            else:
+            agent_def = self.agent_registry.get(tool_name)
+            if agent_def is None:
                 logger.warning(f"Tool '{tool_name}' not found in tool or agent registry")
+                continue
+
+            tool_agent = await self.create_agent(
+                agent_name=tool_name,
+                context=context,
+            )
+            as_tool_kwargs: dict[str, Any] = {
+                "tool_name": tool_name,
+                "tool_description": agent_def.description,
+                "failure_error_function": structured_tool_error,
+            }
+            if agent_def.as_tool_parameters is not None:
+                as_tool_kwargs["parameters"] = agent_def.as_tool_parameters
+
+            sub_run_config = self._build_run_config(agent_def)
+            if sub_run_config is not None:
+                as_tool_kwargs["run_config"] = sub_run_config
+
+            # NOTE: no error_handlers here — Agent.as_tool() accepts
+            # run_config but has no error_handlers parameter, so a
+            # sub-agent's invalid structured output still raises. Wire it
+            # the moment the SDK exposes it.
+
+            budget = agent_def.as_tool_turn_budget
+            if budget:
+                budget.reset()
+                sub_caps: list[Capability] = [budget]
+                self._apply_dynamic_instructions(tool_agent, sub_caps)
+                tool_agent.tools.append(request_extension_tool)
+                as_tool_kwargs["hooks"] = _CompositeHooks(sub_caps)
+                as_tool_kwargs["max_turns"] = budget.absolute_max
+            elif agent_def.as_tool_max_turns is not None:
+                as_tool_kwargs["max_turns"] = agent_def.as_tool_max_turns
+
+            agent_tools.append(tool_agent.as_tool(**as_tool_kwargs))
 
         return agent_tools
 
@@ -976,14 +977,15 @@ class BaseAgentRunner:
         handoffs: list[Any] = []
 
         for handoff_name in handoff_names:
-            if handoff_name in self.agent_registry._agents:
-                handoff_agent = await self.create_agent(
-                    agent_name=handoff_name,
-                    context=context,
-                )
-                handoffs.append(handoff_agent)
-            else:
+            if self.agent_registry.get(handoff_name) is None:
                 logger.warning(f"Handoff agent '{handoff_name}' not found in registry")
+                continue
+
+            handoff_agent = await self.create_agent(
+                agent_name=handoff_name,
+                context=context,
+            )
+            handoffs.append(handoff_agent)
 
         return handoffs
 

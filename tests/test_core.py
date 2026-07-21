@@ -98,7 +98,7 @@ def runner(_registries):
 
 class TestBaseAgentRunnerInit:
     def test_loads_tool_map(self, runner):
-        assert "test_tool" in runner.tool_map
+        assert runner.tool_map == {"test_tool": runner.tool_registry.get_tool("test_tool").function}
 
     def test_loads_guardrail_registry(self, runner):
         assert runner.guardrail_registry.get_guardrail("test_guard") is not None
@@ -332,6 +332,36 @@ class TestBuildHostedTools:
 
     def test_empty_list(self, runner):
         assert runner._build_hosted_tools([]) == []
+
+
+# ------------------------------------------------------------------ #
+# _build_tools / _build_handoffs registry lookups
+# ------------------------------------------------------------------ #
+
+
+class TestBuildToolsRegistryLookup:
+    async def test_registry_tool_is_resolved(self, runner):
+        ctx = AgentContext(database_connector=Mock())
+        tools = await runner._build_tools(["test_tool"], ctx)
+        assert tools == [runner.tool_registry.get_tool("test_tool").function]
+
+    async def test_unknown_name_is_skipped(self, runner):
+        ctx = AgentContext(database_connector=Mock())
+        assert await runner._build_tools(["missing_tool"], ctx) == []
+
+
+class TestBuildHandoffs:
+    async def test_registered_handoff_is_built(self, runner):
+        runner.agent_registry.register(
+            AgentDefinition(name="handoff_target", description="target", instructions="target")
+        )
+        ctx = AgentContext(database_connector=Mock())
+        handoffs = await runner._build_handoffs(["handoff_target"], ctx)
+        assert [h.name for h in handoffs] == ["handoff_target"]
+
+    async def test_unknown_handoff_is_skipped(self, runner):
+        ctx = AgentContext(database_connector=Mock())
+        assert await runner._build_handoffs(["missing_agent"], ctx) == []
 
 
 # ------------------------------------------------------------------ #
