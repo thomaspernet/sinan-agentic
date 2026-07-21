@@ -36,6 +36,7 @@ from pydantic import BaseModel
 
 from ..core.capabilities import Capability
 from ..core.model_retry import ModelRetryConfig
+from ..core.tool_output_trim import ToolOutputTrimConfig
 from .capability_registry import (
     CapabilityNotFoundError,
     get_capability_registry,
@@ -91,6 +92,7 @@ class AgentYamlEntry(BaseModel):
     error_recovery: bool = True
     invalid_output_recovery: bool = True
     model_retry: ModelRetryConfig | None = None
+    tool_output_trim: ToolOutputTrimConfig | None = None
     capabilities: list[CapabilityRef] = []
     effort: str | None = None
     tool_rules: dict[str, dict[str, Any]] = {}
@@ -303,6 +305,11 @@ class AgentCatalog:
         raw_retry = raw.get("model_retry")
         retry_cfg = ModelRetryConfig(**raw_retry) if raw_retry else None
 
+        # ``tool_output_trim: {}`` opts in with SDK defaults, so an empty mapping
+        # is a declaration — only a missing key means the agent opts out.
+        raw_trim = raw.get("tool_output_trim")
+        trim_cfg = ToolOutputTrimConfig(**raw_trim) if raw_trim is not None else None
+
         capabilities = _parse_capabilities(name, raw.get("capabilities", []))
 
         return AgentYamlEntry(
@@ -316,6 +323,7 @@ class AgentCatalog:
             error_recovery=raw.get("error_recovery", True),
             invalid_output_recovery=raw.get("invalid_output_recovery", True),
             model_retry=retry_cfg,
+            tool_output_trim=trim_cfg,
             capabilities=capabilities,
             tool_rules=raw.get("tool_rules", {}),
             effort=raw.get("effort"),

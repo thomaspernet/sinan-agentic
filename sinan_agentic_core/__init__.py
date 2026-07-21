@@ -44,6 +44,7 @@ from .core import (
     RetryBackoffConfig,
     RetryTrigger,
     ToolErrorRecovery,
+    ToolOutputTrimConfig,
     ToolTracer,
     TurnBudget,
     recover_invalid_final_output,
@@ -111,6 +112,7 @@ __all__ = [
     "RetryBackoffConfig",
     "RetryTrigger",
     "ToolErrorRecovery",
+    "ToolOutputTrimConfig",
     "ToolTracer",
     "TurnBudget",
     # Instructions

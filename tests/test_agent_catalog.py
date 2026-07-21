@@ -965,3 +965,71 @@ class TestModelRetry:
         assert retry.retry_on == [RetryTrigger.PROVIDER_SUGGESTED]
         assert retry.backoff.initial_delay == 0.5
         assert retry.backoff.max_delay == 8.0
+
+
+# ---------------------------------------------------------------------------
+# tool_output_trim key
+# ---------------------------------------------------------------------------
+
+
+class TestToolOutputTrim:
+    def _catalog(self, entry: dict) -> AgentCatalog:
+        return AgentCatalog(tool_groups={}, raw_agents={"researcher": entry})
+
+    def test_defaults_to_off(self) -> None:
+        catalog = self._catalog({"model": "fast", "description": "Reads papers"})
+        assert catalog.get("researcher").tool_output_trim is None
+
+    def test_an_empty_mapping_opts_in_with_sdk_defaults(self) -> None:
+        catalog = self._catalog(
+            {"model": "fast", "description": "Reads papers", "tool_output_trim": {}}
+        )
+        trim = catalog.get("researcher").tool_output_trim
+
+        assert trim is not None
+        assert trim.max_output_chars is None
+
+    def test_parses_the_declared_policy(self) -> None:
+        catalog = self._catalog(
+            {
+                "model": "fast",
+                "description": "Reads papers",
+                "tool_output_trim": {"max_output_chars": 4000, "trimmable_tools": ["web_search"]},
+            }
+        )
+        trim = catalog.get("researcher").tool_output_trim
+
+        assert trim.max_output_chars == 4000
+        assert trim.trimmable_tools == ["web_search"]
+
+    def test_rejects_an_out_of_range_policy_at_load_time(self) -> None:
+        """The SDK would only raise on the first model call; the catalog raises now."""
+        catalog = self._catalog(
+            {
+                "model": "fast",
+                "description": "Reads papers",
+                "tool_output_trim": {"recent_turns": 0},
+            }
+        )
+        with pytest.raises(ValidationError):
+            catalog.get("researcher")
+
+    def test_loads_from_yaml(self, tmp_path) -> None:
+        path = tmp_path / "agents.yaml"
+        path.write_text(textwrap.dedent("""\
+                agents:
+                  researcher:
+                    model: fast
+                    description: Reads papers
+                    tool_output_trim:
+                      recent_turns: 3
+                      max_output_chars: 4000
+                      preview_chars: 500
+                      trimmable_tools: [web_search]
+            """))
+        trim = load_agent_catalog(path).get("researcher").tool_output_trim
+
+        assert trim.recent_turns == 3
+        assert trim.max_output_chars == 4000
+        assert trim.preview_chars == 500
+        assert trim.trimmable_tools == ["web_search"]

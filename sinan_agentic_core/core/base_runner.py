@@ -27,6 +27,7 @@ from agents import (
     ToolInputGuardrail,
     Usage,
 )
+from agents.extensions import ToolOutputTrimmer
 from agents.items import TResponseInputItem
 from openai.types.responses import ResponseCompletedEvent, ResponseTextDeltaEvent
 
@@ -427,6 +428,13 @@ class BaseAgentRunner:
             ctx_wrapper = RunContextWrapper(context)
             instructions = self._build_instructions(agent_def, ctx_wrapper)
 
+            # NOTE: a declared tool_output_trim does not reach this prompt. The
+            # SDK applies the filter through RunConfig.call_model_input_filter,
+            # read only inside Runner.run (agents.run_internal.turn_preparation,
+            # openai-agents==0.18.3), which this branch bypasses. The filter also
+            # keys its window off the last N *user* messages, and a rescue prompt
+            # replays a single one — so running it here would trim nothing. The
+            # prompt builder caps each output instead.
             builder = fallback_prompt_builder or self._default_fallback_prompt_builder
             prompt = builder(instructions, collecting.raw_items, agent_def)
 
@@ -914,20 +922,51 @@ class BaseAgentRunner:
         guardrails *before* the SDK emits a pending-approval interruption, so a
         rejected call never reaches the tool or a human approver.
 
+        Declaring ``tool_output_trim`` installs the SDK's tool-output filter,
+        which shrinks oversized outputs from older turns before each model call.
+
         Args:
-            agent_def: Agent definition whose guardrails decide the config
+            agent_def: Agent definition whose guardrails and trim policy decide
+                the config
 
         Returns:
             Configured RunConfig, or None when no setting differs from the default
         """
-        if not self.guardrail_registry.has_category(
-            agent_def.guardrails, GuardrailCategory.TOOL_INPUT
-        ):
+        config_kwargs: dict[str, Any] = {}
+
+        if self.guardrail_registry.has_category(agent_def.guardrails, GuardrailCategory.TOOL_INPUT):
+            config_kwargs["tool_execution"] = ToolExecutionConfig(
+                pre_approval_tool_input_guardrails=True
+            )
+
+        trimmer = self._build_tool_output_trimmer(agent_def)
+        if trimmer is not None:
+            config_kwargs["call_model_input_filter"] = trimmer
+
+        if not config_kwargs:
             return None
 
-        return RunConfig(
-            tool_execution=ToolExecutionConfig(pre_approval_tool_input_guardrails=True)
-        )
+        return RunConfig(**config_kwargs)
+
+    def _build_tool_output_trimmer(self, agent_def: Any) -> ToolOutputTrimmer | None:
+        """Build the SDK tool-output filter for an agent, or None when it opts out.
+
+        Trimming is off unless the agent declares ``tool_output_trim``: it
+        removes content the model would otherwise have seen, so it is never
+        implied.
+
+        Args:
+            agent_def: Agent definition whose ``tool_output_trim`` config decides
+                the filter
+
+        Returns:
+            Configured trimmer, or None when the agent declares no trim policy
+        """
+        if agent_def.tool_output_trim is None:
+            return None
+
+        trimmer: ToolOutputTrimmer = agent_def.tool_output_trim.build()
+        return trimmer
 
     def _build_error_handlers(self, agent_def: Any) -> RunErrorHandlers[Any] | None:
         """Build the SDK run error handlers for an agent, or None when defaults apply.

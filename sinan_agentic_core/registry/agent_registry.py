@@ -6,6 +6,7 @@ from typing import Any
 
 from ..core.capabilities import Capability
 from ..core.model_retry import ModelRetryConfig
+from ..core.tool_output_trim import ToolOutputTrimConfig
 
 
 @dataclass
@@ -33,6 +34,10 @@ class AgentDefinition:
     # Retry transient model-API failures inside the SDK instead of failing the
     # run. Off unless declared — retries cost latency and duplicate requests.
     model_retry: ModelRetryConfig | None = None
+    # Shrink oversized tool outputs from older turns before each model call, so
+    # the run overflows less often. Off unless declared — trimming removes
+    # content the model would otherwise have seen.
+    tool_output_trim: ToolOutputTrimConfig | None = None
     requires_schema_injection: bool = False  # If True, inject {schema} dynamically
     knowledge_text: str = ""  # Domain knowledge from catalog (injected via domain_knowledge())
     as_tool_parameters: Any | None = (
