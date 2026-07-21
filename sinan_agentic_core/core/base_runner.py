@@ -39,6 +39,7 @@ from ..registry.guardrail_registry import (
 from ..session import AgentSession, ConversationHistory
 from .capabilities import Capability
 from .errors import structured_tool_error
+from .model_retry import apply_model_retry
 from .output_recovery import (
     build_output_schema,
     invalid_final_output_handlers,
@@ -161,12 +162,7 @@ class BaseAgentRunner:
         else:
             model_settings = self._build_model_settings(agent_def, ctx_wrapper)
 
-        retry_settings = self._build_model_retry(agent_def)
-        if retry_settings is not None:
-            # resolve() overlays the settings in hand on top of the declared
-            # retry policy, so a caller that sets its own retry still wins
-            # field-by-field while every other declared agent keeps the policy.
-            model_settings = ModelSettings(retry=retry_settings).resolve(model_settings)
+        model_settings = apply_model_retry(agent_def.model_retry, model_settings)
 
         effective_model = model_override or agent_def.model
 

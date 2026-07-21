@@ -10,8 +10,11 @@ Usage:
     result = await Runner.run(agent, "What's the weather?")
 """
 
+from typing import Any
+
 from agents import Agent
 
+from ..core.model_retry import apply_model_retry
 from .agent_registry import get_agent_registry
 from .guardrail_registry import attach_tool_input_guardrails, get_guardrail_registry
 from .tool_registry import get_tool_registry
@@ -27,7 +30,9 @@ def create_agent_from_registry(
     the ToolRegistry and its guardrail references through the GuardrailRegistry,
     and returns a fully configured Agent. Each guardrail lands in the SDK slot
     its category maps to: ``input`` and ``output`` on the agent, ``tool_input``
-    on the agent's local function tools.
+    on the agent's local function tools. A declared ``model_retry`` policy rides
+    on the agent's model settings, so transient model-API failures retry inside
+    the SDK instead of failing the run.
 
     NOTE: the run-level ``pre_approval_tool_input_guardrails`` setting is not
     wired here — it lives on ``RunConfig``, which belongs to the run, not the
@@ -71,11 +76,17 @@ def create_agent_from_registry(
         guardrails.tool_input_guardrails,
     )
 
-    return Agent(
-        name=agent_def.name,
-        instructions=agent_def.instructions,
-        model=model_override or agent_def.model,
-        tools=tools,
-        input_guardrails=guardrails.input_guardrails,
-        output_guardrails=guardrails.output_guardrails,
-    )
+    agent_kwargs: dict[str, Any] = {
+        "name": agent_def.name,
+        "instructions": agent_def.instructions,
+        "model": model_override or agent_def.model,
+        "tools": tools,
+        "input_guardrails": guardrails.input_guardrails,
+        "output_guardrails": guardrails.output_guardrails,
+    }
+
+    model_settings = apply_model_retry(agent_def.model_retry)
+    if model_settings is not None:
+        agent_kwargs["model_settings"] = model_settings
+
+    return Agent(**agent_kwargs)
