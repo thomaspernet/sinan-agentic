@@ -2,11 +2,35 @@
 
 from unittest.mock import Mock
 
+import httpx
 import pytest
 from agents import Usage
+from openai import BadRequestError
 
+from sinan_agentic_core.core.run_errors import CONTEXT_OVERFLOW_ERROR_CODE
 from sinan_agentic_core.models.context import AgentContext
 from sinan_agentic_core.session.agent_session import AgentSession, ConversationHistory
+
+
+def make_context_overflow_error(
+    message: str = "This model's maximum context length is 8192 tokens.",
+) -> BadRequestError:
+    """Build the provider error a real context overflow raises.
+
+    Context overflow has no SDK exception class -- it surfaces as the
+    provider's HTTP 400 with ``context_length_exceeded`` in the error body's
+    ``code`` field. Tests classify against that shape, not against a message.
+    """
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    return BadRequestError(
+        message,
+        response=httpx.Response(400, request=request),
+        body={
+            "message": message,
+            "type": "invalid_request_error",
+            "code": CONTEXT_OVERFLOW_ERROR_CODE,
+        },
+    )
 
 
 @pytest.fixture

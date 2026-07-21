@@ -44,6 +44,7 @@ from .output_recovery import (
     recover_invalid_final_output,
     salvage_structured_output,
 )
+from .run_errors import FALLBACK_RECOVERABLE_KINDS, classify_run_error
 from .tool_error_recovery import ToolErrorRecovery
 from .turn_budget import TurnBudget
 from .turn_budget_tool import request_extension_tool
@@ -372,8 +373,10 @@ class BaseAgentRunner:
     ) -> Any:
         """Run agent with automatic fallback on context overflow.
 
-        If the agent hits max_turns or context_length_exceeded, collects
-        all gathered tool outputs and makes a single condensed LLM call.
+        When the run fails with a kind in ``FALLBACK_RECOVERABLE_KINDS`` --
+        ``MAX_TURNS`` or ``CONTEXT_OVERFLOW`` -- collects all gathered tool
+        outputs and makes a single condensed LLM call. Every other failure,
+        a refusal included, propagates untouched.
         """
         capabilities = capabilities or []
         agent_def = self._get_agent_definition(agent_name)
@@ -415,14 +418,15 @@ class BaseAgentRunner:
             return run_result.final_output
 
         except Exception as err:
-            err_str = str(err)
-            is_recoverable = "Max turns" in err_str or "context_length_exceeded" in err_str
-            if not is_recoverable:
+            kind = classify_run_error(err)
+            if kind not in FALLBACK_RECOVERABLE_KINDS:
                 raise
 
             logger.warning(
-                f"Agent '{agent_name}' hit limit: {err_str}. "
-                f"Falling back to summarize-and-extract."
+                "Agent '%s' hit %s: %s. Falling back to summarize-and-extract.",
+                agent_name,
+                kind.value,
+                err,
             )
 
             ctx_wrapper = RunContextWrapper(context)

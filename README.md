@@ -731,14 +731,19 @@ Sub-agent failures automatically return structured JSON instead of generic error
 }
 ```
 
-This is handled by `structured_tool_error()`, which is automatically wired into all agent-as-tool calls via `BaseAgentRunner`. Retry hints are generated based on error type:
+This is handled by `structured_tool_error()`, which is automatically wired into all agent-as-tool calls via `BaseAgentRunner`. The hint is picked from the failure's *type* first — `classify_run_error()` maps the exception onto a `RunErrorKind` — and only falls back to the message for the `ValueError`s this framework's own tools raise:
 
-| Error pattern | Retry hint |
-|---------------|------------|
-| "Max turns" in message | Simplify the request or break into smaller steps |
+| Failure | Retry hint |
+|---------|------------|
+| `MaxTurnsExceeded` | Simplify the request or break it into smaller steps |
+| Provider `context_length_exceeded` | Narrow the request, or split it across several calls |
+| `ModelRefusalError` | Do not re-send the same request — restate it or handle it another way |
+| `ModelBehaviorError` | The response missed its output schema; retry once with a simpler request |
 | "not found" in message | Verify the ID exists in your context |
 | "required" in message | Check context for available IDs and provide all required fields |
 | Other | Review the error message and retry with corrected input |
+
+Keying off the class rather than the wording means an upstream release that rewords `"Max turns (10) exceeded"` does not silently downgrade the hint, and an unrelated error that merely quotes those words is not mistaken for the failure it names.
 
 ### How it works
 
@@ -1027,6 +1032,8 @@ register_agent(AgentDefinition(
 Pick `max_output_chars` above the size of an output the agent still reasons over several turns later, and `preview_chars` large enough that the trimmed entry still says what the call returned. The two are independent: an output is replaced only when the preview is genuinely shorter than the original, so `preview_chars: 500` with `max_output_chars: 500` is a valid "keep the first 500 characters of anything bigger" policy — it spares outputs just over the cap and still cuts a 100,000-character one by 99%.
 
 Trimming and the overflow fallback are complements, not alternatives: trimming makes overflow rarer, the fallback still rescues the run when it happens anyway. The fallback's own rescue call bypasses the SDK, so a declared trim policy does not shape that prompt — the prompt builder caps each output instead.
+
+The fallback fires on exactly two failures — the SDK's `MaxTurnsExceeded` and a provider 400 carrying `context_length_exceeded`. Both mean the loop ran out of room. Everything else propagates, a `ModelRefusalError` included: the rescue call goes straight to the model and re-asking a refusal through a path that bypasses the run would route around the answer rather than recover from a limit.
 
 ## Tool Tracer (Non-Streaming Observability)
 

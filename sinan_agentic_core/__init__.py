@@ -43,10 +43,12 @@ from .core import (
     ModelRetryConfig,
     RetryBackoffConfig,
     RetryTrigger,
+    RunErrorKind,
     ToolErrorRecovery,
     ToolOutputTrimConfig,
     ToolTracer,
     TurnBudget,
+    classify_run_error,
     recover_invalid_final_output,
 )
 from .instructions import InstructionBuilder
@@ -107,10 +109,12 @@ __all__ = [
     # Core
     "BaseAgentRunner",
     "Capability",
+    "classify_run_error",
     "ModelRetryConfig",
     "recover_invalid_final_output",
     "RetryBackoffConfig",
     "RetryTrigger",
+    "RunErrorKind",
     "ToolErrorRecovery",
     "ToolOutputTrimConfig",
     "ToolTracer",
