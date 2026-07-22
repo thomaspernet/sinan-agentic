@@ -10,6 +10,10 @@ from pydantic import ValidationError
 from sinan_agentic_core.core.capabilities import Capability
 from sinan_agentic_core.core.turn_budget import (
     DEFAULT_ABSOLUTE_MAX_TURNS,
+    DEFAULT_EXTENSION_SIZE,
+    DEFAULT_MAX_EXTENSIONS,
+    DEFAULT_REMINDER_AT,
+    DEFAULT_TURNS,
     TurnBudget,
     TurnBudgetConfig,
     build_turn_budget,
@@ -24,11 +28,11 @@ from sinan_agentic_core.utils import get_turn_budget, set_turn_budget
 class TestTurnBudgetDefaults:
     def test_default_values(self):
         budget = TurnBudget()
-        assert budget.default_turns == 10
-        assert budget.reminder_at == 2
-        assert budget.max_extensions == 3
-        assert budget.extension_size == 5
-        assert budget.absolute_max == 25
+        assert budget.default_turns == DEFAULT_TURNS
+        assert budget.reminder_at == DEFAULT_REMINDER_AT
+        assert budget.max_extensions == DEFAULT_MAX_EXTENSIONS
+        assert budget.extension_size == DEFAULT_EXTENSION_SIZE
+        assert budget.absolute_max == DEFAULT_ABSOLUTE_MAX_TURNS
 
     def test_initial_state(self):
         budget = TurnBudget()
@@ -678,10 +682,21 @@ class TestTurnBudgetConfigDefaults:
     def test_an_empty_declaration_opts_in_with_defaults(self):
         """``turn_budget: {}`` is a declaration, not an absence."""
         config = TurnBudgetConfig()
-        assert config.default_turns == 10
-        assert config.reminder_at == 2
-        assert config.max_extensions == 3
-        assert config.extension_size == 5
+        assert config.default_turns == DEFAULT_TURNS
+        assert config.reminder_at == DEFAULT_REMINDER_AT
+        assert config.max_extensions == DEFAULT_MAX_EXTENSIONS
+        assert config.extension_size == DEFAULT_EXTENSION_SIZE
+
+    def test_the_declared_defaults_match_the_runtime_defaults(self):
+        """Declaring nothing and declaring an empty block must yield one budget.
+
+        Both field lists read the same module constants, so a default changed on
+        one side cannot leave the other behind.
+        """
+        runtime = TurnBudget()
+
+        for name, field in TurnBudgetConfig.model_fields.items():
+            assert field.default == getattr(runtime, name), name
 
     def test_an_unknown_key_is_rejected(self):
         """A typo must fail loudly rather than silently leave the field at its default."""

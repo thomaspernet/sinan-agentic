@@ -15,6 +15,7 @@ from sinan_agentic_core.core.tool_error_recovery import (
 )
 from sinan_agentic_core.core.turn_budget import (
     DEFAULT_ABSOLUTE_MAX_TURNS,
+    DEFAULT_TURNS,
     TurnBudget,
     TurnBudgetConfig,
     build_turn_budget,
@@ -214,7 +215,7 @@ class TestBuiltInCapabilities:
         cap = reg.build("turn_budget")
         assert isinstance(cap, TurnBudget)
         # Sanity-check the dataclass defaults hold.
-        assert cap.default_turns == 10
+        assert cap.default_turns == DEFAULT_TURNS
 
     def test_build_turn_budget_without_a_ceiling_falls_back_to_the_default(self) -> None:
         cap = get_capability_registry().build("turn_budget", {"default_turns": 8})

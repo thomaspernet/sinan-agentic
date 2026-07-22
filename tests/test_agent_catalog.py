@@ -15,7 +15,14 @@ from sinan_agentic_core.core.model_retry import (
     RetryTrigger,
 )
 from sinan_agentic_core.core.tool_error_recovery import ToolErrorRecovery
-from sinan_agentic_core.core.turn_budget import TurnBudget, TurnBudgetConfig
+from sinan_agentic_core.core.turn_budget import (
+    DEFAULT_EXTENSION_SIZE,
+    DEFAULT_MAX_EXTENSIONS,
+    DEFAULT_REMINDER_AT,
+    DEFAULT_TURNS,
+    TurnBudget,
+    TurnBudgetConfig,
+)
 from sinan_agentic_core.registry.agent_catalog import (
     AgentCatalog,
     AgentYamlEntry,
@@ -607,10 +614,10 @@ class TestCatalogTurnBudget:
         entry = load_agent_catalog(tmp_path / "agents.yaml").get("agent")
 
         assert entry.turn_budget is not None
-        assert entry.turn_budget.default_turns == 10
-        assert entry.turn_budget.reminder_at == 2
-        assert entry.turn_budget.max_extensions == 3
-        assert entry.turn_budget.extension_size == 5
+        assert entry.turn_budget.default_turns == DEFAULT_TURNS
+        assert entry.turn_budget.reminder_at == DEFAULT_REMINDER_AT
+        assert entry.turn_budget.max_extensions == DEFAULT_MAX_EXTENSIONS
+        assert entry.turn_budget.extension_size == DEFAULT_EXTENSION_SIZE
         assert entry.build_turn_budget() is not None
 
     def test_an_explicitly_null_key_opts_out(self, tmp_path):
@@ -662,9 +669,9 @@ class TestCatalogTurnBudget:
         entry = catalog.get("agent")
 
         assert entry.turn_budget.default_turns == 12
-        assert entry.turn_budget.reminder_at == 2  # default
-        assert entry.turn_budget.max_extensions == 3  # default
-        assert entry.turn_budget.extension_size == 5  # default
+        assert entry.turn_budget.reminder_at == DEFAULT_REMINDER_AT
+        assert entry.turn_budget.max_extensions == DEFAULT_MAX_EXTENSIONS
+        assert entry.turn_budget.extension_size == DEFAULT_EXTENSION_SIZE
 
 
 # ---------------------------------------------------------------------------

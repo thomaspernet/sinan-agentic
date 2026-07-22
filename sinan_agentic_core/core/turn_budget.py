@@ -15,7 +15,10 @@ entry and a ``turn_budget`` entry in the explicit ``capabilities:`` list — so
 the translation lives here as ``TurnBudgetConfig.build()``, with
 ``build_turn_budget`` adding the "off unless declared" rule the shorthand path
 needs. Neither path unpacks the config field by field, so a field added to the
-model reaches the built budget without a second edit.
+model reaches the built budget without a second edit. Both field lists read
+their defaults from the same module constants, so what an agent gets by
+declaring nothing and what it gets by declaring an empty block is one value
+rather than two copies free to drift.
 
 Usage:
     budget = TurnBudget(default_turns=10)
@@ -38,8 +41,18 @@ from .turn_budget_tool import request_extension_tool
 
 logger = logging.getLogger(__name__)
 
+# Soft-budget defaults, named once and read by both the runtime ``TurnBudget``
+# below and the ``TurnBudgetConfig`` that declares it, so the two field lists
+# cannot drift to different numbers.
+DEFAULT_TURNS = 10
+DEFAULT_REMINDER_AT = 2
+DEFAULT_MAX_EXTENSIONS = 3
+DEFAULT_EXTENSION_SIZE = 5
+
 # The hard SDK ceiling an agent runs under when it declares no ``max_turns``.
 # High enough that the soft budget, not this, is what the agent negotiates with.
+# Not one of the four above: it is not a ``TurnBudgetConfig`` field, because in
+# YAML the ceiling is the agent's own ``max_turns``.
 DEFAULT_ABSOLUTE_MAX_TURNS = 25
 
 
@@ -59,10 +72,10 @@ class TurnBudget(Capability):
         absolute_max: Hard ceiling passed to SDK (never exceeded).
     """
 
-    default_turns: int = 10
-    reminder_at: int = 2
-    max_extensions: int = 3
-    extension_size: int = 5
+    default_turns: int = DEFAULT_TURNS
+    reminder_at: int = DEFAULT_REMINDER_AT
+    max_extensions: int = DEFAULT_MAX_EXTENSIONS
+    extension_size: int = DEFAULT_EXTENSION_SIZE
     absolute_max: int = DEFAULT_ABSOLUTE_MAX_TURNS
 
     # Mutable state — tracked during execution
@@ -268,10 +281,10 @@ class TurnBudgetConfig(BaseModel):
     # declaration paths pass through — so reject it rather than drop it silently.
     model_config = ConfigDict(extra="forbid")
 
-    default_turns: int = 10
-    reminder_at: int = 2
-    max_extensions: int = 3
-    extension_size: int = 5
+    default_turns: int = DEFAULT_TURNS
+    reminder_at: int = DEFAULT_REMINDER_AT
+    max_extensions: int = DEFAULT_MAX_EXTENSIONS
+    extension_size: int = DEFAULT_EXTENSION_SIZE
 
     def build(self, absolute_max: int | None = None) -> TurnBudget:
         """Translate this config into a runtime :class:`TurnBudget`.
