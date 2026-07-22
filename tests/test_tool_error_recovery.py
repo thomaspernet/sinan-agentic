@@ -277,6 +277,15 @@ class TestHintLookup:
         section = recovery.build_instruction_section()
         assert "external hint" in section
 
+    def test_the_callers_hints_dict_is_not_aliased(self):
+        """The tracker owns its hints, so a later edit to the caller's dict does not reach it."""
+        declared = {"ext_tool": "external hint"}
+
+        recovery = ToolErrorRecovery(mcp_hints=declared)
+        declared["other_tool"] = "late hint"
+
+        assert "other_tool" not in recovery.mcp_hints
+
     def test_hint_shown_for_status_based_error(self):
         registry = Mock()
         tool_def = Mock()
@@ -637,7 +646,7 @@ class TestToolErrorRecoveryConfigBuild:
         ).build(registry)
 
         assert recovery._registry is registry
-        assert recovery._mcp_hints == {"mcp_search": "Use a longer query."}
+        assert recovery.mcp_hints == {"mcp_search": "Use a longer query."}
         assert recovery.max_identical_before_stop == 5
 
     def test_no_registry_supplied_falls_back_to_the_global_one(self):
@@ -789,14 +798,32 @@ class TestToolErrorRecoveryClone:
         )
         clone = original.clone()
         assert clone._registry is registry
-        assert clone._mcp_hints == {"mcp_search": "Use a longer query."}
+        assert clone.mcp_hints == {"mcp_search": "Use a longer query."}
         assert clone.max_identical_before_stop == 5
+
+    def test_clone_carries_every_declared_field(self):
+        """clone() forwards the declaration wholesale, so a new field needs no edit there."""
+        original = ToolErrorRecovery(
+            mcp_hints={"mcp_search": "Use a longer query."},
+            max_identical_before_stop=5,
+        )
+
+        clone = original.clone()
+
+        for name in ToolErrorRecoveryConfig.model_fields:
+            assert getattr(clone, name) == getattr(original, name)
 
     def test_clone_does_not_share_mcp_hints(self):
         original = ToolErrorRecovery(mcp_hints={"a": "hint"})
         clone = original.clone()
-        clone._mcp_hints["b"] = "new hint"
-        assert "b" not in original._mcp_hints
+        clone.mcp_hints["b"] = "new hint"
+        assert "b" not in original.mcp_hints
+
+    def test_a_clone_of_a_registryless_tracker_stays_registryless(self):
+        """The declaration is rebuilt, not re-resolved — build()'s global fallback stays out."""
+        clone = ToolErrorRecovery().clone()
+
+        assert clone._registry is None
 
     def test_clone_zeroes_error_state(self):
         original = ToolErrorRecovery()

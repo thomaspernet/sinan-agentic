@@ -257,7 +257,7 @@ class TestBuiltInCapabilities:
             "error_recovery", {"mcp_hints": {"mcp_search": "Use a longer query."}}
         )
         assert isinstance(cap, ToolErrorRecovery)
-        assert cap._mcp_hints == {"mcp_search": "Use a longer query."}
+        assert cap.mcp_hints == {"mcp_search": "Use a longer query."}
 
     def test_build_error_recovery_honors_an_explicit_registry(self) -> None:
         """A caller holding a registry still overrides the global fallback."""
@@ -278,7 +278,7 @@ class TestBuiltInCapabilities:
         assert isinstance(from_list, ToolErrorRecovery)
         assert from_shorthand is not None
         assert from_list._registry is from_shorthand._registry
-        assert from_list._mcp_hints == from_shorthand._mcp_hints
+        assert from_list.mcp_hints == from_shorthand.mcp_hints
         assert from_list.max_identical_before_stop == from_shorthand.max_identical_before_stop
 
     def test_build_error_recovery_rejects_an_unknown_key(self) -> None:

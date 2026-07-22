@@ -76,8 +76,13 @@ class ToolErrorRecovery(Capability):
     LLM call, so the agent always has up-to-date error awareness.
 
     Attributes:
+        mcp_hints: Recovery hints for MCP tool names the registry does not know.
         max_identical_before_stop: After this many identical failures, the
             instruction section tells the agent to stop retrying entirely.
+
+    Every field of :class:`ToolErrorRecoveryConfig` is stored as an attribute of
+    the same name, which is what lets :meth:`clone` rebuild a copy from the
+    declaration wholesale instead of naming each field by hand.
     """
 
     def __init__(
@@ -93,15 +98,17 @@ class ToolErrorRecovery(Capability):
                 If None, only mcp_hints are used for hint lookup.
             mcp_hints: Mapping of MCP tool names to recovery hint strings.
                 Use this for tools you don't control (external MCP servers).
+                Copied, so the caller's dict is not aliased into the tracker
+                and no two trackers built from it end up sharing one mapping.
             max_identical_before_stop: After N identical failures, instruct
                 the agent to stop retrying. Defaults to
                 :data:`DEFAULT_MAX_IDENTICAL_BEFORE_STOP`.
         """
         self._registry = tool_registry
-        self._mcp_hints = mcp_hints or {}
         self._errors: dict[str, ToolErrorEntry] = {}  # key: tool_name
         self._last_args: dict[str, str] = {}  # tool_name -> last args_hash
         self._pending_args: dict[str, str] = {}  # tool_name -> in-flight args
+        self.mcp_hints = dict(mcp_hints or {})
         self.max_identical_before_stop = max_identical_before_stop
 
     # Status values that indicate a tool failure (used by _extract_error).
@@ -274,12 +281,17 @@ class ToolErrorRecovery(Capability):
             )
 
     def clone(self) -> "ToolErrorRecovery":
-        """Return a fresh ``ToolErrorRecovery`` with the same configuration and zeroed state."""
-        return ToolErrorRecovery(
-            tool_registry=self._registry,
-            mcp_hints=dict(self._mcp_hints),
-            max_identical_before_stop=self.max_identical_before_stop,
-        )
+        """Return a fresh ``ToolErrorRecovery`` with the same configuration and zeroed state.
+
+        The declared fields are read back off :class:`ToolErrorRecoveryConfig`
+        and forwarded wholesale, mirroring :meth:`ToolErrorRecoveryConfig.build`
+        in the other direction, so a field added to that model survives cloning
+        without a second edit here. ``tool_registry`` is passed separately for
+        the same reason it is not a config field: it is a live object rather
+        than something a declaration can carry.
+        """
+        declared = {name: getattr(self, name) for name in ToolErrorRecoveryConfig.model_fields}
+        return ToolErrorRecovery(tool_registry=self._registry, **declared)
 
     def to_snapshot(self) -> dict[str, Any]:
         """Serialize tracked errors and last-args map so retries survive restarts."""
@@ -389,7 +401,7 @@ class ToolErrorRecovery(Capability):
             if tool_def and getattr(tool_def, "recovery_hint", ""):
                 hint: str = tool_def.recovery_hint
                 return hint
-        return self._mcp_hints.get(tool_name, "")
+        return self.mcp_hints.get(tool_name, "")
 
     @staticmethod
     def _hash_args(arguments: str) -> str:
