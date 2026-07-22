@@ -883,6 +883,72 @@ class TestChatWithHooks:
         ]
 
 
+class TestChatWithHooksAnswerOwnsItsToolList:
+    """The answer payload is a fixed record, so it and the hooks never share a list."""
+
+    @staticmethod
+    async def _answer_and_hooks(tool_name="search"):
+        """Run one turn that calls a tool; return its answer payload and the run's hooks."""
+        import sys
+
+        chat_mod = sys.modules["sinan_agentic_core.services.chat"]
+        captured = []
+
+        async def run_with_hooks(**kwargs):
+            hooks = kwargs["hooks"]
+            captured.append(hooks)
+            tool = Mock()
+            tool.name = tool_name
+            await hooks.on_tool_start(None, None, tool)
+            return _run_result("done")
+
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(side_effect=run_with_hooks)
+
+                events = [
+                    event
+                    async for event in chat_mod.chat_with_hooks(
+                        "Hi", agent_name="a", session=session
+                    )
+                ]
+
+        answer = next(e for e in events if e["event"] == "answer")
+        return answer["data"], captured[0]
+
+    async def test_the_payload_reports_the_tools_the_hooks_recorded(self):
+        data, hooks = await self._answer_and_hooks()
+
+        assert data["tools_called"] == ["search"]
+        assert hooks.tools_called == ["search"]
+
+    async def test_the_payload_does_not_share_the_hooks_accumulator(self):
+        data, hooks = await self._answer_and_hooks()
+
+        assert data["tools_called"] is not hooks.tools_called
+
+    async def test_a_consumer_editing_the_payload_does_not_reach_the_hooks(self):
+        data, hooks = await self._answer_and_hooks()
+
+        data["tools_called"].append("added_by_consumer")
+
+        assert hooks.tools_called == ["search"]
+
+    async def test_a_later_tool_call_does_not_change_a_delivered_answer(self):
+        """Reusing the hooks after the answer cannot rewrite what it already reported."""
+        data, hooks = await self._answer_and_hooks()
+
+        late_tool = Mock()
+        late_tool.name = "added_late"
+        await hooks.on_tool_start(None, None, late_tool)
+
+        assert data["tools_called"] == ["search"]
+        assert hooks.tools_called == ["search", "added_late"]
+
+
 # -- chat_streamed() ----------------------------------------------------------
 
 
