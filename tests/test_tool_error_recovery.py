@@ -10,6 +10,11 @@ from pydantic import ValidationError
 
 from sinan_agentic_core.core.capabilities import Capability
 from sinan_agentic_core.core.tool_error_recovery import (
+    ARGS_SUMMARY_ELLIPSIS,
+    ARGS_SUMMARY_FALLBACK_CHARS,
+    ARGS_SUMMARY_MAX_PARAMS,
+    ARGS_SUMMARY_VALUE_CHARS,
+    ARGS_SUMMARY_VALUE_HEAD_CHARS,
     DEFAULT_MAX_IDENTICAL_BEFORE_STOP,
     ToolErrorRecovery,
     ToolErrorRecoveryConfig,
@@ -324,6 +329,51 @@ class TestArgsHashing:
         recovery.record_tool_result("t", json.dumps({"error": "x"}), "")
         summary = recovery.get_error_summary()
         assert summary["t"]["identical_count"] == 2
+
+
+# ------------------------------------------------------------------ #
+# ToolErrorRecovery — argument summary bounds
+# ------------------------------------------------------------------ #
+
+
+def _summary_of(arguments: str) -> str:
+    """Record one failed call with *arguments* and read back its summary."""
+    recovery = ToolErrorRecovery()
+    recovery.record_tool_result("t", json.dumps({"error": "x"}), arguments)
+    summary: str = recovery.to_snapshot()["errors"]["t"]["last_args_summary"]
+    return summary
+
+
+class TestArgsSummaryBounds:
+    def test_the_ellipsis_is_spent_inside_the_value_budget(self):
+        # The head length is derived, not restated, so the two cannot drift.
+        assert (
+            ARGS_SUMMARY_VALUE_HEAD_CHARS + len(ARGS_SUMMARY_ELLIPSIS) == ARGS_SUMMARY_VALUE_CHARS
+        )
+
+    def test_a_value_at_the_bound_is_kept_whole(self):
+        value = "a" * ARGS_SUMMARY_VALUE_CHARS
+        assert _summary_of(json.dumps({"q": value})) == f"q={value}"
+
+    def test_a_longer_value_is_cut_to_the_bound_including_the_ellipsis(self):
+        value = "a" * (ARGS_SUMMARY_VALUE_CHARS + 1)
+        rendered = _summary_of(json.dumps({"q": value})).removeprefix("q=")
+        assert rendered.endswith(ARGS_SUMMARY_ELLIPSIS)
+        assert len(rendered) == ARGS_SUMMARY_VALUE_CHARS
+
+    def test_only_the_named_number_of_parameters_is_shown(self):
+        args = {f"p{i}": i for i in range(ARGS_SUMMARY_MAX_PARAMS + 3)}
+        summary = _summary_of(json.dumps(args))
+        assert summary.count("=") == ARGS_SUMMARY_MAX_PARAMS
+        assert f"p{ARGS_SUMMARY_MAX_PARAMS}=" not in summary
+
+    def test_non_object_arguments_are_cut_to_the_fallback_bound(self):
+        summary = _summary_of(json.dumps("z" * (ARGS_SUMMARY_FALLBACK_CHARS + 50)))
+        assert summary == "z" * ARGS_SUMMARY_FALLBACK_CHARS
+
+    def test_unparsable_arguments_are_cut_to_the_fallback_bound(self):
+        summary = _summary_of("{not json" + "z" * ARGS_SUMMARY_FALLBACK_CHARS)
+        assert len(summary) == ARGS_SUMMARY_FALLBACK_CHARS
 
 
 # ------------------------------------------------------------------ #

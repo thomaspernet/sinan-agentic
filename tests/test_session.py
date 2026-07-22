@@ -6,7 +6,11 @@ from sinan_agentic_core.core.capabilities import Capability
 from sinan_agentic_core.core.tool_error_recovery import ToolErrorRecovery
 from sinan_agentic_core.core.turn_budget import TurnBudget
 from sinan_agentic_core.session.agent_session import AgentSession, ConversationHistory
-from sinan_agentic_core.session.sqlite_store import SQLiteSessionStore
+from sinan_agentic_core.session.sqlite_store import (
+    SESSION_TITLE_CHARS,
+    SESSION_TITLE_ELLIPSIS,
+    SQLiteSessionStore,
+)
 
 # -- ConversationHistory -------------------------------------------------------
 
@@ -249,6 +253,19 @@ class TestSQLiteSessionStore:
         store.add_message("s1", "user", "What is Python?")
         s = store.get_or_create_session("s1")
         assert s["title"] == "What is Python?"
+
+    def test_title_at_the_bound_is_kept_whole(self, store):
+        content = "a" * SESSION_TITLE_CHARS
+        store.add_message("s1", "user", content)
+        assert store.get_or_create_session("s1")["title"] == content
+
+    def test_longer_title_is_cut_to_the_bound_and_marked(self, store):
+        content = "a" * (SESSION_TITLE_CHARS + 1)
+        store.add_message("s1", "user", content)
+        title = store.get_or_create_session("s1")["title"]
+        assert title == "a" * SESSION_TITLE_CHARS + SESSION_TITLE_ELLIPSIS
+        # The message itself is untouched — only the label is cut.
+        assert store.get_messages("s1")[0]["content"] == content
 
     def test_message_metadata(self, store):
         store.add_message("s1", "user", "msg", metadata={"source": "web"})
