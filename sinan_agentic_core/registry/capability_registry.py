@@ -114,15 +114,18 @@ def _build_turn_budget(config: dict[str, Any]) -> Capability:
 def _build_error_recovery(config: dict[str, Any]) -> Capability:
     """Build a :class:`ToolErrorRecovery` from YAML config.
 
-    Defaults ``tool_registry`` to the global registry so YAML users do not
-    need to plumb it through.
+    Goes through the same :class:`ToolErrorRecoveryConfig` translation as the
+    ``error_recovery:`` shorthand on an agent entry, so both paths build the
+    capability one way — including the fallback to the global tool registry,
+    which lives there rather than here so YAML users do not plumb it through.
+    ``tool_registry`` is a live object rather than part of the declared config,
+    so it is read off the config and passed alongside.
     """
-    from ..core.tool_error_recovery import ToolErrorRecovery
-    from .tool_registry import get_tool_registry
+    from ..core.tool_error_recovery import ToolErrorRecoveryConfig
 
-    cfg = dict(config)
-    cfg.setdefault("tool_registry", get_tool_registry())
-    return ToolErrorRecovery(**cfg)
+    declared = dict(config)
+    tool_registry = declared.pop("tool_registry", None)
+    return ToolErrorRecoveryConfig(**declared).build(tool_registry)
 
 
 @register_capability("tool_tracer")

@@ -36,6 +36,7 @@ from pydantic import BaseModel
 
 from ..core.capabilities import Capability
 from ..core.model_retry import ModelRetryConfig
+from ..core.tool_error_recovery import ToolErrorRecovery, build_tool_error_recovery
 from ..core.tool_output_trim import ToolOutputTrimConfig
 from ..core.turn_budget import TurnBudget, TurnBudgetConfig, build_turn_budget
 from .capability_registry import (
@@ -44,7 +45,6 @@ from .capability_registry import (
 )
 
 if TYPE_CHECKING:
-    from ..core.tool_error_recovery import ToolErrorRecovery
     from ..mcp.yaml_schema import MCPServerConfig
 
 logger = logging.getLogger(__name__)
@@ -97,14 +97,14 @@ class AgentYamlEntry(BaseModel):
         """
         return build_turn_budget(self.turn_budget, self.max_turns)
 
-    def build_error_recovery(self) -> "ToolErrorRecovery | None":
-        """Create a ToolErrorRecovery if enabled, or None if disabled."""
-        if not self.error_recovery:
-            return None
-        from ..core.tool_error_recovery import ToolErrorRecovery
-        from ..registry import get_tool_registry
+    def build_error_recovery(self) -> ToolErrorRecovery | None:
+        """Create a ToolErrorRecovery if enabled, or None if disabled.
 
-        return ToolErrorRecovery(tool_registry=get_tool_registry())
+        The translation itself lives beside :class:`ToolErrorRecovery`; this
+        entry only supplies the one thing it holds — whether the agent declared
+        recovery on.
+        """
+        return build_tool_error_recovery(self.error_recovery)
 
     def build_capabilities(self) -> list[Capability]:
         """Build all capabilities for this agent from YAML.

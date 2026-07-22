@@ -9,7 +9,10 @@ from agents import RunContextWrapper
 from pydantic import ValidationError
 
 from sinan_agentic_core.core.capabilities import Capability
-from sinan_agentic_core.core.tool_error_recovery import ToolErrorRecovery
+from sinan_agentic_core.core.tool_error_recovery import (
+    ToolErrorRecovery,
+    build_tool_error_recovery,
+)
 from sinan_agentic_core.core.turn_budget import (
     DEFAULT_ABSOLUTE_MAX_TURNS,
     TurnBudget,
@@ -248,3 +251,37 @@ class TestBuiltInCapabilities:
         cap = reg.build("error_recovery", {"max_identical_before_stop": 5})
         assert isinstance(cap, ToolErrorRecovery)
         assert cap.max_identical_before_stop == 5
+
+    def test_build_error_recovery_with_mcp_hints(self) -> None:
+        cap = get_capability_registry().build(
+            "error_recovery", {"mcp_hints": {"mcp_search": "Use a longer query."}}
+        )
+        assert isinstance(cap, ToolErrorRecovery)
+        assert cap._mcp_hints == {"mcp_search": "Use a longer query."}
+
+    def test_build_error_recovery_honors_an_explicit_registry(self) -> None:
+        """A caller holding a registry still overrides the global fallback."""
+        from sinan_agentic_core.registry.tool_registry import ToolRegistry
+
+        registry = ToolRegistry()
+
+        cap = get_capability_registry().build("error_recovery", {"tool_registry": registry})
+
+        assert isinstance(cap, ToolErrorRecovery)
+        assert cap._registry is registry
+
+    def test_build_error_recovery_matches_the_shorthand_path(self) -> None:
+        """Both declaration paths translate one config the same way."""
+        from_list = get_capability_registry().build("error_recovery")
+        from_shorthand = build_tool_error_recovery(True)
+
+        assert isinstance(from_list, ToolErrorRecovery)
+        assert from_shorthand is not None
+        assert from_list._registry is from_shorthand._registry
+        assert from_list._mcp_hints == from_shorthand._mcp_hints
+        assert from_list.max_identical_before_stop == from_shorthand.max_identical_before_stop
+
+    def test_build_error_recovery_rejects_an_unknown_key(self) -> None:
+        """An unrecognized key raised before the shared translator, and still does."""
+        with pytest.raises(ValidationError, match="typo"):
+            get_capability_registry().build("error_recovery", {"typo": 5})
