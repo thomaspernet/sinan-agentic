@@ -3,6 +3,7 @@
 This is a generic conversation history manager that works with the OpenAI Agents SDK.
 """
 
+import copy
 import json
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
@@ -58,6 +59,10 @@ class AgentSession(SessionABC):
     Manages conversation history for multi-agent workflows with automatic
     summarization when history becomes too long.
 
+    A session owns its history: the one it is seeded with is copied on the way
+    in, so the messages the session accumulates never reach the caller's
+    object.
+
     Usage:
         session = AgentSession(session_id="unique-id")
 
@@ -79,13 +84,23 @@ class AgentSession(SessionABC):
     ) -> None:
         """Initialize session.
 
+        The seed history is copied, so appending to this session never reaches
+        the caller's object and two sessions seeded from one history do not
+        share a message list. Each message is a dict that nests further mutable
+        values — a structured-output ``content`` arrives as a list of dicts —
+        so the copy goes all the way down; copying only the message list would
+        leave those nested edit paths open.
+
         Args:
             session_id: Unique identifier for this session
-            initial_history: Optional existing conversation history
+            initial_history: Optional existing conversation history, taken as a
+                snapshot rather than adopted
             max_items: Maximum messages before triggering summarization
         """
         self.session_id = session_id
-        self.history = initial_history or ConversationHistory()
+        self.history = (
+            ConversationHistory() if initial_history is None else copy.deepcopy(initial_history)
+        )
         self.max_items = max_items
         self.metadata: dict[str, Any] = {}  # Store arbitrary session metadata
 
