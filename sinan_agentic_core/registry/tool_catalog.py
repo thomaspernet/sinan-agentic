@@ -91,9 +91,10 @@ class ToolCatalog:
     - ``enrich_registry(registry)`` to patch ToolDefinitions with YAML metadata
     - ``list_tools()`` to list all tool names
 
-    A catalog is a fixed in-process view of the parsed YAML: the mapping it is
-    given is copied on the way in, so what it resolves never changes after
-    construction.
+    A catalog is a fixed in-process view of the parsed YAML in both directions:
+    the mapping it is given is copied on the way in, and every entry it resolves
+    owns its values. So what it resolves never changes after construction, and a
+    consumer editing a resolved entry cannot write back into the catalog.
     """
 
     def __init__(self, raw_tools: dict[str, dict[str, Any]]) -> None:
@@ -113,13 +114,23 @@ class ToolCatalog:
     def get(self, name: str) -> ToolYamlEntry:
         """Get a resolved tool entry by name.
 
+        The returned entry owns everything it carries: editing it — including a
+        value nested inside ``mcp.annotations`` — cannot change the catalog or
+        another entry resolved from it.
+
         Raises:
             KeyError: If the tool is not in the catalog.
         """
         if name not in self._raw_tools:
             available = ", ".join(sorted(self._raw_tools.keys()))
             raise KeyError(f"Tool '{name}' not found in tools.yaml. " f"Available: {available}")
-        raw = self._raw_tools[name]
+        # Copied on the way out for the same reason the constructor copies on the
+        # way in. Pydantic rebuilds only the containers it has a declared type
+        # for and stops at ``Any``: the values inside ``ToolMCPConfig.annotations``
+        # are handed over as-is, so without this copy they would be the catalog's
+        # own objects and editing a resolved entry would change what every later
+        # ``get()`` returns.
+        raw = copy.deepcopy(self._raw_tools[name])
         return ToolYamlEntry(**raw)
 
     def list_tools(self) -> list[str]:
@@ -161,6 +172,8 @@ class ToolCatalog:
                 )
                 continue
 
+            # Not copied the way ``get()`` copies: this entry never leaves the
+            # method, and only its ``str`` fields are read off it below.
             entry = ToolYamlEntry(**raw)
             if entry.description:
                 tool_def.description = entry.description
