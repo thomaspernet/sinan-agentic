@@ -46,11 +46,14 @@ def create_agent_from_registry(
 
     NOTE: run-level settings are not wired here — they belong to the run, not
     the agent, so a caller driving ``Runner`` themselves passes them in.
-    ``build_run_config(agent)`` carries the
+    ``build_run_config(agent)`` carries two of them. The
     ``pre_approval_tool_input_guardrails`` setting: declared tool-input
     guardrails still run before their tool executes, but without it they run
     after the SDK emits a pending human-approval interruption rather than
     before it (``openai-agents`` 0.18.3, ``agents.run_internal.tool_execution``).
+    And a declared ``tool_output_trim``, which it reads off the definition
+    registered under the agent's name, since the SDK installs the trimming
+    filter through ``RunConfig`` and there is no slot for it on the agent.
     ``build_error_handlers(agent)`` carries the ``invalid_final_output``
     handler, which re-parses a structured payload the model wrapped in prose or
     a code fence instead of failing the run; it reads the decision off

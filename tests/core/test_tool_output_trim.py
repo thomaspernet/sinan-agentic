@@ -10,7 +10,10 @@ from agents.extensions import ToolOutputTrimmer
 from agents.run_config import CallModelData, ModelInputData
 from pydantic import ValidationError
 
-from sinan_agentic_core.core.tool_output_trim import ToolOutputTrimConfig
+from sinan_agentic_core.core.tool_output_trim import (
+    ToolOutputTrimConfig,
+    build_tool_output_trimmer,
+)
 
 BULKY_OUTPUT = "x" * 3000
 
@@ -105,6 +108,28 @@ class TestBuild:
         assert trimmer.max_output_chars == 4000
         assert trimmer.recent_turns == ToolOutputTrimmer().recent_turns
         assert trimmer.preview_chars == ToolOutputTrimmer().preview_chars
+
+
+class TestBuildToolOutputTrimmer:
+    """The translator both run-config-building paths share."""
+
+    def test_a_declared_config_becomes_the_sdk_filter(self) -> None:
+        trimmer = build_tool_output_trimmer(
+            ToolOutputTrimConfig(recent_turns=3, max_output_chars=4000)
+        )
+
+        assert trimmer.recent_turns == 3
+        assert trimmer.max_output_chars == 4000
+
+    def test_no_declaration_means_no_filter(self) -> None:
+        """Trimming removes content the model would have seen, so it is never implied."""
+        assert build_tool_output_trimmer(None) is None
+
+    def test_each_call_returns_a_fresh_filter(self) -> None:
+        """The SDK dataclass is mutable, so no two runs may share one."""
+        config = ToolOutputTrimConfig(max_output_chars=4000)
+
+        assert build_tool_output_trimmer(config) is not build_tool_output_trimmer(config)
 
 
 class TestFilterBehavior:

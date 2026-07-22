@@ -13,9 +13,10 @@ constructing the filter by hand at every agent.
 
 This module carries the same choice as data — how many turns to keep intact, the
 size above which an output is trimmed, how much of it to preserve, and which
-tools are eligible. ``BaseAgentRunner`` translates it into the SDK filter inside
-``_build_run_config``, so trimming stays declarative in ``agents.yaml`` and
-reaches every execution branch that runs through the SDK.
+tools are eligible. ``build_tool_output_trimmer`` translates it into the SDK
+filter at the point each path assembles its ``RunConfig``, so trimming stays
+declarative in ``agents.yaml`` and reaches every execution branch that runs
+through the SDK — the runner's own, and the chat service's.
 
 Trimming is off unless declared: it removes content the model would otherwise
 have seen, so no agent gets it implicitly.
@@ -78,3 +79,24 @@ class ToolOutputTrimConfig(BaseModel):
         """
         fields: dict[str, Any] = self.model_dump(exclude_none=True)
         return ToolOutputTrimmer(**fields)
+
+
+def build_tool_output_trimmer(trim: ToolOutputTrimConfig | None) -> ToolOutputTrimmer | None:
+    """Translate a declared trim policy into the SDK filter a run installs.
+
+    Both run-config-building paths call this — ``BaseAgentRunner._build_run_config()``
+    and :func:`sinan_agentic_core.core.run_config.build_run_config` — so a declared
+    policy reaches ``RunConfig.call_model_input_filter`` the same way whichever path
+    assembled the config.
+
+    Args:
+        trim: The agent's declared policy, or None when it opts out.
+
+    Returns:
+        The configured filter, or None when nothing is declared. Each call builds
+        a fresh filter, so no two runs share one.
+    """
+    if trim is None:
+        return None
+
+    return trim.build()
