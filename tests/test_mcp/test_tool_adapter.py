@@ -13,6 +13,7 @@ from sinan_agentic_core.mcp.tool_adapter import (
     MCPToolAdapter,
     _get_params_schema,
     _resolve_annotation,
+    _resolve_schema,
 )
 from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
 
@@ -63,9 +64,32 @@ async def container_tool(
     return json.dumps({"labels": labels, "counts": counts, "tags": tags, "matrix": matrix})
 
 
+async def raw_container_tool(
+    ctx: Any,
+    query: str,
+    labels: list[str],
+    counts: list[int],
+    filters: dict[str, Any],
+    nothing: None,
+    tags: list[str] | None = None,
+    matrix: list[list[str]] | None = None,
+    extras: dict[str, Any] | None = None,
+    unannotated=None,
+) -> str:
+    """Take container parameters without a FunctionTool wrapper."""
+    return json.dumps({"query": query, "labels": labels, "tags": tags})
+
+
 @pytest.fixture
 def registry():
     reg = ToolRegistry()
+    reg.register(
+        ToolDefinition(
+            name="raw_containers",
+            function=raw_container_tool,
+            description="Take container parameters without a FunctionTool wrapper",
+        )
+    )
     reg.register(
         ToolDefinition(
             name="containers",
@@ -245,6 +269,158 @@ def test_resolve_annotation(prop_def, expected_annotation, expected_nullable):
     annotation, nullable = _resolve_annotation(prop_def)
     assert annotation == expected_annotation
     assert nullable is expected_nullable
+
+
+# ---------------------------------------------------------------------------
+# Tests: _resolve_schema (the annotation-to-schema direction)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("annotation", "expected_schema", "expected_nullable"),
+    [
+        (str, {"type": "string"}, False),
+        (int, {"type": "integer"}, False),
+        (float, {"type": "number"}, False),
+        (bool, {"type": "boolean"}, False),
+        (list[str], {"type": "array", "items": {"type": "string"}}, False),
+        (list[int], {"type": "array", "items": {"type": "integer"}}, False),
+        (list, {"type": "array"}, False),
+        (list[Any], {"type": "array"}, False),
+        (dict[str, Any], {"type": "object"}, False),
+        (dict, {"type": "object"}, False),
+        (
+            list[list[str]],
+            {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+            False,
+        ),
+        (
+            list[str] | None,
+            {"anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}]},
+            True,
+        ),
+        (
+            list[list[int]] | None,
+            {
+                "anyOf": [
+                    {
+                        "type": "array",
+                        "items": {"type": "array", "items": {"type": "integer"}},
+                    },
+                    {"type": "null"},
+                ]
+            },
+            True,
+        ),
+        (
+            dict[str, Any] | None,
+            {"anyOf": [{"type": "object"}, {"type": "null"}]},
+            True,
+        ),
+        (str | None, {"anyOf": [{"type": "string"}, {"type": "null"}]}, True),
+        # Both spellings of the null annotation, and one nested in a container.
+        (None, {"type": "null"}, True),
+        (type(None), {"type": "null"}, True),
+        (list[None], {"type": "array", "items": {"type": "null"}}, False),
+        (str | int, {"anyOf": [{"type": "string"}, {"type": "integer"}]}, False),
+        # No information to assert a type from.
+        (Any, {}, False),
+        (inspect.Parameter.empty, {}, False),
+        (object, {}, False),
+    ],
+)
+def test_resolve_schema(annotation, expected_schema, expected_nullable):
+    schema, nullable = _resolve_schema(annotation)
+    assert schema == expected_schema
+    assert nullable is expected_nullable
+
+
+@pytest.mark.parametrize(
+    ("prop_def", "annotation"),
+    [
+        ({"type": "string"}, str),
+        ({"type": "array", "items": {"type": "string"}}, list[str]),
+        (
+            {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}},
+            list[list[int]],
+        ),
+        ({"type": "object"}, dict[str, Any]),
+        ({"type": "null"}, type(None)),
+        (
+            {"anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}]},
+            list[str] | None,
+        ),
+    ],
+)
+def test_the_two_directions_round_trip(prop_def, annotation):
+    resolved, nullable = _resolve_annotation(prop_def)
+    if nullable:
+        resolved = resolved | None
+    assert resolved == annotation
+    assert _resolve_schema(annotation)[0] == prop_def
+
+
+# ---------------------------------------------------------------------------
+# Tests: _get_params_schema on the raw-function path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("param_name", "expected_prop"),
+    [
+        ("query", {"type": "string"}),
+        ("labels", {"type": "array", "items": {"type": "string"}}),
+        ("counts", {"type": "array", "items": {"type": "integer"}}),
+        ("filters", {"type": "object"}),
+        ("nothing", {"type": "null"}),
+        (
+            "tags",
+            {
+                "anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}],
+                "default": None,
+            },
+        ),
+        (
+            "matrix",
+            {
+                "anyOf": [
+                    {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+                    {"type": "null"},
+                ],
+                "default": None,
+            },
+        ),
+        (
+            "extras",
+            {"anyOf": [{"type": "object"}, {"type": "null"}], "default": None},
+        ),
+        # No annotation: no type is asserted, rather than defaulting to string.
+        ("unannotated", {"default": None}),
+    ],
+)
+def test_raw_function_containers_keep_their_type(registry, param_name, expected_prop):
+    schema = _get_params_schema(registry.get_tool("raw_containers"))
+
+    assert schema["properties"][param_name] == expected_prop
+
+
+def test_raw_function_optional_params_are_not_required(registry):
+    """A nullable param stays out of ``required`` even with no default."""
+    schema = _get_params_schema(registry.get_tool("raw_containers"))
+
+    assert schema["required"] == ["query", "labels", "counts", "filters"]
+    assert "ctx" not in schema["properties"]
+
+
+def test_a_raw_function_handler_keeps_its_container_annotations(adapter):
+    handler = adapter.build_mcp_handler("raw_containers")
+    params = inspect.signature(handler).parameters
+
+    assert params["labels"].annotation == list[str]
+    assert params["labels"].default is inspect.Parameter.empty
+    assert params["tags"].annotation == list[str] | None
+    assert params["tags"].default is None
+    assert params["extras"].annotation == dict[str, Any] | None
 
 
 # ---------------------------------------------------------------------------
