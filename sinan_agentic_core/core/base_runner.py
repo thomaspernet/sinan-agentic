@@ -1256,7 +1256,19 @@ class _CompositeHooks(RunHooks):
     """
 
     def __init__(self, capabilities: list[Capability]) -> None:
-        self._capabilities = capabilities
+        """
+        Args:
+            capabilities: Capabilities to dispatch every lifecycle event to, in
+                registration order. The list is copied, so a caller that keeps
+                its own list and edits it after construction cannot change what
+                a live bundle dispatches to, and no two bundles built from one
+                list share a dispatch set. The capabilities inside it are
+                deliberately not copied: a turn budget's remaining turns and a
+                recovery tracker's error state are live per-run state the caller
+                reads back after the run, so the elements stay shared and only
+                the container is detached.
+        """
+        self._capabilities = list(capabilities)
 
     async def on_agent_start(self, context: Any, agent: Any) -> None:
         for cap in self._capabilities:
