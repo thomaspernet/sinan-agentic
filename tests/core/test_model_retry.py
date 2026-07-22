@@ -15,6 +15,7 @@ from sinan_agentic_core.core.model_retry import (
     RetryBackoffConfig,
     RetryTrigger,
     apply_model_retry,
+    build_model_retry_settings,
 )
 
 
@@ -159,8 +160,28 @@ class TestPolicyBehavior:
         assert decision.retry is False
 
 
+class TestBuildModelRetrySettings:
+    """The translator the overlay and the SDK-bypassing fallback branch share."""
+
+    def test_a_declared_config_becomes_the_sdk_settings(self) -> None:
+        settings = build_model_retry_settings(ModelRetryConfig(max_retries=4))
+
+        assert settings.max_retries == 4
+        assert settings.policy is not None
+
+    def test_no_declaration_means_no_settings(self) -> None:
+        """Retry costs latency and a duplicate billed request, so it is never implied."""
+        assert build_model_retry_settings(None) is None
+
+    def test_each_call_returns_fresh_settings(self) -> None:
+        """The SDK dataclass is mutable, so no two agents may share one."""
+        config = ModelRetryConfig(max_retries=4)
+
+        assert build_model_retry_settings(config) is not build_model_retry_settings(config)
+
+
 class TestApplyModelRetry:
-    """The single translation point both agent-building paths call."""
+    """The overlay both agent-building paths call to attach the translated policy."""
 
     def test_no_policy_and_no_settings_stays_none(self) -> None:
         """None lets the caller omit the kwarg so the SDK default applies."""

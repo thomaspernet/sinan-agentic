@@ -1691,17 +1691,6 @@ def retry_runner(_registries):
 
 
 class TestModelRetryWiring:
-    def test_build_model_retry_translates_the_declared_config(self, retry_runner):
-        agent_def = retry_runner._get_agent_definition("retrying_agent")
-        settings = retry_runner._build_model_retry(agent_def)
-
-        assert settings.max_retries == 4
-        assert settings.policy is not None
-
-    def test_build_model_retry_none_when_not_declared(self, retry_runner):
-        agent_def = retry_runner._get_agent_definition("plain_agent")
-        assert retry_runner._build_model_retry(agent_def) is None
-
     async def test_create_agent_attaches_retry(self, retry_runner, context):
         agent = await retry_runner.create_agent("retrying_agent", context)
 
