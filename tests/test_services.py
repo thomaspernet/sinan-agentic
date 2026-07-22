@@ -173,6 +173,26 @@ class TestStreamingRunHooks:
         hooks = StreamingRunHooks(asyncio.Queue(), {"get_weather": "Weather Lookup"})
         assert hooks._friendly_name("get_weather") == "Weather Lookup"
 
+    def test_the_callers_names_dict_is_not_aliased(self):
+        """The hooks own their names, so a later edit to the caller's dict does not reach them."""
+        declared = {"get_weather": "Weather Lookup"}
+
+        hooks = StreamingRunHooks(asyncio.Queue(), declared)
+        declared["search"] = "Late Name"
+
+        assert "search" not in hooks.tool_friendly_names
+        assert hooks._friendly_name("search") == "search"
+
+    def test_two_hooks_built_from_one_dict_do_not_share_a_mapping(self):
+        declared = {"get_weather": "Weather Lookup"}
+
+        first = StreamingRunHooks(asyncio.Queue(), declared)
+        second = StreamingRunHooks(asyncio.Queue(), declared)
+        first.tool_friendly_names["search"] = "Search"
+
+        assert "search" not in second.tool_friendly_names
+        assert "search" not in declared
+
 
 # -- _usage_to_dict ------------------------------------------------------------
 
