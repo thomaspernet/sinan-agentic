@@ -47,6 +47,7 @@ from .output_recovery import (
 )
 from .run_config import tool_input_pre_approval
 from .run_errors import FALLBACK_RECOVERABLE_KINDS, classify_run_error
+from .stream_preview import tool_output_preview
 from .tool_error_recovery import ToolErrorRecovery, build_tool_error_recovery
 from .tool_output_trim import build_tool_output_trimmer
 from .turn_budget import TurnBudget
@@ -616,7 +617,7 @@ class BaseAgentRunner:
                         on_event(
                             {
                                 "event": "tool_output",
-                                "data": {"output": str(item.output)[:500]},
+                                "data": {"output": tool_output_preview(item.output)},
                             }
                         )
                 elif item.type == "message_output_item":
