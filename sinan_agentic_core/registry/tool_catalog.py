@@ -93,11 +93,18 @@ class ToolCatalog:
         return list(self._raw_tools.keys())
 
     def get_mcp_tools(self) -> list[str]:
-        """List tool names that have ``mcp.expose: true`` in their config."""
+        """List tool names that have ``mcp.expose: true`` in their config.
+
+        The ``mcp`` block is resolved through :class:`ToolYamlEntry`, so an
+        empty mapping is a declaration — ``mcp: {}`` opts in with
+        ``ToolMCPConfig`` defaults. Only a missing key (or an explicitly null
+        one) means the tool declares no MCP config, and ``expose`` is validated
+        as a bool instead of read for truthiness.
+        """
         result: list[str] = []
-        for name, raw in self._raw_tools.items():
-            mcp_raw = raw.get("mcp")
-            if mcp_raw and mcp_raw.get("expose", False):
+        for name in self._raw_tools:
+            mcp = self.get(name).mcp
+            if mcp is not None and mcp.expose:
                 result.append(name)
         return result
 
