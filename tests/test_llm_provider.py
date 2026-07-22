@@ -15,6 +15,7 @@ from sinan_agentic_core.llm import (
     configure_llm_provider,
     load_llm_provider_config,
     parse_llm_provider_config,
+    resolve_openai_client,
 )
 from sinan_agentic_core.llm import factory as factory_module
 
@@ -148,6 +149,51 @@ class TestConfigureLLMProvider:
         )
         configure_llm_provider(cfg)
         assert captured_sdk_calls["tracing_disabled"] is True
+
+
+# ---------------------------------------------------------------------------
+# resolve_openai_client — read back the configured default
+# ---------------------------------------------------------------------------
+
+
+class TestResolveOpenAIClient:
+    def test_returns_configured_default_client(self, monkeypatch):
+        configured = object()
+        monkeypatch.setattr(factory_module, "get_default_openai_client", lambda: configured)
+        assert resolve_openai_client() is configured
+
+    def test_azure_client_survives_the_round_trip(self, monkeypatch):
+        """An Azure deployment resolves back as AsyncAzureOpenAI, not a plain
+        AsyncOpenAI rebuilt from scratch. Regression for #35.
+        """
+        cfg = AzureOpenAIProviderConfig(
+            api_key=SecretStr("az-test"),
+            azure_endpoint="https://example.openai.azure.com",
+            api_version="2024-08-01-preview",
+            azure_deployment="gpt-4o",
+        )
+        client = factory_module._build_client(cfg)
+        monkeypatch.setattr(factory_module, "get_default_openai_client", lambda: client)
+
+        resolved = resolve_openai_client()
+        assert resolved is client
+        assert isinstance(resolved, AsyncAzureOpenAI)
+
+    def test_builds_bare_async_openai_when_no_default(self, monkeypatch):
+        """With no provider configured, build AsyncOpenAI() with no kwargs so the
+        SDK reads OPENAI_API_KEY. Regression for #35 — must not pass api_key=None.
+        """
+        built: list[dict[str, object]] = []
+
+        def fake_async_openai(**kwargs):
+            built.append(kwargs)
+            return "fresh-client"
+
+        monkeypatch.setattr(factory_module, "get_default_openai_client", lambda: None)
+        monkeypatch.setattr(factory_module, "AsyncOpenAI", fake_async_openai)
+
+        assert resolve_openai_client() == "fresh-client"
+        assert built == [{}]
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,11 @@
 ---
-description: "Update documentation for issue #$ARGUMENTS. Checks stale docs and updates them."
+description: "Update documentation for the workflow root #$ARGUMENTS after its integration branch has merged."
+capability: core
 ---
 
-Update docs affected by issue #$ARGUMENTS.
+Update the docs affected by the change that just shipped for workflow root #$ARGUMENTS.
+
+This is the workflow's single **Documentation** ship step (#2801, epic #2800). It runs once, post-merge, against the merged integration diff — there is no per-child docs pass and no `--epic` mode anymore. The argument is the workflow's root: an epic issue, or a self-rooted single issue. Either way you document **whatever that root describes** against the change that landed on the dev branch.
 
 ## Mandatory reads — do this first
 
@@ -12,17 +15,15 @@ Run:
 
 The output contains every doc you must read; treat it as if you opened each file directly. Do not proceed with the skill body until done.
 
-**Standing authorization**: posting the `devwatch agent-update` and `devwatch agent-comment` calls described below (status update + single completion comment on the target issue) is part of this skill's contract. Run them without asking for confirmation.
+**Standing authorization**: posting the `devwatch agent-report`, `devwatch agent-update`, and `devwatch agent-comment` calls described below (run report + status update + single completion comment on the root issue) is part of this skill's contract. Run them without asking for confirmation.
 
 ## Parse arguments
 
-Extract issue number, optional run ID, and the optional `--epic` flag from `$ARGUMENTS`:
-- `$ARGUMENTS` = `"42"` -> ISSUE=42, RUN_ID=(none), EPIC_MODE=false
-- `$ARGUMENTS` = `"42 --run 7"` -> ISSUE=42, RUN_ID=7, EPIC_MODE=false
-- `$ARGUMENTS` = `"42 --epic"` -> ISSUE=42, RUN_ID=(none), EPIC_MODE=true
-- `$ARGUMENTS` = `"42 --epic --run 7"` -> ISSUE=42, RUN_ID=7, EPIC_MODE=true
+Extract the root issue number and optional run ID from `$ARGUMENTS`:
+- `$ARGUMENTS` = `"42"` -> ISSUE=42, RUN_ID=(none)
+- `$ARGUMENTS` = `"42 --run 7"` -> ISSUE=42, RUN_ID=7
 
-`--epic` is a workflow-scoped post-merge mode (#1079) — see the **Epic mode** section below. Without it, the per-child flow runs unchanged.
+ISSUE is the workflow root. There is no `--epic` flag — every workflow runs the same documentation step.
 
 ## Detect repo
 
@@ -34,23 +35,22 @@ REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 
 Pass `--repo "$REPO"` to every `devwatch` command to ensure the correct repo is targeted.
 
-## Epic mode (--epic, #1079)
+## Resolve the merged change
 
-When `EPIC_MODE=true`, this is the workflow-level meta-docs pass triggered post-merge by the Documentation chip on the epic side panel. Skip the per-child flow entirely:
+The integration branch has already merged into the dev branch — this step runs after `merge-branch`. Document the change that landed, reading the root issue body as the spec.
 
-1. Resolve the dev branch from `devwatch --repo "$REPO" repo-info` and check it out (the epic PR has already merged into it).
-2. Pull the latest dev branch so the merged epic commits are local:
+1. Resolve the dev branch and check it out (the integration PR has already merged into it):
    ```bash
+   DEV_BRANCH="$(devwatch --repo "$REPO" branches dev)"
    git fetch origin
-   git checkout <DEV_BRANCH>
-   git pull --ff-only origin <DEV_BRANCH>
+   git checkout "$DEV_BRANCH"
+   git pull --ff-only origin "$DEV_BRANCH"
    ```
-3. Read the epic body as the spec — it describes the feature shipped, not a single child:
+2. Read the root issue body as the spec — it describes what shipped (an epic body, or a single issue), not a single child:
    ```bash
    gh issue view <ISSUE> --repo "$REPO" --json title,body,labels
    ```
-   Confirm the `epic` label is present; bail with a clear message otherwise (the chip should never be triggerable on a non-epic, but defend the contract).
-4. Resolve the merged epic PR and its commit range. The epic PR is the most recent merged PR closing this epic:
+3. Resolve the merged integration PR and its commit range. The integration PR is the most recent merged PR closing this root:
    ```bash
    PR=$(gh pr list --repo "$REPO" --state merged --search "closes #<ISSUE>" --json number,mergeCommit --jq '.[0]')
    ```
@@ -59,81 +59,37 @@ When `EPIC_MODE=true`, this is the workflow-level meta-docs pass triggered post-
    MERGE_SHA=$(echo "$PR" | jq -r .mergeCommit.oid)
    git diff "${MERGE_SHA}^1..${MERGE_SHA}" --name-only
    ```
-5. Map every changed file to its docs page using the doc map in CLAUDE.md, the same way the per-child flow does — but read the **epic body** as the "what shipped and why" spec, not an issue history.
-6. For each flagged doc, decide whether the merged behavior, architecture, or APIs are now misrepresented and update accordingly. This is meta-docs: prefer one cohesive update per surface over N narrow per-child updates.
-7. Commit directly to the dev branch (the epic PR has already shipped — there is no feature branch to push to):
-   ```bash
-   git add <changed-files>
-   git commit -m "docs: meta-docs for epic #<ISSUE>"
-   git push origin <DEV_BRANCH>
-   ```
-8. Record completion against the agent run and post a single completion comment on the epic:
-   ```bash
-   devwatch --repo "$REPO" agent-update \
-     --run-id <RUN_ID> --status completed \
-     --summary "Meta-docs updated for epic #<ISSUE>" \
-     --files "<comma-separated changed files>" \
-     --commits "$(git rev-parse HEAD)"
-   devwatch --repo "$REPO" agent-comment \
-     --issue <ISSUE> \
-     --body "## Meta-docs updated\n\n**Summary**: <which surfaces were updated>\n**Files**: <changed files>"
-   ```
-9. Stop. Do not run the per-child sections below — they target a feature branch that does not exist in epic mode.
-
-## Epic-parent short-circuit (#948)
-
-Child issues of an epic do **not** get a per-child docs pass. The epic
-ships as one PR (see `/submit-epic-pr`), and docs run once against that
-PR's combined diff. Check for an epic parent before doing anything:
-
-```bash
-EPIC=$(devwatch --repo "$REPO" epic-parent --issue <ISSUE>)
-if [ -n "$EPIC" ]; then
-  echo "Skipped — issue #<ISSUE> is a child of epic #$EPIC."
-  echo "Run \`/add-documentation $EPIC\` after the epic PR is ready."
-  # If this step belongs to a workflow, mark the docs action as skipped
-  # (see the Workflow integration section at the bottom — same lookup, --status skipped).
-  exit 0
-fi
-```
-
-When `<ISSUE>` **is** itself an epic (the `epic` label is on the issue),
-`check-docs` below automatically diffs the epic integration branch
-against the dev branch so the combined changeset across every merged
-child drives the docs check — the rest of this template stays the same.
-
-## Context loading
-
-1. Read the issue: `gh issue view <ISSUE> --repo "$REPO"`
-2. Check the issue history (run `devwatch issue-history --help` for all options): `devwatch --repo "$REPO" issue-history <ISSUE>` — see what was implemented and which files changed.
-3. Read this repo's CLAUDE.md to find the documentation map (which code areas affect which docs).
-4. The mandatory-reads block already loaded this repo's documentation checklist.
-
-## Branch tracking
-
-Record the current branch so the dashboard shows work in progress (use `--run-id` if available, fall back to `--issue`):
-```bash
-devwatch --repo "$REPO" agent-update --run-id <RUN_ID> --branch "$(git branch --show-current)"
-```
-If no RUN_ID was provided:
-```bash
-devwatch --repo "$REPO" agent-update --issue <ISSUE> --branch "$(git branch --show-current)"
-```
-
-## Execution (detect stale docs)
-
-```bash
-devwatch --repo "$REPO" check-docs --issue <ISSUE>
-```
+   If no merged integration PR is found (a `devonly` workflow merges straight into dev with no PR), fall back to `devwatch --repo "$REPO" check-docs --issue <ISSUE>` — when `<ISSUE>` is an epic it diffs the integration branch against dev; otherwise it diffs the issue's merged change. Either source gives you the changed-file set.
 
 ## Intelligence (what you decide)
 
-For each flagged doc:
-1. Read the doc
-2. Read the changed code on the branch
-3. Decide: is this doc actually stale, or is the change internal?
-4. If stale: update the doc content to match the new code
-5. If not stale: skip
+### Reviewer context — the author's implement notes
+
+Before deciding which docs are stale, read the shipping workflow's run-report notes and use them to focus the pass (epic #2913). Each child's `implement` agent recorded `risk` notes ("watch this") and `consideration` notes ("deliberately didn't do X because Y") while the work was fresh — exactly the hand-off that points you at the behaviour or API a doc may now misrepresent. This is **read-only** context enrichment: it sharpens where you look; it is never posted anywhere.
+
+Resolve the workflow that owns this root, then read its rollup digest (every shipped member's notes — you document the whole merged change, so the workflow-scoped report is the right scope):
+
+```bash
+WORKFLOW_ID="$(devwatch --repo "$REPO" workflow-get --issue <ISSUE> | jq -r '.id // empty')"
+if [ -n "$WORKFLOW_ID" ]; then
+  devwatch --repo "$REPO" get-report --workflow "$WORKFLOW_ID"
+fi
+```
+
+`get-report` prints a category-grouped markdown digest (`### Risks` / `### Decisions` / `### Follow-ups`) assembled from the notes earlier agents recorded, or nothing when there are no notes.
+
+- **Empty digest (or no workflow resolved) → skip.** No author context; map the changed files to docs as usual. Do not add a context block.
+- **Non-empty digest → focus the pass.** Treat each **Risks** and **Decisions** entry as a pointer to a surface whose behaviour or contract may have shifted — check the docs for those surfaces first. **Follow-ups** are deferred work, not shipped behaviour; do not document them as if they landed.
+
+Do **not** post these notes to GitHub. This step's only writes are the docs commit and the single completion comment below.
+
+Map every changed file to its docs page using the doc map in CLAUDE.md. Then, for each flagged doc:
+
+1. Read the doc.
+2. Read the changed code that landed.
+3. Decide: is the merged behavior, architecture, or APIs now misrepresented, or is the change internal?
+4. If stale: update the doc content to match what shipped. Prefer one cohesive update per surface over N narrow per-file edits — read the root body as the "what shipped and why" spec, not a file-by-file history.
+5. If not stale: skip.
 
 Before committing, run the documentation checklist against your changes if one exists.
 
@@ -141,25 +97,83 @@ Before committing, run the documentation checklist against your changes if one e
 
 1. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to every title, body, and comment below.
 
-After updating docs, commit and push:
+Resolve where docs live and how they are committed for this project. One CLI call returns every value (mirror of `branches`):
 
 ```bash
-git add <changed-files>
-git commit -m "docs: update docs for issue #<ISSUE>"
-git push
+LOCATIONS="$(devwatch --repo "$REPO" doc-locations)"
+DOC_ROOT="$(echo "$LOCATIONS" | jq -r .documentation_root)"
+DOC_COMMIT="$(echo "$LOCATIONS" | jq -r .documentation_commit)"
 ```
 
-Record completion (use `--run-id` if available, fall back to `--issue`):
+`DOC_COMMIT` selects the mode. A non-empty value means **external-docs mode**: the docs tree is its own git repo committed on its own branch, decoupled from the code repo. An empty value means **in-repo mode**: docs live inside the code repo.
+
+**External-docs mode** (`DOC_COMMIT` non-empty) — commit the updated docs **directly** onto the docs repo's branch. No staging into the code repo, no PR, no CI: the integration PR has already shipped, so the docs change goes straight to `origin <DOC_COMMIT>` in the docs repo and never pollutes a code PR.
+
 ```bash
+if [ -n "$DOC_COMMIT" ]; then
+  git -C "$DOC_ROOT" fetch origin
+  git -C "$DOC_ROOT" checkout "$DOC_COMMIT"
+  git -C "$DOC_ROOT" pull --ff-only origin "$DOC_COMMIT"
+  git -C "$DOC_ROOT" add <changed-files-relative-to-DOC_ROOT>
+  git -C "$DOC_ROOT" commit -m "docs: update docs for #<ISSUE>"
+  git -C "$DOC_ROOT" push origin "$DOC_COMMIT"
+fi
+```
+
+The files you updated live under `$DOC_ROOT`; stage them by their path inside that tree, never with `git add -A`.
+
+**In-repo mode** (`DOC_COMMIT` empty) — commit the docs on the dev branch (the integration PR has already shipped — there is no feature branch to push to):
+
+```bash
+if [ -z "$DOC_COMMIT" ]; then
+  git add <changed-files>
+  git commit -m "docs: update docs for #<ISSUE>"
+  git push origin "$DEV_BRANCH"
+fi
+```
+
+Emit the run report (advisory — a failed post must never fail the step). Write the
+fixed JSON skeleton, filling `notes` with the docs you updated and any doc you
+considered but deliberately left as-is (with the reason). Use an empty array
+(`[]`) when no docs changed. Post it **before** the status flip below so the
+report exists when completion hooks fire.
+
+```bash
+cat > /tmp/devwatch-report-<ISSUE>.json <<'JSON'
+{
+  "schema_version": 1,
+  "notes": [
+    {"category": "follow_up", "text": "Updated <surface> — <why>"},
+    {"category": "consideration", "text": "<surface considered but left as-is — why>"}
+  ]
+}
+JSON
+
+devwatch --repo "$REPO" agent-report \
+  --run-id <RUN_ID> \
+  --file /tmp/devwatch-report-<ISSUE>.json \
+  || echo "  agent-report failed (advisory) — continuing"
+```
+Fall back to `--issue <ISSUE>` if RUN_ID is unavailable.
+
+Record completion (use `--run-id` if available, fall back to `--issue`). The doc commit SHA depends on the mode: in external-docs mode it lives in the docs repo (`git -C "$DOC_ROOT" rev-parse HEAD`); in in-repo mode it is the dev branch's HEAD (`git rev-parse HEAD`).
+
+```bash
+if [ -n "$DOC_COMMIT" ]; then
+  DOC_SHA="$(git -C "$DOC_ROOT" rev-parse HEAD)"
+else
+  DOC_SHA="$(git rev-parse HEAD)"
+fi
+
 devwatch --repo "$REPO" agent-update \
   --run-id <RUN_ID> \
   --status completed \
   --summary "Docs updated for #<ISSUE>" \
   --files "<comma-separated changed files>" \
-  --commits "$(git rev-parse HEAD)"
+  --commits "$DOC_SHA"
 ```
 
-Post completion comment to GitHub issue:
+Post completion comment to the root issue:
 ```bash
 devwatch --repo "$REPO" agent-comment \
   --issue <ISSUE> \
@@ -168,4 +182,4 @@ devwatch --repo "$REPO" agent-comment \
 
 ## Boundary
 
-This command updates docs only. It does not modify application code.
+This command updates docs only. It does not modify application code, and it does not open a PR — the change has already merged.

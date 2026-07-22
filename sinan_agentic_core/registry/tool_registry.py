@@ -57,6 +57,10 @@ class ToolRegistry:
         """Get actual function objects for given tool names."""
         return [self._tools[name].function for name in tool_names if name in self._tools]
 
+    def get_all_functions(self) -> dict[str, Callable[..., Any]]:
+        """Get all registered tool functions as a mapping."""
+        return {name: tool_def.function for name, tool_def in self._tools.items()}
+
     def to_instruction_text(self, tool_names: list[str] | None = None) -> str:
         """Convert tools to instruction text for agent prompts.
 

@@ -48,10 +48,12 @@ class StreamingRunHooks(RunHooks):
         Args:
             event_queue: Queue that receives event dicts.
             tool_friendly_names: Optional ``tool_name → display name`` map.
-                Falls back to replacing underscores with spaces.
+                Falls back to replacing underscores with spaces. Copied, so
+                the caller's dict is not aliased into the hooks and no two
+                hooks objects built from it end up sharing one mapping.
         """
         self.event_queue = event_queue
-        self.tool_friendly_names = tool_friendly_names or {}
+        self.tool_friendly_names = dict(tool_friendly_names or {})
         self.tools_called: list[str] = []
 
     def _friendly_name(self, tool_name: str) -> str:

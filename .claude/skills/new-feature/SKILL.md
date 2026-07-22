@@ -1,5 +1,6 @@
 ---
 description: "Create a GitHub issue for a feature request."
+capability: core
 ---
 
 Create a GitHub issue for a feature. Record it in devwatch. Stop.
@@ -45,9 +46,9 @@ SESSION_TEXT=$(devwatch --repo "$REPO" brainstorm-read --session "$FROM_BRAINSTO
 
 The output streams every file under the session (README first, then alphabetised siblings, then subfolders) with `===== <abs path> =====` headers — the same shape as `doc-read --display`. Summarise it into the issue body:
 
-1. Read the session's README (the first block in the stream) for `## Why`, `## Open Questions`, `## What's next`.
-2. Read any sibling files (notes, sketches, follow-ups) for additional context the README does not capture.
-3. Promote the `## Why` into the issue's description, and any concrete acceptance signals from the session into the `## Acceptance criteria` block.
+1. Read the session's README (the first block in the stream) — its `## Summary` for the gist and its `## Files` index for which child files carry the detail.
+2. Read each child `.md` file in the stream (`open-questions.md`, topic files, …) for the detailed thinking the README only summarises and indexes.
+3. Promote the session's substance — the summary plus the relevant child-file detail — into the issue's description, and any concrete acceptance signals from the session into the `## Acceptance criteria` block.
 4. The CLI back-links the session to the new issue automatically — do **not** write `brainstorm: <path>` into the body yourself.
 
 ## Detect repo

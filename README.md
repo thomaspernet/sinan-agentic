@@ -24,6 +24,8 @@ A framework for building AI agents using the OpenAI Agents SDK. Fork this reposi
 - **Tool Catalog** - Load tool metadata (description, category, recovery hints) from a YAML file
 - **Knowledge Store** - Inject domain knowledge from YAML files into agent system prompts
 - **Structured Agent-as-Tool** - Typed input schemas and structured error handling for sub-agent calls
+- **Model Retry Policies** - Declare `model_retry` on an agent and transient model-API failures retry inside the SDK instead of failing the run
+- **Tool Output Trimming** - Declare `tool_output_trim` on an agent and oversized tool outputs from older turns shrink before each model call, so the run overflows less often
 - **Capabilities** - Pluggable agent behaviors (turn budgets, error recovery, tool tracing, custom hooks) - write a `Capability` subclass and attach it to an `AgentDefinition`. See [`documentation/project/capabilities.md`](documentation/project/capabilities.md).
 - **MCP Server** - Expose registered tools as an MCP server (stdio or HTTP) with zero description duplication - all metadata comes from `tools.yaml`
 
@@ -95,6 +97,26 @@ async for event in chat_streamed("What's the weather?", "weather_assistant", ses
     elif event["event"] == "answer":
         print(f"\nTools used: {event['data']['tools_called']}")
 ```
+
+### Reporting a failed run
+
+None of the three raises on a failed run — the failure comes back as data. Alongside the rendered message, each reports the *kind* of failure, classified by exception type through `classify_run_error()` (see [Structured error handling](#structured-error-handling)). `AgentOrchestrator.run_workflow()` reports it the same way.
+
+```python
+from sinan_agentic_core import RunErrorKind
+
+result = await chat("What's the weather?", "weather_assistant", session)
+# {"success": False, "error": "Max turns (10) exceeded", "error_kind": "max_turns", "session_id": "..."}
+
+async for event in chat_streamed("What's the weather?", "weather_assistant", session):
+    if event["event"] == "error":
+        # {"error": "Model refused to produce output: I can't help with that.",
+        #  "error_kind": "model_refusal"}
+        if event["data"]["error_kind"] == RunErrorKind.MODEL_REFUSAL:
+            ...
+```
+
+`error_kind` is a `RunErrorKind` value — `max_turns`, `context_overflow`, `model_refusal`, `model_behavior`, or `unknown` — carried as a plain string so the payload stays JSON-serializable. `RunErrorKind` is a `str` enum, so a comparison against either the member or its value works. Branch on it to decide whether a retry is worth attempting; an API layer that matched the message text instead would break the next time upstream rewords it.
 
 ## Token Usage Tracking
 
@@ -294,6 +316,91 @@ if catalog.is_enabled("web_search_agent", config=my_config):
 | `catalog.is_enabled(name, config=None)` | `bool` | Check agent-level `when` condition |
 | `catalog.list_agents()` | `list[str]` | All agent names in the catalog |
 
+## Guardrails
+
+A guardrail's `category` decides where it is wired into the SDK. Register the guardrail once in Python, then list it by name on any agent — in `agents.yaml` or directly on an `AgentDefinition`.
+
+| Category | SDK slot | Runs |
+|----------|----------|------|
+| `input` | `Agent(input_guardrails=...)` | Before the agent starts, on the run input |
+| `output` | `Agent(output_guardrails=...)` | After the agent finishes, on the final output |
+| `tool_input` | `FunctionTool(tool_input_guardrails=...)` | Before a tool executes, on the tool call arguments |
+
+`tool_input` guardrails are proactive: a rejecting guardrail returns its message as the tool output and the tool never runs. Agents run through `BaseAgentRunner` or the chat functions also run their tool-input guardrails *before* the SDK emits a pending human-approval interruption, so a bad call is stopped without bothering a reviewer. That ordering is a run-level setting (`RunConfig.tool_execution`), so driving `Runner` yourself means passing it in — `build_run_config()` reads it off the agent:
+
+```python
+from agents import Runner
+from sinan_agentic_core import build_run_config, create_agent_from_registry
+
+agent = create_agent_from_registry("my_agent")
+result = await Runner.run(agent, "Hello!", run_config=build_run_config(agent))
+```
+
+The same call also carries a declared [tool-output trim policy](#tool-output-trimming), the other run-level setting an agent cannot ride in on. It returns `None` when the agent needs neither, which `Runner.run()` accepts as "use the defaults".
+
+```python
+from agents import (
+    GuardrailFunctionOutput,
+    ToolGuardrailFunctionOutput,
+    input_guardrail,
+    tool_input_guardrail,
+)
+from sinan_agentic_core import GuardrailCategory, register_guardrail
+
+@register_guardrail(
+    name="block_empty_query",
+    description="Reject empty user queries",
+    category=GuardrailCategory.INPUT,
+)
+@input_guardrail
+async def block_empty_query(ctx, agent, agent_input):
+    return GuardrailFunctionOutput(
+        output_info=None,
+        tripwire_triggered=not str(agent_input).strip(),
+    )
+
+@register_guardrail(
+    name="block_destructive_cypher",
+    description="Reject write clauses in read-only queries",
+    category=GuardrailCategory.TOOL_INPUT,
+)
+@tool_input_guardrail
+def block_destructive_cypher(data):
+    if "DELETE" in data.context.tool_arguments.upper():
+        return ToolGuardrailFunctionOutput.reject_content(
+            message="Destructive Cypher is not allowed. Use a read-only MATCH query.",
+        )
+    return ToolGuardrailFunctionOutput.allow()
+```
+
+```yaml
+# agents.yaml
+agents:
+  graph_agent:
+    model: reasoning
+    description: Queries the knowledge graph
+    tools: [run_cypher]
+    guardrails:
+      - block_empty_query
+      - block_destructive_cypher
+```
+
+```python
+cfg = catalog.get("graph_agent")
+register_agent(AgentDefinition(
+    name="graph_agent",
+    model=cfg.model,
+    description=cfg.description,
+    instructions="...",
+    tools=cfg.tools,
+    guardrails=cfg.guardrails,
+))
+```
+
+Tool-input guardrails attach to every local function tool the agent resolves. Registry tools are copied first, so one agent's guardrails never leak into another agent using the same tool. Hosted tools (web search, file search) are left untouched — the SDK runs tool-input guardrails for local function tools only.
+
+Both agent-building paths wire declared guardrails the same way: `BaseAgentRunner.create_agent()` and `create_agent_from_registry()`.
+
 ## Tool Catalog (YAML-driven tool metadata)
 
 Keep static tool metadata (description, category, parameters, recovery hints) in a YAML file instead of repeating it in every `@register_tool()` decorator. The Python decorator becomes minimal - just a name linking the function to its YAML entry.
@@ -339,6 +446,8 @@ async def read_record(ctx, uuid: str) -> str:
 catalog = load_tool_catalog("tools.yaml")
 catalog.enrich_registry(get_tool_registry())
 ```
+
+Those five fields plus the optional `mcp` block are the whole of a tool entry, and an unrecognized key there is rejected when the catalog resolves the tool — a misspelled `recovery_hints` fails at startup rather than leaving the tool without a hint.
 
 ### How the merge works
 
@@ -439,6 +548,8 @@ mcp_servers:
       - create_record
       - update_record
 ```
+
+`description`, `tools`, `write_tools`, `resources`, and `prompts` are the whole of a server block — the server's own name comes from the mapping key — and an unrecognized key there is rejected when `get_mcp_server()` resolves it. A hyphenated `write-tools` therefore fails instead of exposing nothing. The `mcp:` block on a tool is gated the same way, so `exposed: true` fails rather than leaving the tool unexposed.
 
 ### Building the server
 
@@ -656,14 +767,19 @@ Sub-agent failures automatically return structured JSON instead of generic error
 }
 ```
 
-This is handled by `structured_tool_error()`, which is automatically wired into all agent-as-tool calls via `BaseAgentRunner`. Retry hints are generated based on error type:
+This is handled by `structured_tool_error()`, which is automatically wired into all agent-as-tool calls via `BaseAgentRunner`. The hint is picked from the failure's *type* first — `classify_run_error()` maps the exception onto a `RunErrorKind` — and only falls back to the message for the `ValueError`s this framework's own tools raise:
 
-| Error pattern | Retry hint |
-|---------------|------------|
-| "Max turns" in message | Simplify the request or break into smaller steps |
+| Failure | Retry hint |
+|---------|------------|
+| `MaxTurnsExceeded` | Simplify the request or break it into smaller steps |
+| Provider `context_length_exceeded` | Narrow the request, or split it across several calls |
+| `ModelRefusalError` | Do not re-send the same request — restate it or handle it another way |
+| `ModelBehaviorError` | The response missed its output schema; retry once with a simpler request |
 | "not found" in message | Verify the ID exists in your context |
 | "required" in message | Check context for available IDs and provide all required fields |
 | Other | Review the error message and retry with corrected input |
+
+Keying off the class rather than the wording means an upstream release that rewords `"Max turns (10) exceeded"` does not silently downgrade the hint, and an unrelated error that merely quotes those words is not mistaken for the failure it names.
 
 ### How it works
 
@@ -816,6 +932,33 @@ After repeated identical failures:
   Move on to your next task, try a completely different approach, or return your partial results.
 ```
 
+### YAML configuration
+
+Recovery is on by default for every YAML agent. The `error_recovery:` shorthand turns it off, or on with the defaults; the `capabilities:` list turns it on and tunes it:
+
+```yaml
+agents:
+  simple_agent:
+    model: gpt-4o-mini
+    description: Quick tasks
+    error_recovery: false        # off — failures surface untouched
+
+  mcp_agent:
+    model: gpt-4o
+    description: Drives external MCP servers
+    error_recovery: false        # the shorthand is on by default, and both
+                                 # forms apply — leave it on and the agent
+                                 # gets two recovery capabilities
+    capabilities:
+      - name: error_recovery
+        config:
+          max_identical_before_stop: 5
+          mcp_hints:
+            mcp_arxiv_search: Query must be at least 2 characters.
+```
+
+Those two are the whole of that config block, and an unrecognized key there is rejected when the capability is built. `tool_registry` is not one of them: it is a live object rather than something YAML can express, and it falls back to the process-wide registry.
+
 ### Configuration reference
 
 | Parameter | Default | Description |
@@ -823,6 +966,161 @@ After repeated identical failures:
 | `tool_registry` | None | ToolRegistry for looking up `recovery_hint` |
 | `mcp_hints` | `{}` | Dict mapping MCP tool names to hint strings |
 | `max_identical_before_stop` | 3 | Stop threshold for identical-argument retries |
+
+## Structured Output Recovery
+
+An agent with an `output_dataclass` fails its whole run when the model's final message does not parse — including when the payload itself is fine but the model wrapped it in a ```` ```json ```` fence or a "Here is the result:" preamble. The SDK hands the raw message straight to Pydantic, so those runs raise `ModelBehaviorError` even though the answer is right there.
+
+Every run started through `BaseAgentRunner` or the chat functions installs a recovery handler that re-reads the message, finds the embedded payload, and validates it against the agent's own output schema. It never fabricates a value: anything that does not satisfy the schema is not recovered, and the run raises as before.
+
+Session history reads messages the same way. An agent with a non-dict `output_dataclass` answers under a wrapper key, and `AgentSession` stores the answer rather than the envelope — including when the model fenced its payload or wrote a preamble around it, which previously left the fence markers and the wrapper in the conversation every later turn replays.
+
+Recovery is on by default and covers `execute()` in all three modes plus the overflow-fallback LLM call. `invalid_output_recovery` is an agent-definition flag, so it turns recovery off everywhere that definition is resolved — the runner's branches, the chat functions, and a `Runner.run()` you drive yourself. Turn it off per agent when a malformed response must fail loudly:
+
+```yaml
+# agents.yaml
+agents:
+  extractor:
+    model: gpt-4o-mini
+    description: Extracts structured records
+    invalid_output_recovery: false
+```
+
+```python
+register_agent(AgentDefinition(
+    name="extractor",
+    description=cfg.description,
+    instructions=build_extractor_instructions,
+    output_dataclass=ExtractionResult,
+    invalid_output_recovery=cfg.invalid_output_recovery,
+))
+```
+
+Running `Runner.run()` directly instead of through `BaseAgentRunner`? `build_error_handlers()` reads the decision the way `build_run_config()` does — the output type off the agent, and the `invalid_output_recovery` flag off the definition registered under the agent's name, since the flag has no slot on `Agent`. An agent that answers in plain text has no schema to fail, and an agent whose definition turns recovery off asked to fail loudly; both get `None` and `Runner.run()` keeps its defaults:
+
+```python
+from agents import Runner
+from sinan_agentic_core import build_error_handlers
+
+result = await Runner.run(
+    agent,
+    "Extract the records",
+    error_handlers=build_error_handlers(agent),
+)
+```
+
+The chat functions do exactly this on the agent they resolve. Pass `recover_invalid_final_output` yourself when you assemble the handler mapping by hand.
+
+Sub-agents built with `as_tool()` are the one gap — the SDK's `as_tool()` has no `error_handlers` parameter, so a nested agent's invalid structured output still raises.
+
+## Model Retry Policies
+
+A rate limit, a 503, or a dropped connection fails the whole run — even though the next attempt would have succeeded. The SDK can retry the model call itself, but only when `ModelSettings.retry` carries both an attempt budget *and* a policy callback; with either missing it never retries.
+
+Declare `model_retry` on an agent and the framework builds that object for you. It reaches every execution path — `execute()` in all three modes, `run_agent()`, handoffs, and `as_tool()` sub-agents — because retry rides on the agent's model settings rather than on a per-run argument.
+
+Retry is off unless declared: a retried call costs latency and a second billed request.
+
+```yaml
+# agents.yaml
+agents:
+  researcher:
+    model: gpt-4o-mini
+    description: Reads papers and summarizes findings
+    model_retry:
+      max_retries: 3               # attempts after the initial request
+      retry_on: [provider_suggested, network_error]
+      backoff:                     # optional — SDK defaults fill any unset field
+        initial_delay: 0.5
+        max_delay: 8.0
+```
+
+Every field is optional, so `model_retry: {}` opts in with the defaults — two attempts after the initial request, on the triggers listed below. Only a missing key means the agent opts out.
+
+`max_retries`, `retry_on`, and `backoff` are the whole of the `model_retry:` block, and an unrecognized key — there or inside `backoff:` — is rejected at load time. A delay field written beside `backoff:` instead of under it therefore fails, rather than leaving the schedule at SDK defaults while reading as declared.
+
+```python
+from sinan_agentic_core import AgentDefinition, ModelRetryConfig, register_agent
+
+register_agent(AgentDefinition(
+    name="researcher",
+    description=cfg.description,
+    instructions=build_researcher_instructions,
+    model_retry=cfg.model_retry,          # from agents.yaml
+    # ...or inline: ModelRetryConfig(max_retries=3)
+))
+```
+
+`retry_on` lists the error classes worth another attempt. Defaults to `[provider_suggested, network_error]`.
+
+| Trigger | Retries when |
+|---------|--------------|
+| `provider_suggested` | The model adapter advises it. For OpenAI: 408, 409, 429, every 5xx, connection errors and timeouts — honoring an `x-should-retry` header or a `Retry-After` delay when one is sent. |
+| `network_error` | The call failed with a connection error or a timeout, whatever the provider advises. |
+| `retry_after` | The error carries an explicit `Retry-After` delay, and waits exactly that long. |
+
+Triggers combine: the call is retried when any listed trigger matches. A delay supplied by the error (`Retry-After`) always wins over the `backoff` schedule.
+
+Both agent-building paths attach the declared policy the same way: `BaseAgentRunner.create_agent()` and `create_agent_from_registry()`. An agent resolved by name in `chat()`, `chat_with_hooks()`, or `chat_streamed()` therefore retries too. Settings supplied by the caller still win field by field, so an explicit `retry` on a `model_settings` override replaces the declared one.
+
+The overflow-fallback path is the one partial case. Its rescue call goes straight to the OpenAI client instead of through the runner, so it honors `max_retries` but not `retry_on` or `backoff`.
+
+## Tool Output Trimming
+
+A long **multi-turn** conversation accumulates bulky tool outputs — search results, file dumps, error payloads — that keep costing tokens long after they stop being relevant. Left alone they grow the input until the run dies on `context_length_exceeded`, and the only recovery left is `execute(fallback_on_overflow=True)`, which re-collects the tool outputs and pays for a second, condensed model call.
+
+Declare `tool_output_trim` on an agent and the SDK replaces oversized tool outputs from older turns with a short preview *before* each model call. Recent turns stay at full fidelity, so the agent keeps the context it is actually working with while the tail stops growing. It reaches every execution path that runs through the SDK — `execute()` in all three modes, `run_agent()`, `as_tool()` sub-agents, and the chat functions.
+
+Trimming is off unless declared: it removes content the model would otherwise have seen.
+
+**It only helps across turns.** The window is counted in *user messages*, so nothing is trimmed until the conversation holds more than `recent_turns` of them. A single question answered by twenty large tool calls is left whole at every setting — the outputs all sit in the current turn, and the current turn is never touched. Trimming pays off for a session that keeps asking follow-ups, not for a one-shot run that overflows inside its own turn; that shape still needs `fallback_on_overflow`.
+
+```yaml
+# agents.yaml
+agents:
+  researcher:
+    model: gpt-4o-mini
+    description: Reads papers and summarizes findings
+    tool_output_trim:
+      recent_turns: 3              # last 3 user turns are never trimmed
+      max_output_chars: 4000       # outputs above this are candidates
+      preview_chars: 500           # how much of the original survives
+      trimmable_tools: [web_search]  # optional — omit to cover every tool
+```
+
+Every field is optional and the SDK fills an unset one with its own default, so `tool_output_trim: {}` opts in with defaults throughout.
+
+Those four are the whole of the `tool_output_trim:` block, and an unrecognized key there is rejected at load time — a misspelled `max_output_char` fails instead of trimming on the SDK's default cap.
+
+```python
+from sinan_agentic_core import AgentDefinition, ToolOutputTrimConfig, register_agent
+
+register_agent(AgentDefinition(
+    name="researcher",
+    description=cfg.description,
+    instructions=build_researcher_instructions,
+    tool_output_trim=cfg.tool_output_trim,   # from agents.yaml
+    # ...or inline: ToolOutputTrimConfig(max_output_chars=4000)
+))
+```
+
+The SDK installs the filter through `RunConfig`, so unlike a retry policy it cannot ride on the agent — building one is not enough to get it. `build_run_config()` closes that gap: it looks the declaration up by the agent's name, so an agent resolved in `chat()`, `chat_with_hooks()`, or `chat_streamed()` is trimmed on the same terms as one the runner executes. Driving `Runner` yourself works the same way:
+
+```python
+from agents import Runner
+from sinan_agentic_core import build_run_config, create_agent_from_registry
+
+agent = create_agent_from_registry("researcher")
+result = await Runner.run(agent, "Summarize the new papers", run_config=build_run_config(agent))
+```
+
+An agent assembled by hand under a name the registry does not know declares nothing and keeps the SDK defaults.
+
+Pick `max_output_chars` above the size of an output the agent still reasons over several turns later, and `preview_chars` large enough that the trimmed entry still says what the call returned. The two are independent: an output is replaced only when the preview is genuinely shorter than the original, so `preview_chars: 500` with `max_output_chars: 500` is a valid "keep the first 500 characters of anything bigger" policy — it spares outputs just over the cap and still cuts a 100,000-character one by 99%.
+
+Trimming and the overflow fallback are complements, not alternatives: trimming makes overflow rarer, the fallback still rescues the run when it happens anyway. The fallback's own rescue call bypasses the SDK, so a declared trim policy does not shape that prompt — the prompt builder caps each output instead.
+
+The fallback fires on exactly two failures — the SDK's `MaxTurnsExceeded` and a provider 400 carrying `context_length_exceeded`. Both mean the loop ran out of room. Everything else propagates, a `ModelRefusalError` included: the rescue call goes straight to the model and re-asking a refusal through a path that bypasses the run would route around the answer rather than recover from a limit.
 
 ## Tool Tracer (Non-Streaming Observability)
 
@@ -938,6 +1236,8 @@ agents:
     # No turn_budget -- uses plain max_turns cutoff
 ```
 
+Every field is optional, so `turn_budget: {}` opts in with the defaults above. Only a missing key means the agent opts out.
+
 Then use `build_turn_budget()` to create a `TurnBudget` from the catalog entry:
 
 ```python
@@ -992,7 +1292,7 @@ print(budget.extension_reasons) # ["Need to process 5 remaining papers"]
 When a `TurnBudget` is provided, the runner:
 
 1. Sets the SDK's `max_turns` to `budget.absolute_max` (hard safety ceiling)
-2. Attaches `budget` to the context as `_turn_budget`
+2. Carries `budget` on the run context via `set_turn_budget()` (read back with `get_turn_budget()`)
 3. Adds the `request_extension` tool to the agent
 4. Wraps agent instructions as a dynamic callable that appends budget status each turn
 5. Uses `TurnBudgetHooks` (a `RunHooks` subclass) to count turns via `on_llm_start`
@@ -1044,7 +1344,11 @@ If `as_tool_turn_budget` is not set, the runner falls back to `as_tool_max_turns
 | `reminder_at` | 2 | Warn when this many turns remain |
 | `max_extensions` | 3 | Max self-approved extensions |
 | `extension_size` | 5 | Turns added per extension |
-| `absolute_max` | 25 | Hard ceiling passed to SDK |
+
+Those four are the whole of the `turn_budget:` block, and an unrecognized key
+there is rejected at load time. The hard ceiling — `TurnBudget.absolute_max`, 25
+when unset — is not one of them: in YAML it is the agent's own `max_turns`, and
+in code it is a constructor argument.
 
 ## Session Persistence
 
@@ -1089,6 +1393,8 @@ sinan_agentic_core/
 │   │   ├── __init__.py
 │   │   └── base.py               # Capability base class + lifecycle hooks
 │   ├── errors.py                 # structured_tool_error for agent-as-tool failures
+│   ├── output_recovery.py        # invalid_final_output handler (salvages structured output)
+│   ├── run_config.py             # build_run_config() — run-level SDK settings for a built agent
 │   ├── tool_error_recovery.py    # ToolErrorRecovery capability
 │   ├── tool_tracer.py            # ToolTracer capability (non-streaming tool-call tracing)
 │   ├── turn_budget.py            # TurnBudget capability + TurnBudgetHooks

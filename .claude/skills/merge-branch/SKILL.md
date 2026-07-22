@@ -1,5 +1,6 @@
 ---
 description: "Merge a branch into another. With --pr, merges a GitHub PR; without --pr, performs a local branch merge with conflict auto-resolution gated by tests/lint/typecheck."
+capability: core
 ---
 
 Land branch `<head>` into branch `<base>`. One skill, two surfaces (#1453):
@@ -14,7 +15,7 @@ The base branch is supplied by the caller. Do not ask the user for it.
 `$ARGUMENTS` shape:
 
 ```
-<head> --into <base> [--pr <num>] [--repo <owner/name>] [--issue <num>] [--run <id>] [--delete-source]
+<head> --into <base> [--pr <num>] [--repo <owner/name>] [--issue <num>] [--run <id>] [--delete-source] [--auto-approve]
 ```
 
 Examples:
@@ -22,8 +23,9 @@ Examples:
 - `feat/901-foo --into feat/900-epic --repo o/r --issue 901 --run 5` -> local merge, child #901 into the epic branch.
 - `feat/900-epic --into local-dev-next --pr 123 --repo o/r --run 7` -> close PR #123 with `gh pr merge`.
 - `fix/42-bug --into local-dev-next --repo o/r --delete-source` -> local merge, then delete `fix/42-bug` on origin and locally.
+- `feat/901-foo --into feat/900-epic --repo o/r --issue 901 --run 5 --auto-approve` -> local merge under auto-approve: a semantic conflict is attempted, not aborted (the owning workflow opted into auto-approve gates).
 
-Extract `HEAD`, `BASE`, optional `PR_NUMBER`, `REPO`, `ISSUE`, `RUN_ID`. Set `DELETE_SOURCE=1` when `--delete-source` is present, otherwise leave it unset.
+Extract `HEAD`, `BASE`, optional `PR_NUMBER`, `REPO`, `ISSUE`, `RUN_ID`. Set `DELETE_SOURCE=1` when `--delete-source` is present, otherwise leave it unset. Set `AUTO_APPROVE=1` when `--auto-approve` is present, otherwise leave it unset.
 
 ## Detect repo
 
@@ -103,7 +105,9 @@ Inspect every conflicted file via `git status --porcelain` (lines starting with 
   npm install  # for package-lock.json
   ```
 
-- **Semantic conflicts** — overlapping logic edits, conflicting test changes, anything that requires understanding what the user intended in both branches: **stop**. Run `git merge --abort` and proceed to **step 6 (halt)**.
+- **Semantic conflicts** — overlapping logic edits, conflicting test changes, anything that requires understanding what the user intended in both branches:
+  - **Default (no `--auto-approve`)**: **stop**. Run `git merge --abort` and proceed to **step 6 (halt)** — a human reconciles the intent of both branches.
+  - **Under `AUTO_APPROVE=1`**: do **not** abort. Attempt the resolution — read both halves of every conflict marker and reconcile the logic so the intent of *both* branches survives (not a blind `--ours` / `--theirs`), then `git add` each resolved file. You own this decision for this merge; the owning workflow opted into auto-approve gates. The post-merge tests/typecheck/lint gate (**step 4**) is the objective safety net: if your reconciliation is wrong the gate goes red, the merge is discarded, and the run halts — a wrong guess is caught, never pushed. Never weaken, skip, or work around step 4 to force a conflicted merge through. If a conflict is genuinely beyond reconciliation (you cannot produce a tree that preserves both intents), fall through to **step 6 (halt)** even under `--auto-approve`.
 
 After every resolution, `git add` the affected file. Once `git status` shows no remaining conflicts, finalise the merge:
 
@@ -137,7 +141,7 @@ if [ "$DELETE_SOURCE" = "1" ]; then
 fi
 ```
 
-This skill never closes the child issue. Pre-#2247 a `--close-issue` flag (#1638) closed the issue here to satisfy `delete-branch`'s old "issue must be closed" gate; that gate now accepts a completed `merge-to-epic` row as proof of integration, so the child issue stays open until the epic-level PR ships and GitHub auto-closes it.
+This skill never closes the child issue. Pre-#2247 a `--close-issue` flag (#1638) closed the issue here to satisfy `delete-branch`'s old "issue must be closed" gate; that gate now accepts a completed `merge-to-base` row as proof of integration, so the child issue stays open until the epic-level PR ships and GitHub auto-closes it.
 
 Record completion:
 
@@ -152,7 +156,9 @@ Omit `--run-id` if no `RUN_ID` was parsed.
 
 ### 6. Halt on unresolved conflict / failed gate
 
-When auto-resolution leaves the tree broken, when conflicts are semantically ambiguous, or when the post-merge gate (tests / typecheck / lint) fails:
+When auto-resolution leaves the tree broken, when the post-merge gate (tests / typecheck / lint) fails, or — **without `--auto-approve`** — when conflicts are semantically ambiguous:
+
+Under `AUTO_APPROVE=1` a semantic conflict is *attempted* in step 3 rather than halted on sight, so this halt is reached only when the post-merge gate fails or the conflict is genuinely beyond reconciliation (no tree preserves both intents). The gate never softens — auto-approve never pushes a red tree.
 
 ```bash
 git merge --abort 2>/dev/null || git reset --hard "origin/$BASE"

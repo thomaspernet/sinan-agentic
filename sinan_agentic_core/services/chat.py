@@ -7,12 +7,24 @@ Three flavours of chat, from simplest to most granular:
 - ``chat_streamed()``   — yields token-level deltas via ``Runner.run_streamed()``
 
 All three handle session history, error handling, and return structured
-events so your API layer stays thin.
+events so your API layer stays thin.  They also apply the run-level SDK
+settings the resolved agent needs — an agent whose tools carry tool-input
+guardrails runs them ahead of any human-approval interruption, an agent whose
+definition declares ``tool_output_trim`` has its bulky older tool outputs
+shrunk before each model call, and an agent with a structured ``output_type``
+recovers a final message whose payload is valid but wrapped in prose or a
+code fence instead of failing the run.
+
+A failure never reaches the caller as an exception, so each of the three
+reports *why* it failed: the caught error is classified into a
+``RunErrorKind`` and travels as ``error_kind`` beside the rendered message.
+An API layer branches on that kind — retry a ``max_turns``, surface a
+``model_refusal`` — instead of matching the message text.
 
 Each function accepts either ``agent_name`` (resolved via the registry)
 or a pre-built ``agent`` instance.  Use the latter when you need
 features that ``create_agent_from_registry`` does not support, such as
-dynamic instructions, structured output, guardrails, or handoffs.
+dynamic instructions, structured output, or handoffs.
 
 Usage:
     from sinan_agentic_core.services.chat import chat, chat_with_hooks, chat_streamed
@@ -36,6 +48,10 @@ from typing import Any
 from agents import Agent, ItemHelpers, Runner, Usage
 from openai.types.responses import ResponseTextDeltaEvent
 
+from ..core.output_recovery import build_error_handlers
+from ..core.run_config import build_run_config
+from ..core.run_errors import run_error_payload
+from ..core.stream_preview import tool_output_preview
 from ..registry.agent_factory import create_agent_from_registry
 from ..session import AgentSession
 from .hooks import StreamingRunHooks
@@ -117,7 +133,9 @@ async def chat(
 
     Returns:
         ``{"success": True, "response": str, "session_id": str, "tools_called": list, "usage": dict}``
-        or ``{"success": False, "error": str, "session_id": str}`` on failure.
+        or ``{"success": False, "error": str, "error_kind": str, "session_id": str}``
+        on failure, where ``error_kind`` is a ``RunErrorKind`` value naming why
+        the run failed.
     """
     if session is None:
         raise ValueError("'session' is required")
@@ -130,6 +148,14 @@ async def chat(
         run_kwargs: dict[str, Any] = {"starting_agent": resolved, "input": history}
         if context is not None:
             run_kwargs["context"] = context
+
+        run_config = build_run_config(resolved)
+        if run_config is not None:
+            run_kwargs["run_config"] = run_config
+
+        error_handlers = build_error_handlers(resolved)
+        if error_handlers is not None:
+            run_kwargs["error_handlers"] = error_handlers
 
         result = await Runner.run(**run_kwargs)
         response = result.final_output
@@ -144,8 +170,9 @@ async def chat(
             "usage": _usage_to_dict(result),
         }
     except Exception as e:
-        logger.error("Chat error: %s", e, exc_info=True)
-        return {"success": False, "error": str(e), "session_id": session.session_id}
+        payload = run_error_payload(e)
+        logger.error("Chat error (%s): %s", payload["error_kind"], e, exc_info=True)
+        return {"success": False, **payload, "session_id": session.session_id}
 
 
 async def chat_with_hooks(
@@ -180,7 +207,15 @@ async def chat_with_hooks(
             {"event": "tool_end",   "data": {"tool": "...", ...}}
             {"event": "finalizing", "data": {"message": "..."}}
             {"event": "answer",     "data": {"response": "...", "tools_called": [...]}}
-            {"event": "error",      "data": {"error": "..."}}
+            {"event": "error",      "data": {"error": "...", "error_kind": "..."}}
+
+        ``error_kind`` is a ``RunErrorKind`` value naming why the run failed.
+
+        The ``answer`` payload owns its ``tools_called`` list: it is copied out
+        of the hooks accumulator rather than aliased to it, so the payload is a
+        fixed record of this run — the same guarantee ``chat()`` already gives,
+        which yields a list it owns.  Only the container is copied; the entries
+        are plain tool names.
     """
     if session is None:
         raise ValueError("'session' is required")
@@ -203,6 +238,15 @@ async def chat_with_hooks(
             }
             if context is not None:
                 run_kwargs["context"] = context
+
+            run_config = build_run_config(resolved)
+            if run_config is not None:
+                run_kwargs["run_config"] = run_config
+
+            error_handlers = build_error_handlers(resolved)
+            if error_handlers is not None:
+                run_kwargs["error_handlers"] = error_handlers
+
             return await Runner.run(**run_kwargs)
 
         task = asyncio.create_task(_run())
@@ -229,13 +273,14 @@ async def chat_with_hooks(
             "event": "answer",
             "data": {
                 "response": response,
-                "tools_called": hooks.tools_called,
+                "tools_called": list(hooks.tools_called),
                 "usage": _usage_to_dict(result),
             },
         }
     except Exception as e:
-        logger.error("Chat hooks error: %s", e, exc_info=True)
-        yield {"event": "error", "data": {"error": str(e)}}
+        payload = run_error_payload(e)
+        logger.error("Chat hooks error (%s): %s", payload["error_kind"], e, exc_info=True)
+        yield {"event": "error", "data": payload}
 
 
 async def chat_streamed(
@@ -270,7 +315,9 @@ async def chat_streamed(
             {"event": "message_output",  "data": {"text": "..."}}
             {"event": "agent_updated",   "data": {"agent": "..."}}
             {"event": "answer",          "data": {"response": "...", "tools_called": [...]}}
-            {"event": "error",           "data": {"error": "..."}}
+            {"event": "error",           "data": {"error": "...", "error_kind": "..."}}
+
+        ``error_kind`` is a ``RunErrorKind`` value naming why the run failed.
     """
     if session is None:
         raise ValueError("'session' is required")
@@ -282,6 +329,14 @@ async def chat_streamed(
         run_kwargs: dict[str, Any] = {"starting_agent": resolved, "input": history}
         if context is not None:
             run_kwargs["context"] = context
+
+        run_config = build_run_config(resolved)
+        if run_config is not None:
+            run_kwargs["run_config"] = run_config
+
+        error_handlers = build_error_handlers(resolved)
+        if error_handlers is not None:
+            run_kwargs["error_handlers"] = error_handlers
 
         result = Runner.run_streamed(**run_kwargs)
 
@@ -312,7 +367,7 @@ async def chat_streamed(
                 elif item.type == "tool_call_output_item":
                     yield {
                         "event": "tool_output",
-                        "data": {"output": str(item.output)[:500]},
+                        "data": {"output": tool_output_preview(item.output)},
                     }
                 elif item.type == "message_output_item":
                     yield {
@@ -340,5 +395,6 @@ async def chat_streamed(
             },
         }
     except Exception as e:
-        logger.error("Streaming error: %s", e, exc_info=True)
-        yield {"event": "error", "data": {"error": str(e)}}
+        payload = run_error_payload(e)
+        logger.error("Streaming error (%s): %s", payload["error_kind"], e, exc_info=True)
+        yield {"event": "error", "data": payload}

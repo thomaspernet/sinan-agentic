@@ -1,8 +1,19 @@
 ---
-description: "Safely delete the feature branch for issue #$ARGUMENTS after verifying the PR is merged or issue is closed."
+description: "Safely delete the feature branch for issue #$ARGUMENTS. The devwatch CLI is the single authority for whether the branch is merged and safe to delete."
+capability: core
 ---
 
 Safely delete the feature branch for a completed issue.
+
+The pipeline no longer launches this skill — per-child `delete-branch` is a
+synchronous server-side action since #2799. This skill is the manual escape
+hatch (the issue side-panel "Delete branch" button and the `/delete-branch`
+slash command). It does **not** carry its own "is it merged?" gate:
+`devwatch delete-branch` is the single authority and refuses unless the branch
+is provably integrated — the GitHub issue is closed, a merged PR closing it
+exists, or (for an `epic_integration` child) its `merge-to-base` row is `done`.
+Do not re-derive that check here; resolve the branch, move HEAD off it if
+needed, and let the CLI decide.
 
 ## Parse arguments
 
@@ -36,22 +47,16 @@ Pass `--repo "$REPO"` to every `devwatch` command to ensure the correct repo is 
    ```
    This shows the branch name, PR status, and whether cleanup has already been attempted.
 
-2. Verify the issue is done:
-   ```bash
-   gh issue view <ISSUE> --repo "$REPO" --json state
-   ```
-   The issue must be **closed**, or must have a **merged PR** in the agent runs.
-
-3. Find the branch — check agent runs in the DB, then fall back to git:
+2. Find the branch — check agent runs in the DB, then fall back to git:
    ```bash
    git branch -a --list "*fix/<ISSUE>-*" "*feat/<ISSUE>-*" "*refactor/<ISSUE>-*" "*chore/<ISSUE>-*" "*docs/<ISSUE>-*" "*ci-fix/<ISSUE>-*"
    ```
    Call the result `BRANCH`.
 
-4. Validate safety:
+3. Validate safety:
    - `BRANCH` must not be one of the repo's pipeline branches (dev / staging / prod from `config.yaml`) or a universally protected name (`main`, `master`, `develop`)
 
-5. **Resolve checkout target.** The CLI refuses to delete the currently-checked-out branch, so the agent must move HEAD itself before invoking deletion — and on epic children that means the epic integration branch, not the dev branch.
+4. **Resolve checkout target.** The CLI refuses to delete the currently-checked-out branch, so the agent must move HEAD itself before invoking deletion — and on epic children that means the epic integration branch, not the dev branch.
 
    ```bash
    WORKFLOW_JSON=$(devwatch --repo "$REPO" workflow-get --issue <ISSUE>)
@@ -66,7 +71,7 @@ Pass `--repo "$REPO"` to every `devwatch` command to ensure the correct repo is 
 
      If the repo has no `dev` configured (e.g. release-only repos), fall back to `branches prod`. Do **not** hardcode a branch name (e.g. `dev`) — every repo resolves its own pipeline branches through `config.yaml`.
 
-6. **Switch HEAD if it is on `BRANCH`.** Compare `git branch --show-current` to `BRANCH`; if they match, run:
+5. **Switch HEAD if it is on `BRANCH`.** Compare `git branch --show-current` to `BRANCH`; if they match, run:
 
    ```bash
    git checkout "$TARGET"
@@ -74,23 +79,21 @@ Pass `--repo "$REPO"` to every `devwatch` command to ensure the correct repo is 
 
    If HEAD is already on a different branch, leave it alone — the agent may be mid-task on something unrelated.
 
-7. If all checks pass, proceed with deletion.
-
 ## Execution
+
+The CLI performs the integration gate (closed issue / merged PR / done `merge-to-base`) and the delete. Run it and report its result verbatim — if it refuses because the branch is not provably merged, surface that error; do not force the deletion.
 
 If a RUN_ID was provided, pass `--run` only (issue is derived from the run):
 
 ```bash
-uv run devwatch --repo "$REPO" delete-branch --run <RUN_ID>
+devwatch --repo "$REPO" delete-branch --run <RUN_ID>
 ```
 
 If no RUN_ID, pass `--issue` explicitly:
 
 ```bash
-uv run devwatch --repo "$REPO" delete-branch --issue <ISSUE>
+devwatch --repo "$REPO" delete-branch --issue <ISSUE>
 ```
-
-The CLI command handles all validation and deletion. If it fails, report the error.
 
 ## Boundary
 

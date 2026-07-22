@@ -1,14 +1,24 @@
 """Tests for the tool error recovery system (core/tool_error_recovery.py)."""
 
+import inspect
 import json
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from agents import RunContextWrapper
+from pydantic import ValidationError
 
 from sinan_agentic_core.core.capabilities import Capability
 from sinan_agentic_core.core.tool_error_recovery import (
+    ARGS_SUMMARY_ELLIPSIS,
+    ARGS_SUMMARY_FALLBACK_CHARS,
+    ARGS_SUMMARY_MAX_PARAMS,
+    ARGS_SUMMARY_VALUE_CHARS,
+    ARGS_SUMMARY_VALUE_HEAD_CHARS,
+    DEFAULT_MAX_IDENTICAL_BEFORE_STOP,
     ToolErrorRecovery,
+    ToolErrorRecoveryConfig,
+    build_tool_error_recovery,
 )
 
 # ------------------------------------------------------------------ #
@@ -272,6 +282,15 @@ class TestHintLookup:
         section = recovery.build_instruction_section()
         assert "external hint" in section
 
+    def test_the_callers_hints_dict_is_not_aliased(self):
+        """The tracker owns its hints, so a later edit to the caller's dict does not reach it."""
+        declared = {"ext_tool": "external hint"}
+
+        recovery = ToolErrorRecovery(mcp_hints=declared)
+        declared["other_tool"] = "late hint"
+
+        assert "other_tool" not in recovery.mcp_hints
+
     def test_hint_shown_for_status_based_error(self):
         registry = Mock()
         tool_def = Mock()
@@ -310,6 +329,51 @@ class TestArgsHashing:
         recovery.record_tool_result("t", json.dumps({"error": "x"}), "")
         summary = recovery.get_error_summary()
         assert summary["t"]["identical_count"] == 2
+
+
+# ------------------------------------------------------------------ #
+# ToolErrorRecovery — argument summary bounds
+# ------------------------------------------------------------------ #
+
+
+def _summary_of(arguments: str) -> str:
+    """Record one failed call with *arguments* and read back its summary."""
+    recovery = ToolErrorRecovery()
+    recovery.record_tool_result("t", json.dumps({"error": "x"}), arguments)
+    summary: str = recovery.to_snapshot()["errors"]["t"]["last_args_summary"]
+    return summary
+
+
+class TestArgsSummaryBounds:
+    def test_the_ellipsis_is_spent_inside_the_value_budget(self):
+        # The head length is derived, not restated, so the two cannot drift.
+        assert (
+            ARGS_SUMMARY_VALUE_HEAD_CHARS + len(ARGS_SUMMARY_ELLIPSIS) == ARGS_SUMMARY_VALUE_CHARS
+        )
+
+    def test_a_value_at_the_bound_is_kept_whole(self):
+        value = "a" * ARGS_SUMMARY_VALUE_CHARS
+        assert _summary_of(json.dumps({"q": value})) == f"q={value}"
+
+    def test_a_longer_value_is_cut_to_the_bound_including_the_ellipsis(self):
+        value = "a" * (ARGS_SUMMARY_VALUE_CHARS + 1)
+        rendered = _summary_of(json.dumps({"q": value})).removeprefix("q=")
+        assert rendered.endswith(ARGS_SUMMARY_ELLIPSIS)
+        assert len(rendered) == ARGS_SUMMARY_VALUE_CHARS
+
+    def test_only_the_named_number_of_parameters_is_shown(self):
+        args = {f"p{i}": i for i in range(ARGS_SUMMARY_MAX_PARAMS + 3)}
+        summary = _summary_of(json.dumps(args))
+        assert summary.count("=") == ARGS_SUMMARY_MAX_PARAMS
+        assert f"p{ARGS_SUMMARY_MAX_PARAMS}=" not in summary
+
+    def test_non_object_arguments_are_cut_to_the_fallback_bound(self):
+        summary = _summary_of(json.dumps("z" * (ARGS_SUMMARY_FALLBACK_CHARS + 50)))
+        assert summary == "z" * ARGS_SUMMARY_FALLBACK_CHARS
+
+    def test_unparsable_arguments_are_cut_to_the_fallback_bound(self):
+        summary = _summary_of("{not json" + "z" * ARGS_SUMMARY_FALLBACK_CHARS)
+        assert len(summary) == ARGS_SUMMARY_FALLBACK_CHARS
 
 
 # ------------------------------------------------------------------ #
@@ -474,7 +538,6 @@ class TestBaseAgentRunnerIntegration:
         hooks = BaseAgentRunner._build_hooks([TurnBudget(), ToolErrorRecovery()])
         assert isinstance(hooks, _CompositeHooks)
 
-    @pytest.mark.asyncio
     async def test_execute_basic_with_recovery(self, runner):
         from sinan_agentic_core.core.base_runner import _CompositeHooks
 
@@ -506,7 +569,6 @@ class TestBaseAgentRunnerIntegration:
                 call_kwargs = mock_runner_cls.run.call_args[1]
                 assert isinstance(call_kwargs["hooks"], _CompositeHooks)
 
-    @pytest.mark.asyncio
     async def test_execute_resets_recovery(self, runner):
         recovery = ToolErrorRecovery()
         recovery.record_tool_result("t", json.dumps({"error": "old"}))
@@ -524,6 +586,43 @@ class TestBaseAgentRunnerIntegration:
             )
         assert not recovery.has_errors  # reset at start
 
+    async def _capabilities_for(self, runner, error_recovery):
+        """Run execute() with *error_recovery* and return the capabilities it installed."""
+        with patch.object(runner, "_execute_basic", new_callable=AsyncMock) as mock_basic:
+            mock_basic.return_value = "output"
+            await runner.execute(
+                "test_agent",
+                Mock(spec=[]),
+                session=Mock(),
+                input_text="hello",
+                error_recovery=error_recovery,
+            )
+        capabilities: list[Capability] = mock_basic.call_args.kwargs["capabilities"]
+        return capabilities
+
+    async def test_execute_translates_error_recovery_true(self, runner, _registries):
+        """``True`` is a declaration; the runner translates it on its own registry."""
+        _, tool_reg, _ = _registries
+
+        built = await self._capabilities_for(runner, True)
+
+        recovery = [c for c in built if isinstance(c, ToolErrorRecovery)]
+        assert len(recovery) == 1
+        assert recovery[0]._registry is tool_reg
+
+    async def test_execute_translates_error_recovery_false(self, runner):
+        built = await self._capabilities_for(runner, False)
+
+        assert not any(isinstance(c, ToolErrorRecovery) for c in built)
+
+    async def test_execute_uses_a_passed_recovery_in_place(self, runner):
+        """An instance is already the capability — it is installed, not rebuilt."""
+        recovery = ToolErrorRecovery()
+
+        built = await self._capabilities_for(runner, recovery)
+
+        assert recovery in built
+
 
 # ------------------------------------------------------------------ #
 # _CompositeHooks
@@ -531,7 +630,6 @@ class TestBaseAgentRunnerIntegration:
 
 
 class TestCompositeHooks:
-    @pytest.mark.asyncio
     async def test_delegates_to_all_capabilities(self):
         from sinan_agentic_core.core.base_runner import _CompositeHooks
 
@@ -550,7 +648,6 @@ class TestCompositeHooks:
         cap_a.on_llm_start.assert_called_once()
         cap_b.on_llm_start.assert_called_once()
 
-    @pytest.mark.asyncio
     async def test_extracts_tool_arguments_from_context(self):
         from sinan_agentic_core.core.base_runner import _CompositeHooks
 
@@ -562,6 +659,145 @@ class TestCompositeHooks:
 
         await composite.on_tool_start(ctx, Mock(), tool)
         cap.on_tool_start.assert_called_once_with(ctx, tool, ctx.tool_arguments)
+
+    async def test_the_callers_capability_list_is_not_aliased(self):
+        """The bundle owns its dispatch set, so a later append by the caller does not reach it."""
+        from sinan_agentic_core.core.base_runner import _CompositeHooks
+
+        declared = [Mock(spec=Capability)]
+
+        composite = _CompositeHooks(declared)
+        late = Mock(spec=Capability)
+        declared.append(late)
+        await composite.on_agent_start(Mock(), Mock())
+
+        late.on_agent_start.assert_not_called()
+
+    async def test_two_bundles_built_from_one_list_do_not_share_a_dispatch_set(self):
+        from sinan_agentic_core.core.base_runner import _CompositeHooks
+
+        cap = Mock(spec=Capability)
+        declared = [cap]
+
+        first = _CompositeHooks(declared)
+        second = _CompositeHooks(declared)
+        late = Mock(spec=Capability)
+        first._capabilities.append(late)
+        await second.on_agent_start(Mock(), Mock())
+
+        late.on_agent_start.assert_not_called()
+        assert late not in declared
+
+    def test_the_capabilities_themselves_stay_shared_with_the_caller(self):
+        """Only the container is detached — a budget's live state is read back after the run."""
+        from sinan_agentic_core.core.base_runner import _CompositeHooks
+        from sinan_agentic_core.core.turn_budget import TurnBudget
+
+        budget = TurnBudget()
+
+        composite = _CompositeHooks([budget])
+
+        assert composite._capabilities[0] is budget
+
+    def test_build_hooks_does_not_alias_the_callers_list(self):
+        """Both construction sites go through the constructor, so the guard covers both."""
+        from sinan_agentic_core.core.base_runner import BaseAgentRunner
+
+        declared = [Mock(spec=Capability)]
+
+        hooks = BaseAgentRunner._build_hooks(declared)
+        declared.append(Mock(spec=Capability))
+
+        assert hooks is not None
+        assert len(hooks._capabilities) == 1
+
+
+# ------------------------------------------------------------------ #
+# ToolErrorRecoveryConfig — the declared form
+# ------------------------------------------------------------------ #
+
+
+class TestToolErrorRecoveryConfigDefaults:
+    def test_an_empty_declaration_opts_in_with_defaults(self):
+        """``error_recovery: true`` is the whole declaration on the shorthand path."""
+        config = ToolErrorRecoveryConfig()
+        assert config.mcp_hints == {}
+        assert config.max_identical_before_stop == DEFAULT_MAX_IDENTICAL_BEFORE_STOP
+
+    def test_an_unknown_key_is_rejected(self):
+        """A typo must fail loudly rather than silently leave the field at its default."""
+        with pytest.raises(ValidationError, match="typo"):
+            ToolErrorRecoveryConfig(typo=5)
+
+    def test_the_tool_registry_is_not_a_declared_field(self):
+        """The registry is a live object the caller supplies, not something YAML declares."""
+        with pytest.raises(ValidationError, match="tool_registry"):
+            ToolErrorRecoveryConfig(tool_registry=Mock())
+
+
+class TestToolErrorRecoveryConfigBuild:
+    """The translation every declaration path shares."""
+
+    def test_a_declared_config_becomes_a_capability(self):
+        registry = Mock()
+
+        recovery = ToolErrorRecoveryConfig(
+            mcp_hints={"mcp_search": "Use a longer query."},
+            max_identical_before_stop=5,
+        ).build(registry)
+
+        assert recovery._registry is registry
+        assert recovery.mcp_hints == {"mcp_search": "Use a longer query."}
+        assert recovery.max_identical_before_stop == 5
+
+    def test_no_registry_supplied_falls_back_to_the_global_one(self):
+        from sinan_agentic_core.registry.tool_registry import get_tool_registry
+
+        recovery = ToolErrorRecoveryConfig().build()
+
+        assert recovery._registry is get_tool_registry()
+
+    def test_every_declared_field_names_a_constructor_parameter(self):
+        """build() forwards model_dump() wholesale, so a new field must be accepted as-is."""
+        parameters = inspect.signature(ToolErrorRecovery.__init__).parameters
+
+        assert set(ToolErrorRecoveryConfig.model_fields) <= set(parameters)
+
+    def test_each_call_returns_a_fresh_capability(self):
+        """The capability tracks errors per run, so no two agents may share one."""
+        config = ToolErrorRecoveryConfig()
+
+        assert config.build() is not config.build()
+
+
+class TestBuildToolErrorRecovery:
+    """The translator carrying the "off when disabled" rule."""
+
+    def test_enabled_becomes_a_capability(self):
+        recovery = build_tool_error_recovery(True)
+
+        assert isinstance(recovery, ToolErrorRecovery)
+        assert recovery.max_identical_before_stop == DEFAULT_MAX_IDENTICAL_BEFORE_STOP
+
+    def test_disabled_means_no_capability(self):
+        """Recovery rewrites instructions every turn, so it is never implied."""
+        assert build_tool_error_recovery(False) is None
+
+    def test_no_registry_supplied_falls_back_to_the_global_one(self):
+        from sinan_agentic_core.registry.tool_registry import get_tool_registry
+
+        recovery = build_tool_error_recovery(True)
+
+        assert recovery is not None
+        assert recovery._registry is get_tool_registry()
+
+    def test_a_supplied_registry_is_used(self):
+        registry = Mock()
+
+        recovery = build_tool_error_recovery(True, registry)
+
+        assert recovery is not None
+        assert recovery._registry is registry
 
 
 # ------------------------------------------------------------------ #
@@ -663,14 +899,32 @@ class TestToolErrorRecoveryClone:
         )
         clone = original.clone()
         assert clone._registry is registry
-        assert clone._mcp_hints == {"mcp_search": "Use a longer query."}
+        assert clone.mcp_hints == {"mcp_search": "Use a longer query."}
         assert clone.max_identical_before_stop == 5
+
+    def test_clone_carries_every_declared_field(self):
+        """clone() forwards the declaration wholesale, so a new field needs no edit there."""
+        original = ToolErrorRecovery(
+            mcp_hints={"mcp_search": "Use a longer query."},
+            max_identical_before_stop=5,
+        )
+
+        clone = original.clone()
+
+        for name in ToolErrorRecoveryConfig.model_fields:
+            assert getattr(clone, name) == getattr(original, name)
 
     def test_clone_does_not_share_mcp_hints(self):
         original = ToolErrorRecovery(mcp_hints={"a": "hint"})
         clone = original.clone()
-        clone._mcp_hints["b"] = "new hint"
-        assert "b" not in original._mcp_hints
+        clone.mcp_hints["b"] = "new hint"
+        assert "b" not in original.mcp_hints
+
+    def test_a_clone_of_a_registryless_tracker_stays_registryless(self):
+        """The declaration is rebuilt, not re-resolved — build()'s global fallback stays out."""
+        clone = ToolErrorRecovery().clone()
+
+        assert clone._registry is None
 
     def test_clone_zeroes_error_state(self):
         original = ToolErrorRecovery()

@@ -4,12 +4,22 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from agents import Agent
+
 from ..core.capabilities import Capability
+from ..core.model_retry import ModelRetryConfig
+from ..core.tool_output_trim import ToolOutputTrimConfig
 
 
 @dataclass
 class AgentDefinition:
-    """Schema for an agent."""
+    """Schema for an agent.
+
+    The definition owns its ``tools``, ``guardrails``, ``handoffs``,
+    ``hosted_tools``, and ``capabilities`` lists: it is a fixed record of what
+    was declared, so each is copied on construction rather than aliased to
+    whoever supplied it.
+    """
 
     name: str
     description: str  # Description of agent's purpose
@@ -26,6 +36,16 @@ class AgentDefinition:
     capabilities: list[Capability] = field(default_factory=list)  # Pluggable agent behaviors
 
     model: str = "gpt-4o-mini"
+    # Re-parse a final message whose structured payload is wrapped in prose or
+    # a code fence instead of failing the run. Never fabricates a value.
+    invalid_output_recovery: bool = True
+    # Retry transient model-API failures inside the SDK instead of failing the
+    # run. Off unless declared — retries cost latency and duplicate requests.
+    model_retry: ModelRetryConfig | None = None
+    # Shrink oversized tool outputs from older turns before each model call, so
+    # the run overflows less often. Off unless declared — trimming removes
+    # content the model would otherwise have seen.
+    tool_output_trim: ToolOutputTrimConfig | None = None
     requires_schema_injection: bool = False  # If True, inject {schema} dynamically
     knowledge_text: str = ""  # Domain knowledge from catalog (injected via domain_knowledge())
     as_tool_parameters: Any | None = (
@@ -35,9 +55,29 @@ class AgentDefinition:
     as_tool_turn_budget: Any | None = None  # TurnBudget instance for sub-agent budget management
 
     def __post_init__(self) -> None:
-        """Ensure instructions is provided."""
+        """Validate the declaration, then take ownership of its list fields.
+
+        ``default_factory=list`` only covers the omitted-argument case. A caller
+        that passes its own list keeps it aliased into the definition, and the
+        definition outlives that caller in the process-wide registry:
+        :func:`create_agent_from_registry` re-reads ``tools`` and ``guardrails``
+        on every build, and the runner re-reads ``capabilities`` on every run.
+        Copying here means a later append by the caller cannot change which
+        tools an agent exposes or which capabilities dispatch, and two
+        definitions built from one list do not share it.
+
+        Only the containers are copied. The elements stay shared on purpose —
+        ``capabilities`` holds live per-run objects the runner clones and reads
+        state back off, and ``hosted_tools`` holds SDK tool objects a caller
+        matches against its own.
+        """
         if self.instructions is None:
             raise ValueError(f"Agent {self.name} must have instructions")
+        self.tools = list(self.tools)
+        self.guardrails = list(self.guardrails)
+        self.handoffs = list(self.handoffs)
+        self.hosted_tools = list(self.hosted_tools)
+        self.capabilities = list(self.capabilities)
 
 
 @dataclass
@@ -71,3 +111,25 @@ def get_agent_registry() -> AgentRegistry:
 def register_agent(agent_def: AgentDefinition) -> None:
     """Register an agent in the global registry."""
     _global_agent_registry.register(agent_def)
+
+
+def resolve_agent_definition(agent: Agent) -> AgentDefinition | None:
+    """Get the definition registered under *agent*'s name, or None when unknown.
+
+    A setting declared in ``agents.yaml`` that has no slot on the SDK's ``Agent``
+    — a ``tool_output_trim`` policy, an ``invalid_output_recovery`` flag — cannot
+    be read back off a built agent. Every run-level reader that holds only a
+    built ``Agent`` resolves it here instead, so the correspondence between a
+    built agent and its declaration is written once rather than once per setting.
+
+    Args:
+        agent: A built agent, from :func:`create_agent_from_registry` or
+            assembled by hand. Only its name is read, so a hand-assembled agent
+            resolves to the definition registered under the name it was given.
+
+    Returns:
+        The registered definition, or None when no agent is registered under
+        that name. Callers decide what an absent declaration means for their own
+        setting — the two differ, so this resolver does not choose for them.
+    """
+    return get_agent_registry().get(agent.name)

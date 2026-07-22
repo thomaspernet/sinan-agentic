@@ -104,7 +104,6 @@ def runner_with_capability_agent():
 
 
 class TestCustomCapabilityIntegration:
-    @pytest.mark.asyncio
     async def test_capability_lifecycle_dispatches(self, runner_with_capability_agent) -> None:
         runner, declarative_cap = runner_with_capability_agent
 
@@ -164,7 +163,6 @@ class TestCustomCapabilityIntegration:
         assert declarative_cap.tool_ends == []
         assert declarative_cap.llm_starts == 0
 
-    @pytest.mark.asyncio
     async def test_capability_instructions_are_merged(self, runner_with_capability_agent) -> None:
         runner, _ = runner_with_capability_agent
 
@@ -202,7 +200,6 @@ class TestCustomCapabilityIntegration:
 
 
 class TestCapabilityStateIsolation:
-    @pytest.mark.asyncio
     async def test_state_does_not_leak_between_runs(self, runner_with_capability_agent) -> None:
         runner, declarative_cap = runner_with_capability_agent
 

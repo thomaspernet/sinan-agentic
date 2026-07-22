@@ -4,7 +4,6 @@ from .agent_catalog import (
     AgentCatalog,
     AgentYamlEntry,
     CapabilityRef,
-    TurnBudgetConfig,
     load_agent_catalog,
 )
 from .agent_factory import create_agent_from_registry
@@ -17,8 +16,10 @@ from .capability_registry import (
     register_capability,
 )
 from .guardrail_registry import (
+    GuardrailCategory,
     GuardrailDefinition,
     GuardrailRegistry,
+    ResolvedGuardrails,
     get_guardrail_registry,
     register_guardrail,
 )
@@ -34,7 +35,6 @@ __all__ = [
     "AgentCatalog",
     "AgentYamlEntry",
     "CapabilityRef",
-    "TurnBudgetConfig",
     "load_agent_catalog",
     "AgentDefinition",
     "AgentRegistry",
@@ -54,8 +54,10 @@ __all__ = [
     "ToolYamlEntry",
     "load_tool_catalog",
     "ToolDefinition",
+    "GuardrailCategory",
     "GuardrailRegistry",
     "get_guardrail_registry",
     "register_guardrail",
     "GuardrailDefinition",
+    "ResolvedGuardrails",
 ]

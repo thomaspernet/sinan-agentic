@@ -1,5 +1,6 @@
 ---
 description: "Create a GitHub issue for a bug report."
+capability: core
 ---
 
 Create a GitHub issue for a bug. Record it in devwatch. Stop.
@@ -81,7 +82,7 @@ When `FROM_BRAINSTORM` is provided, the issue title and body get seeded from the
 SESSION_TEXT=$(devwatch --repo "$REPO" brainstorm-read --session "$FROM_BRAINSTORM" --display)
 ```
 
-The output streams every file under the session (README first, then alphabetised siblings, then subfolders) with `===== <abs path> =====` headers — the same shape as `doc-read --display`. Summarise it into the issue body — promote the `## Why` into the bug description, and any concrete repro steps from the session into the `## Steps to reproduce` block. The CLI back-links the session to the new issue automatically — do **not** write `brainstorm: <path>` into the body yourself.
+The output streams every file under the session (README first, then alphabetised siblings, then subfolders) with `===== <abs path> =====` headers — the same shape as `doc-read --display`. Summarise it into the issue body — read the README's `## Summary` + `## Files` index for orientation, then the child `.md` files (`open-questions.md`, …) for the detail; promote the session's substance into the bug description and any concrete repro steps from the session into the `## Steps to reproduce` block. The CLI back-links the session to the new issue automatically — do **not** write `brainstorm: <path>` into the body yourself.
 
 ## Intelligence (what you decide)
 

@@ -1,5 +1,6 @@
 ---
 description: "List and triage open issues."
+capability: core
 ---
 
 Review open issues, highlight what needs attention. Help user decide what to work on.

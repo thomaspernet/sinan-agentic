@@ -1,8 +1,24 @@
 """Tests for services: events, hooks, usage helper, and chat (mocked Runner)."""
 
 import asyncio
+import copy
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
+import pytest
+from agents import (
+    Agent,
+    MaxTurnsExceeded,
+    ModelRefusalError,
+    ToolGuardrailFunctionOutput,
+    Usage,
+    function_tool,
+    tool_input_guardrail,
+)
+from pydantic import BaseModel
+
+from sinan_agentic_core.core.output_recovery import recover_invalid_final_output
+from sinan_agentic_core.core.run_errors import RunErrorKind
 from sinan_agentic_core.services.chat import _usage_to_dict
 from sinan_agentic_core.services.events import (
     AgentCompleteEvent,
@@ -17,6 +33,15 @@ from sinan_agentic_core.services.events import (
 )
 from sinan_agentic_core.services.hooks import StreamingRunHooks
 from sinan_agentic_core.session.agent_session import AgentSession
+from tests.conftest import collection_field_names, edit_every_level, make_context_overflow_error
+
+# Every run failure a chat function classifies, and the kind it must report.
+RUN_FAILURES = [
+    (MaxTurnsExceeded("Max turns (10) exceeded"), RunErrorKind.MAX_TURNS),
+    (ModelRefusalError("I can't help with that."), RunErrorKind.MODEL_REFUSAL),
+    (make_context_overflow_error(), RunErrorKind.CONTEXT_OVERFLOW),
+    (RuntimeError("Something else broke"), RunErrorKind.UNKNOWN),
+]
 
 # -- Event dataclasses ---------------------------------------------------------
 
@@ -62,6 +87,167 @@ class TestEvents:
     def test_error_event(self):
         e = ErrorEvent(error="boom")
         assert e.to_dict()["error"] == "boom"
+
+
+class TestAnswerEventOwnsItsSources:
+    """The event is a fixed record, so it and the caller never share a sources list."""
+
+    def test_the_supplied_sources_are_readable(self):
+        e = AnswerEvent(answer="42", sources=["data.csv"])
+
+        assert e.to_dict()["sources"] == ["data.csv"]
+
+    def test_a_source_added_by_the_caller_later_is_not_visible(self):
+        declared = ["data.csv"]
+        e = AnswerEvent(answer="42", sources=declared)
+
+        declared.append("added_late.csv")
+
+        assert e.sources == ["data.csv"]
+
+    def test_a_consumer_editing_the_event_does_not_reach_the_callers_list(self):
+        declared = ["data.csv"]
+        e = AnswerEvent(answer="42", sources=declared)
+
+        e.sources.append("added_by_consumer.csv")
+
+        assert declared == ["data.csv"]
+
+    def test_two_events_built_from_one_list_do_not_share_sources(self):
+        declared = ["data.csv"]
+        first = AnswerEvent(answer="42", sources=declared)
+        second = AnswerEvent(answer="43", sources=declared)
+
+        first.sources.append("added_late.csv")
+
+        assert second.sources == ["data.csv"]
+
+    def test_the_sources_themselves_stay_shared_with_the_caller(self):
+        """Only the container is copied — a consumer matches sources by identity."""
+        source = {"file": "data.csv"}
+
+        e = AnswerEvent(answer="42", sources=[source])
+
+        assert e.sources[0] is source
+
+    def test_an_emitted_event_is_detached_from_the_callers_list(self):
+        events = []
+        helper = StreamingHelper(event_callback=events.append)
+        declared = ["data.csv"]
+
+        helper.emit_answer("result", sources=declared)
+        declared.append("added_late.csv")
+
+        assert events[0].sources == ["data.csv"]
+
+    def test_emitting_without_sources_yields_an_empty_list(self):
+        events = []
+        helper = StreamingHelper(event_callback=events.append)
+
+        helper.emit_answer("result")
+
+        assert events[0].sources == []
+
+    def test_every_collection_field_is_detached_from_the_caller(self):
+        """A collection field added later without a matching copy fails here, rather than drifting.
+
+        The seeded sources are opaque scalars because only the container is copied
+        here — an edit inside a source is meant to reach the event.
+        """
+        seeds: dict[str, Any] = {"sources": ["data.csv"]}
+        assert set(collection_field_names(AnswerEvent)) == set(seeds), (
+            "AnswerEvent gained or lost a collection field — seed it here "
+            "and copy it in __post_init__"
+        )
+        seeded_as_supplied = copy.deepcopy(seeds)
+
+        e = AnswerEvent(answer="42", **seeds)
+        for seeded in seeds.values():
+            edit_every_level(seeded)
+
+        for name, as_supplied in seeded_as_supplied.items():
+            assert getattr(e, name) == as_supplied, f"{name} is aliased to the caller's collection"
+
+
+class TestToolCallEventOwnsItsArguments:
+    """The event is a fixed record of one call, so nobody else holds its arguments."""
+
+    def test_the_supplied_arguments_are_readable(self):
+        e = ToolCallEvent(tool_name="search", arguments={"q": "hello", "tags": ["a"]})
+
+        assert e.to_dict()["arguments"] == {"q": "hello", "tags": ["a"]}
+
+    def test_an_argument_added_by_the_caller_later_is_not_visible(self):
+        declared = {"q": "hello"}
+        e = ToolCallEvent(tool_name="search", arguments=declared)
+
+        declared["limit"] = 10
+
+        assert e.arguments == {"q": "hello"}
+
+    def test_an_edit_inside_a_nested_argument_by_the_caller_is_not_visible(self):
+        declared = {"filters": {"tags": ["python"]}}
+        e = ToolCallEvent(tool_name="search", arguments=declared)
+
+        declared["filters"]["tags"].append("added_late")
+
+        assert e.arguments == {"filters": {"tags": ["python"]}}
+
+    def test_a_consumer_editing_the_event_does_not_reach_the_callers_dict(self):
+        declared = {"filters": {"tags": ["python"]}}
+        e = ToolCallEvent(tool_name="search", arguments=declared)
+
+        e.arguments["filters"]["tags"].append("added_by_consumer")
+
+        assert declared == {"filters": {"tags": ["python"]}}
+
+    def test_two_events_built_from_one_dict_do_not_share_arguments(self):
+        declared = {"filters": {"tags": ["python"]}}
+        first = ToolCallEvent(tool_name="search", arguments=declared)
+        second = ToolCallEvent(tool_name="search", arguments=declared)
+
+        first.arguments["filters"]["tags"].append("added_late")
+
+        assert second.arguments == {"filters": {"tags": ["python"]}}
+
+    def test_a_consumer_editing_the_payload_does_not_reach_the_event(self):
+        e = ToolCallEvent(tool_name="search", arguments={"q": "hello"})
+
+        e.to_dict()["arguments"]["limit"] = 10
+
+        assert e.arguments == {"q": "hello"}
+
+    def test_a_consumer_editing_inside_the_payload_does_not_reach_the_event(self):
+        e = ToolCallEvent(tool_name="search", arguments={"filters": {"tags": ["python"]}})
+
+        e.to_dict()["arguments"]["filters"]["tags"].append("added_by_consumer")
+
+        assert e.arguments == {"filters": {"tags": ["python"]}}
+
+    def test_two_payloads_from_one_event_do_not_share_arguments(self):
+        e = ToolCallEvent(tool_name="search", arguments={"filters": {"tags": ["python"]}})
+
+        first = e.to_dict()
+        second = e.to_dict()
+        first["arguments"]["filters"]["tags"].append("added_by_consumer")
+
+        assert second["arguments"] == {"filters": {"tags": ["python"]}}
+
+    def test_every_collection_field_is_detached_from_the_caller(self):
+        """A collection field added later without a matching copy fails here, rather than drifting."""
+        seeds: dict[str, Any] = {"arguments": {"filters": {"tags": ["python"]}}}
+        assert set(collection_field_names(ToolCallEvent)) == set(seeds), (
+            "ToolCallEvent gained or lost a collection field — seed it here "
+            "and copy it in __post_init__"
+        )
+        seeded_as_supplied = copy.deepcopy(seeds)
+
+        e = ToolCallEvent(tool_name="search", **seeds)
+        for seeded in seeds.values():
+            edit_every_level(seeded)
+
+        for name, as_supplied in seeded_as_supplied.items():
+            assert getattr(e, name) == as_supplied, f"{name} is aliased to the caller's collection"
 
 
 # -- StreamingHelper -----------------------------------------------------------
@@ -149,6 +335,26 @@ class TestStreamingRunHooks:
         hooks = StreamingRunHooks(asyncio.Queue(), {"get_weather": "Weather Lookup"})
         assert hooks._friendly_name("get_weather") == "Weather Lookup"
 
+    def test_the_callers_names_dict_is_not_aliased(self):
+        """The hooks own their names, so a later edit to the caller's dict does not reach them."""
+        declared = {"get_weather": "Weather Lookup"}
+
+        hooks = StreamingRunHooks(asyncio.Queue(), declared)
+        declared["search"] = "Late Name"
+
+        assert "search" not in hooks.tool_friendly_names
+        assert hooks._friendly_name("search") == "search"
+
+    def test_two_hooks_built_from_one_dict_do_not_share_a_mapping(self):
+        declared = {"get_weather": "Weather Lookup"}
+
+        first = StreamingRunHooks(asyncio.Queue(), declared)
+        second = StreamingRunHooks(asyncio.Queue(), declared)
+        first.tool_friendly_names["search"] = "Search"
+
+        assert "search" not in second.tool_friendly_names
+        assert "search" not in declared
+
 
 # -- _usage_to_dict ------------------------------------------------------------
 
@@ -195,6 +401,128 @@ class TestUsageToDict:
 # -- chat() with mocked Runner ------------------------------------------------
 
 
+class _Extraction(BaseModel):
+    """Output type that gives an agent a schema to validate against."""
+
+    answer: str
+
+
+def _agent_double():
+    """An agent stub carrying the ``tools`` and ``output_type`` defaults of a real ``Agent``."""
+    return Mock(tools=[], output_type=None)
+
+
+def _structured_agent():
+    """A real agent whose declared output type needs schema validation."""
+    return Agent(name="extractor", output_type=_Extraction)
+
+
+def _guarded_agent():
+    """A real agent whose one function tool carries a tool-input guardrail."""
+
+    @function_tool
+    def echo(value: str) -> str:
+        """Echo a value.
+
+        Args:
+            value: Text to echo back.
+        """
+        return value
+
+    @tool_input_guardrail
+    def block_nothing(data):
+        return ToolGuardrailFunctionOutput()
+
+    guarded = copy.copy(echo)
+    guarded.tool_input_guardrails = [block_nothing]
+    return Agent(name="guarded", tools=[guarded])
+
+
+def _trimming_agent(registry):
+    """A real agent whose registered definition declares a trim policy.
+
+    Trimming is a run-level setting with no slot on ``Agent``, so the chat
+    service can only reach it through the definition behind the agent's name.
+    """
+    from sinan_agentic_core.core.tool_output_trim import ToolOutputTrimConfig
+    from sinan_agentic_core.registry.agent_registry import AgentDefinition
+
+    registry.register(
+        AgentDefinition(
+            name="_chat_trimming_agent",
+            description="trims",
+            instructions="You answer",
+            tool_output_trim=ToolOutputTrimConfig(max_output_chars=4000),
+        )
+    )
+    return Agent(name="_chat_trimming_agent")
+
+
+@pytest.fixture
+def trim_registry():
+    """An isolated registry, patched inside the shared by-name definition resolver."""
+    from sinan_agentic_core.registry.agent_registry import AgentRegistry
+
+    registry = AgentRegistry()
+    with patch(
+        "sinan_agentic_core.registry.agent_registry.get_agent_registry", return_value=registry
+    ):
+        yield registry
+
+
+def _strict_agent(registry):
+    """A structured agent whose registered definition turns recovery off.
+
+    The flag is a run-level setting with no slot on ``Agent``, so the chat
+    service can only reach it through the definition behind the agent's name.
+    """
+    from sinan_agentic_core.registry.agent_registry import AgentDefinition
+
+    registry.register(
+        AgentDefinition(
+            name="_chat_strict_agent",
+            description="fails loudly",
+            instructions="You extract",
+            invalid_output_recovery=False,
+        )
+    )
+    return Agent(name="_chat_strict_agent", output_type=_Extraction)
+
+
+@pytest.fixture
+def recovery_registry():
+    """An isolated registry, patched inside the shared by-name definition resolver."""
+    from sinan_agentic_core.registry.agent_registry import AgentRegistry
+
+    registry = AgentRegistry()
+    with patch(
+        "sinan_agentic_core.registry.agent_registry.get_agent_registry", return_value=registry
+    ):
+        yield registry
+
+
+def _run_result(response="ok"):
+    """A run result carrying one response — enough for the usage aggregation."""
+    raw = Mock()
+    raw.usage = Usage(requests=1, input_tokens=1, output_tokens=1, total_tokens=2)
+    result = Mock()
+    result.final_output = response
+    result.raw_responses = [raw]
+    return result
+
+
+def _streamed_result(response="ok"):
+    """A streaming run result that yields no events before its final output."""
+    result = _run_result(response)
+
+    async def no_events():
+        return
+        yield  # make it an async generator
+
+    result.stream_events = no_events
+    return result
+
+
 class TestChat:
     @staticmethod
     def _get_chat_module():
@@ -220,7 +548,7 @@ class TestChat:
         session = AgentSession(session_id="test")
 
         with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
-            mock_factory.return_value = Mock()
+            mock_factory.return_value = _agent_double()
             with patch.object(chat_mod, "Runner") as mock_runner:
                 mock_runner.run = AsyncMock(return_value=mock_result)
 
@@ -244,6 +572,23 @@ class TestChat:
 
         assert result["success"] is False
         assert "Agent not found" in result["error"]
+        assert result["error_kind"] == RunErrorKind.UNKNOWN.value
+
+    @pytest.mark.parametrize(("error", "expected"), RUN_FAILURES)
+    async def test_run_failure_reports_its_kind(self, error, expected):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(side_effect=error)
+
+                result = await chat_mod.chat("Hi", agent_name="a", session=session)
+
+        assert result["success"] is False
+        assert result["error"] == str(error)
+        assert result["error_kind"] == expected.value
 
     async def test_chat_with_context(self):
         from agents import Usage
@@ -261,7 +606,7 @@ class TestChat:
         session = AgentSession(session_id="test")
 
         with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
-            mock_factory.return_value = Mock()
+            mock_factory.return_value = _agent_double()
             with patch.object(chat_mod, "Runner") as mock_runner:
                 mock_runner.run = AsyncMock(return_value=mock_result)
 
@@ -271,6 +616,99 @@ class TestChat:
         # Verify context was forwarded to Runner.run
         call_kwargs = mock_runner.run.call_args
         assert "context" in call_kwargs.kwargs
+
+    async def test_tool_input_guardrails_enable_pre_approval(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _guarded_agent()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(return_value=_run_result())
+
+                await chat_mod.chat("Hi", agent_name="a", session=session)
+
+        run_config = mock_runner.run.call_args.kwargs["run_config"]
+        assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
+
+    async def test_agent_without_guardrails_gets_no_run_config(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(return_value=_run_result())
+
+                await chat_mod.chat("Hi", agent_name="a", session=session)
+
+        assert "run_config" not in mock_runner.run.call_args.kwargs
+
+    async def test_prebuilt_agent_gets_pre_approval(self):
+        """The setting is read off the agent, so it reaches the pre-built path too."""
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "Runner") as mock_runner:
+            mock_runner.run = AsyncMock(return_value=_run_result())
+
+            await chat_mod.chat("Hi", agent=_guarded_agent(), session=session)
+
+        run_config = mock_runner.run.call_args.kwargs["run_config"]
+        assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
+
+    async def test_declared_trim_policy_reaches_the_run(self, trim_registry):
+        """A resolved agent is trimmed here the way it is under the runner."""
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _trimming_agent(trim_registry)
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(return_value=_run_result())
+
+                await chat_mod.chat("Hi", agent_name="_chat_trimming_agent", session=session)
+
+        run_config = mock_runner.run.call_args.kwargs["run_config"]
+        assert run_config.call_model_input_filter.max_output_chars == 4000
+
+    async def test_structured_output_agent_gets_recovery_handler(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "Runner") as mock_runner:
+            mock_runner.run = AsyncMock(return_value=_run_result())
+
+            await chat_mod.chat("Hi", agent=_structured_agent(), session=session)
+
+        handlers = mock_runner.run.call_args.kwargs["error_handlers"]
+        assert handlers["invalid_final_output"] is recover_invalid_final_output
+
+    async def test_plain_text_agent_gets_no_error_handlers(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(return_value=_run_result())
+
+                await chat_mod.chat("Hi", agent_name="a", session=session)
+
+        assert "error_handlers" not in mock_runner.run.call_args.kwargs
+
+    async def test_declared_recovery_opt_out_reaches_the_run(self, recovery_registry):
+        """An agent that asked to fail loudly does so here the way it does under
+        the runner."""
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "Runner") as mock_runner:
+            mock_runner.run = AsyncMock(return_value=_run_result())
+
+            await chat_mod.chat("Hi", agent=_strict_agent(recovery_registry), session=session)
+
+        assert "error_handlers" not in mock_runner.run.call_args.kwargs
 
 
 # -- chat_with_hooks() --------------------------------------------------------
@@ -308,7 +746,7 @@ class TestChatWithHooks:
             return mock_result
 
         with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
-            mock_factory.return_value = Mock()
+            mock_factory.return_value = _agent_double()
             with patch.object(chat_mod, "Runner") as mock_runner:
                 mock_runner.run = AsyncMock(side_effect=run_with_hooks)
 
@@ -343,7 +781,7 @@ class TestChatWithHooks:
         session = AgentSession(session_id="test")
 
         with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
-            mock_factory.return_value = Mock()
+            mock_factory.return_value = _agent_double()
             with patch.object(chat_mod, "Runner") as mock_runner:
                 mock_runner.run = AsyncMock(return_value=mock_result)
 
@@ -354,6 +792,95 @@ class TestChatWithHooks:
                     events.append(event)
 
         assert any(e["event"] == "answer" for e in events)
+
+    async def test_tool_input_guardrails_enable_pre_approval(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _guarded_agent()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(return_value=_run_result())
+
+                async for _ in chat_mod.chat_with_hooks("Hi", agent_name="a", session=session):
+                    pass
+
+        run_config = mock_runner.run.call_args.kwargs["run_config"]
+        assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
+
+    async def test_agent_without_guardrails_gets_no_run_config(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(return_value=_run_result())
+
+                async for _ in chat_mod.chat_with_hooks("Hi", agent_name="a", session=session):
+                    pass
+
+        assert "run_config" not in mock_runner.run.call_args.kwargs
+
+    async def test_declared_trim_policy_reaches_the_run(self, trim_registry):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _trimming_agent(trim_registry)
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(return_value=_run_result())
+
+                async for _ in chat_mod.chat_with_hooks(
+                    "Hi", agent_name="_chat_trimming_agent", session=session
+                ):
+                    pass
+
+        run_config = mock_runner.run.call_args.kwargs["run_config"]
+        assert run_config.call_model_input_filter.max_output_chars == 4000
+
+    async def test_structured_output_agent_gets_recovery_handler(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "Runner") as mock_runner:
+            mock_runner.run = AsyncMock(return_value=_run_result())
+
+            async for _ in chat_mod.chat_with_hooks(
+                "Hi", agent=_structured_agent(), session=session
+            ):
+                pass
+
+        handlers = mock_runner.run.call_args.kwargs["error_handlers"]
+        assert handlers["invalid_final_output"] is recover_invalid_final_output
+
+    async def test_plain_text_agent_gets_no_error_handlers(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(return_value=_run_result())
+
+                async for _ in chat_mod.chat_with_hooks("Hi", agent_name="a", session=session):
+                    pass
+
+        assert "error_handlers" not in mock_runner.run.call_args.kwargs
+
+    async def test_declared_recovery_opt_out_reaches_the_run(self, recovery_registry):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "Runner") as mock_runner:
+            mock_runner.run = AsyncMock(return_value=_run_result())
+
+            async for _ in chat_mod.chat_with_hooks(
+                "Hi", agent=_strict_agent(recovery_registry), session=session
+            ):
+                pass
+
+        assert "error_handlers" not in mock_runner.run.call_args.kwargs
 
     async def test_error_yields_error_event(self):
         chat_mod = self._get_chat_module()
@@ -369,6 +896,94 @@ class TestChatWithHooks:
                 events.append(event)
 
         assert any(e["event"] == "error" for e in events)
+
+    @pytest.mark.parametrize(("error", "expected"), RUN_FAILURES)
+    async def test_run_failure_reports_its_kind(self, error, expected):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(side_effect=error)
+
+                events = [
+                    event
+                    async for event in chat_mod.chat_with_hooks(
+                        "Hi", agent_name="a", session=session
+                    )
+                ]
+
+        errors = [e for e in events if e["event"] == "error"]
+        assert errors == [
+            {"event": "error", "data": {"error": str(error), "error_kind": expected.value}}
+        ]
+
+
+class TestChatWithHooksAnswerOwnsItsToolList:
+    """The answer payload is a fixed record, so it and the hooks never share a list."""
+
+    @staticmethod
+    async def _answer_and_hooks(tool_name="search"):
+        """Run one turn that calls a tool; return its answer payload and the run's hooks."""
+        import sys
+
+        chat_mod = sys.modules["sinan_agentic_core.services.chat"]
+        captured = []
+
+        async def run_with_hooks(**kwargs):
+            hooks = kwargs["hooks"]
+            captured.append(hooks)
+            tool = Mock()
+            tool.name = tool_name
+            await hooks.on_tool_start(None, None, tool)
+            return _run_result("done")
+
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(side_effect=run_with_hooks)
+
+                events = [
+                    event
+                    async for event in chat_mod.chat_with_hooks(
+                        "Hi", agent_name="a", session=session
+                    )
+                ]
+
+        answer = next(e for e in events if e["event"] == "answer")
+        return answer["data"], captured[0]
+
+    async def test_the_payload_reports_the_tools_the_hooks_recorded(self):
+        data, hooks = await self._answer_and_hooks()
+
+        assert data["tools_called"] == ["search"]
+        assert hooks.tools_called == ["search"]
+
+    async def test_the_payload_does_not_share_the_hooks_accumulator(self):
+        data, hooks = await self._answer_and_hooks()
+
+        assert data["tools_called"] is not hooks.tools_called
+
+    async def test_a_consumer_editing_the_payload_does_not_reach_the_hooks(self):
+        data, hooks = await self._answer_and_hooks()
+
+        data["tools_called"].append("added_by_consumer")
+
+        assert hooks.tools_called == ["search"]
+
+    async def test_a_later_tool_call_does_not_change_a_delivered_answer(self):
+        """Reusing the hooks after the answer cannot rewrite what it already reported."""
+        data, hooks = await self._answer_and_hooks()
+
+        late_tool = Mock()
+        late_tool.name = "added_late"
+        await hooks.on_tool_start(None, None, late_tool)
+
+        assert data["tools_called"] == ["search"]
+        assert hooks.tools_called == ["search", "added_late"]
 
 
 # -- chat_streamed() ----------------------------------------------------------
@@ -441,7 +1056,7 @@ class TestChatStreamed:
         session = AgentSession(session_id="test")
 
         with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
-            mock_factory.return_value = Mock()
+            mock_factory.return_value = _agent_double()
             with patch.object(chat_mod, "Runner") as mock_runner:
                 mock_runner.run_streamed.return_value = mock_result
                 with patch.object(chat_mod, "ItemHelpers") as mock_helpers:
@@ -488,7 +1103,7 @@ class TestChatStreamed:
         session = AgentSession(session_id="test")
 
         with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
-            mock_factory.return_value = Mock()
+            mock_factory.return_value = _agent_double()
             with patch.object(chat_mod, "Runner") as mock_runner:
                 mock_runner.run_streamed.return_value = mock_result
 
@@ -499,6 +1114,93 @@ class TestChatStreamed:
                     events.append(event)
 
         assert any(e["event"] == "answer" for e in events)
+
+    async def test_tool_input_guardrails_enable_pre_approval(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _guarded_agent()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run_streamed.return_value = _streamed_result()
+
+                async for _ in chat_mod.chat_streamed("Hi", agent_name="a", session=session):
+                    pass
+
+        run_config = mock_runner.run_streamed.call_args.kwargs["run_config"]
+        assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
+
+    async def test_agent_without_guardrails_gets_no_run_config(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run_streamed.return_value = _streamed_result()
+
+                async for _ in chat_mod.chat_streamed("Hi", agent_name="a", session=session):
+                    pass
+
+        assert "run_config" not in mock_runner.run_streamed.call_args.kwargs
+
+    async def test_declared_trim_policy_reaches_the_run(self, trim_registry):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _trimming_agent(trim_registry)
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run_streamed.return_value = _streamed_result()
+
+                async for _ in chat_mod.chat_streamed(
+                    "Hi", agent_name="_chat_trimming_agent", session=session
+                ):
+                    pass
+
+        run_config = mock_runner.run_streamed.call_args.kwargs["run_config"]
+        assert run_config.call_model_input_filter.max_output_chars == 4000
+
+    async def test_structured_output_agent_gets_recovery_handler(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "Runner") as mock_runner:
+            mock_runner.run_streamed.return_value = _streamed_result()
+
+            async for _ in chat_mod.chat_streamed("Hi", agent=_structured_agent(), session=session):
+                pass
+
+        handlers = mock_runner.run_streamed.call_args.kwargs["error_handlers"]
+        assert handlers["invalid_final_output"] is recover_invalid_final_output
+
+    async def test_plain_text_agent_gets_no_error_handlers(self):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run_streamed.return_value = _streamed_result()
+
+                async for _ in chat_mod.chat_streamed("Hi", agent_name="a", session=session):
+                    pass
+
+        assert "error_handlers" not in mock_runner.run_streamed.call_args.kwargs
+
+    async def test_declared_recovery_opt_out_reaches_the_run(self, recovery_registry):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "Runner") as mock_runner:
+            mock_runner.run_streamed.return_value = _streamed_result()
+
+            async for _ in chat_mod.chat_streamed(
+                "Hi", agent=_strict_agent(recovery_registry), session=session
+            ):
+                pass
+
+        assert "error_handlers" not in mock_runner.run_streamed.call_args.kwargs
 
     async def test_error_yields_error_event(self):
         chat_mod = self._get_chat_module()
@@ -512,3 +1214,23 @@ class TestChatStreamed:
                 events.append(event)
 
         assert any(e["event"] == "error" for e in events)
+
+    @pytest.mark.parametrize(("error", "expected"), RUN_FAILURES)
+    async def test_run_failure_reports_its_kind(self, error, expected):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run_streamed.side_effect = error
+
+                events = [
+                    event
+                    async for event in chat_mod.chat_streamed("Hi", agent_name="a", session=session)
+                ]
+
+        errors = [e for e in events if e["event"] == "error"]
+        assert errors == [
+            {"event": "error", "data": {"error": str(error), "error_kind": expected.value}}
+        ]

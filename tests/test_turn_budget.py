@@ -1,12 +1,24 @@
 """Tests for the turn budget system (core/turn_budget.py + turn_budget_tool.py)."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from agents import RunContextWrapper
+from pydantic import ValidationError
 
 from sinan_agentic_core.core.capabilities import Capability
-from sinan_agentic_core.core.turn_budget import TurnBudget
+from sinan_agentic_core.core.turn_budget import (
+    DEFAULT_ABSOLUTE_MAX_TURNS,
+    DEFAULT_EXTENSION_SIZE,
+    DEFAULT_MAX_EXTENSIONS,
+    DEFAULT_REMINDER_AT,
+    DEFAULT_TURNS,
+    TurnBudget,
+    TurnBudgetConfig,
+    build_turn_budget,
+)
+from sinan_agentic_core.utils import get_turn_budget, set_turn_budget
 
 # ------------------------------------------------------------------ #
 # TurnBudget dataclass
@@ -16,11 +28,11 @@ from sinan_agentic_core.core.turn_budget import TurnBudget
 class TestTurnBudgetDefaults:
     def test_default_values(self):
         budget = TurnBudget()
-        assert budget.default_turns == 10
-        assert budget.reminder_at == 2
-        assert budget.max_extensions == 3
-        assert budget.extension_size == 5
-        assert budget.absolute_max == 25
+        assert budget.default_turns == DEFAULT_TURNS
+        assert budget.reminder_at == DEFAULT_REMINDER_AT
+        assert budget.max_extensions == DEFAULT_MAX_EXTENSIONS
+        assert budget.extension_size == DEFAULT_EXTENSION_SIZE
+        assert budget.absolute_max == DEFAULT_ABSOLUTE_MAX_TURNS
 
     def test_initial_state(self):
         budget = TurnBudget()
@@ -237,6 +249,46 @@ class TestTurnBudgetOnLlmStart:
 
 
 # ------------------------------------------------------------------ #
+# Context accessor
+# ------------------------------------------------------------------ #
+
+
+class TestTurnBudgetContextAccessor:
+    def test_set_then_get_round_trip(self):
+        budget = TurnBudget(default_turns=7)
+        context = SimpleNamespace()
+
+        set_turn_budget(context, budget)
+
+        assert get_turn_budget(context) is budget
+
+    def test_get_returns_none_when_unset(self):
+        assert get_turn_budget(SimpleNamespace()) is None
+
+    def test_get_returns_none_on_none_context(self):
+        assert get_turn_budget(None) is None
+
+    def test_set_overwrites_previous_budget(self):
+        first = TurnBudget(default_turns=3)
+        second = TurnBudget(default_turns=9)
+        context = SimpleNamespace()
+
+        set_turn_budget(context, first)
+        set_turn_budget(context, second)
+
+        assert get_turn_budget(context) is second
+
+    def test_stored_under_public_attribute(self):
+        budget = TurnBudget()
+        context = SimpleNamespace()
+
+        set_turn_budget(context, budget)
+
+        assert context.turn_budget is budget
+        assert not hasattr(context, "_turn_budget")
+
+
+# ------------------------------------------------------------------ #
 # InstructionBuilder integration
 # ------------------------------------------------------------------ #
 
@@ -254,10 +306,10 @@ class TestInstructionBuilderTurnBudget:
         budget = TurnBudget(default_turns=8)
         budget.turns_used = 6
 
-        class FakeCtx:
-            _turn_budget = budget
+        context = SimpleNamespace()
+        set_turn_budget(context, budget)
 
-        builder = InstructionBuilder(FakeCtx(), None)
+        builder = InstructionBuilder(context, None)
         section = builder.turn_budget_section()
         assert section is not None
         assert "2" in section and "8" in section
@@ -267,14 +319,14 @@ class TestInstructionBuilderTurnBudget:
 
         budget = TurnBudget(default_turns=10)
 
-        class FakeCtx:
-            _turn_budget = budget
+        context = SimpleNamespace()
+        set_turn_budget(context, budget)
 
         class TestBuilder(InstructionBuilder):
             def persona(self):
                 return "You are a test agent."
 
-        result = TestBuilder(FakeCtx(), None).build()
+        result = TestBuilder(context, None).build()
         assert "You are a test agent." in result
         assert "10 turns" in result
 
@@ -356,7 +408,6 @@ class TestBaseAgentRunnerTurnBudget:
         assert "Dynamic base." in result
         assert "5 turns" in result
 
-    @pytest.mark.asyncio
     async def test_execute_basic_with_budget(self, runner):
         from sinan_agentic_core.core.base_runner import _CompositeHooks
 
@@ -390,7 +441,6 @@ class TestBaseAgentRunnerTurnBudget:
                 assert isinstance(call_kwargs["hooks"], _CompositeHooks)
                 assert call_kwargs["max_turns"] == 25
 
-    @pytest.mark.asyncio
     async def test_execute_sets_absolute_max(self, runner):
         budget = TurnBudget(default_turns=10, absolute_max=25)
         context = Mock()
@@ -412,7 +462,6 @@ class TestBaseAgentRunnerTurnBudget:
             assert call_args[0][3] == 25  # max_turns positional arg
             assert budget in call_args[1]["capabilities"]
 
-    @pytest.mark.asyncio
     async def test_execute_attaches_budget_to_context(self, runner):
         budget = TurnBudget(default_turns=10)
         context = Mock(spec=[])  # no existing attributes
@@ -427,9 +476,8 @@ class TestBaseAgentRunnerTurnBudget:
                 turn_budget=budget,
             )
 
-            assert context._turn_budget is budget
+            assert get_turn_budget(context) is budget
 
-    @pytest.mark.asyncio
     async def test_execute_resets_budget(self, runner):
         budget = TurnBudget(default_turns=10)
         budget.turns_used = 5
@@ -450,7 +498,6 @@ class TestBaseAgentRunnerTurnBudget:
             assert budget.turns_used == 0
             assert budget.extensions_used == 0
 
-    @pytest.mark.asyncio
     async def test_execute_without_budget_uses_max_turns(self, runner):
         context = Mock()
         session = Mock()
@@ -627,6 +674,98 @@ class TestTurnBudgetSnapshot:
 
 
 # ------------------------------------------------------------------ #
+# TurnBudgetConfig — the declared form
+# ------------------------------------------------------------------ #
+
+
+class TestTurnBudgetConfigDefaults:
+    def test_an_empty_declaration_opts_in_with_defaults(self):
+        """``turn_budget: {}`` is a declaration, not an absence."""
+        config = TurnBudgetConfig()
+        assert config.default_turns == DEFAULT_TURNS
+        assert config.reminder_at == DEFAULT_REMINDER_AT
+        assert config.max_extensions == DEFAULT_MAX_EXTENSIONS
+        assert config.extension_size == DEFAULT_EXTENSION_SIZE
+
+    def test_the_declared_defaults_match_the_runtime_defaults(self):
+        """Declaring nothing and declaring an empty block must yield one budget.
+
+        Both field lists read the same module constants, so a default changed on
+        one side cannot leave the other behind.
+        """
+        runtime = TurnBudget()
+
+        for name, field in TurnBudgetConfig.model_fields.items():
+            assert field.default == getattr(runtime, name), name
+
+    def test_an_unknown_key_is_rejected(self):
+        """A typo must fail loudly rather than silently leave the field at its default."""
+        with pytest.raises(ValidationError, match="typo"):
+            TurnBudgetConfig(typo=5)
+
+    def test_the_hard_ceiling_is_not_a_budget_field(self):
+        """``absolute_max`` is the agent's ``max_turns``, not part of the declaration."""
+        with pytest.raises(ValidationError, match="absolute_max"):
+            TurnBudgetConfig(absolute_max=40)
+
+
+class TestTurnBudgetConfigBuild:
+    """The translation both declaration paths share."""
+
+    def test_a_declared_config_becomes_a_budget(self):
+        budget = TurnBudgetConfig(
+            default_turns=15, reminder_at=3, max_extensions=2, extension_size=4
+        ).build(absolute_max=30)
+
+        assert budget.default_turns == 15
+        assert budget.reminder_at == 3
+        assert budget.max_extensions == 2
+        assert budget.extension_size == 4
+        assert budget.absolute_max == 30
+
+    def test_no_ceiling_declared_falls_back_to_the_default(self):
+        budget = TurnBudgetConfig(default_turns=8).build()
+
+        assert budget.absolute_max == DEFAULT_ABSOLUTE_MAX_TURNS
+
+    def test_every_declared_field_reaches_the_budget(self):
+        """A field added to the config must land on the budget without editing build()."""
+        declared = {name: 7 for name in TurnBudgetConfig.model_fields}
+
+        budget = TurnBudgetConfig(**declared).build()
+
+        for name, value in declared.items():
+            assert getattr(budget, name) == value
+
+    def test_each_call_returns_a_fresh_budget(self):
+        """The budget carries mutable counters, so no two agents may share one."""
+        config = TurnBudgetConfig(default_turns=8)
+
+        assert config.build() is not config.build()
+
+
+class TestBuildTurnBudget:
+    """The translator carrying the "off unless declared" rule."""
+
+    def test_a_declared_config_becomes_a_budget(self):
+        budget = build_turn_budget(TurnBudgetConfig(default_turns=15), 30)
+
+        assert budget is not None
+        assert budget.default_turns == 15
+        assert budget.absolute_max == 30
+
+    def test_no_declaration_means_no_budget(self):
+        """A budget rewrites instructions and adds a tool, so it is never implied."""
+        assert build_turn_budget(None) is None
+
+    def test_no_ceiling_declared_falls_back_to_the_default(self):
+        budget = build_turn_budget(TurnBudgetConfig(default_turns=8))
+
+        assert budget is not None
+        assert budget.absolute_max == DEFAULT_ABSOLUTE_MAX_TURNS
+
+
+# ------------------------------------------------------------------ #
 # Top-level imports
 # ------------------------------------------------------------------ #
 
@@ -641,3 +780,13 @@ class TestTopLevelImports:
         from sinan_agentic_core.core import TurnBudget
 
         assert TurnBudget is not None
+
+    def test_turn_budget_config_importable(self):
+        from sinan_agentic_core import TurnBudgetConfig
+
+        assert TurnBudgetConfig is not None
+
+    def test_turn_budget_config_from_core(self):
+        from sinan_agentic_core.core import TurnBudgetConfig
+
+        assert TurnBudgetConfig is not None

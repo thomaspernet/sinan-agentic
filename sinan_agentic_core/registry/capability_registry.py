@@ -30,6 +30,30 @@ class CapabilityNotFoundError(KeyError):
     """Raised when a YAML capability reference points to an unregistered name."""
 
 
+def _detach(value: Any) -> Any:
+    """Rebuild every mapping and list in *value*, leaving anything else shared.
+
+    Mappings and lists are the two containers YAML produces, so rebuilding them
+    all the way down detaches the whole declared payload. Everything else is
+    handed over as-is: a scalar cannot be edited, and a live object a caller
+    passes alongside its declaration — a tool registry, a tracer sink — is meant
+    to stay that caller's object, which a copy would silently replace with a
+    lookalike.
+    """
+    if isinstance(value, dict):
+        return {key: _detach(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_detach(item) for item in value]
+    return value
+
+
+def _copy_config(config: dict[str, Any] | None) -> dict[str, Any]:
+    """Copy a capability config all the way down before a factory receives it."""
+    if not config:
+        return {}
+    return {key: _detach(value) for key, value in config.items()}
+
+
 class CapabilityRegistry:
     """Central registry mapping capability names to factory callables."""
 
@@ -56,9 +80,18 @@ class CapabilityRegistry:
         return self._factories[name]
 
     def build(self, name: str, config: dict[str, Any] | None = None) -> Capability:
-        """Resolve *name* through the registry and invoke its factory."""
+        """Resolve *name* through the registry and invoke its factory.
+
+        The factory receives its own config: a capability that keeps what it was
+        built with — ``MyCapability(**config)``, the shape this module documents
+        — cannot write back into the declaration it came from, and two
+        capabilities built from one declaration never share a value. The copy
+        goes all the way down because ``config`` is typed ``dict[str, Any]`` and
+        a declared value nests; a one-level copy would detach only the outer
+        mapping and leave every value inside it the caller's own object.
+        """
         factory = self.get(name)
-        return factory(dict(config) if config else {})
+        return factory(_copy_config(config))
 
 
 _global_registry = CapabilityRegistry()
@@ -95,25 +128,37 @@ def register_capability(
 
 @register_capability("turn_budget")
 def _build_turn_budget(config: dict[str, Any]) -> Capability:
-    """Build a :class:`TurnBudget` from YAML config."""
-    from ..core.turn_budget import TurnBudget
+    """Build a :class:`TurnBudget` from YAML config.
 
-    return TurnBudget(**config)
+    Goes through the same :class:`TurnBudgetConfig` translation as the
+    ``turn_budget:`` shorthand on an agent entry, so both paths build the budget
+    one way. ``absolute_max`` is the agent's hard ceiling rather than part of the
+    declared budget, so it is read off the entry and passed alongside; on the
+    shorthand path it comes from the agent's ``max_turns``.
+    """
+    from ..core.turn_budget import TurnBudgetConfig
+
+    declared = dict(config)
+    absolute_max = declared.pop("absolute_max", None)
+    return TurnBudgetConfig(**declared).build(absolute_max)
 
 
 @register_capability("error_recovery")
 def _build_error_recovery(config: dict[str, Any]) -> Capability:
     """Build a :class:`ToolErrorRecovery` from YAML config.
 
-    Defaults ``tool_registry`` to the global registry so YAML users do not
-    need to plumb it through.
+    Goes through the same :class:`ToolErrorRecoveryConfig` translation as the
+    ``error_recovery:`` shorthand on an agent entry, so both paths build the
+    capability one way — including the fallback to the global tool registry,
+    which lives there rather than here so YAML users do not plumb it through.
+    ``tool_registry`` is a live object rather than part of the declared config,
+    so it is read off the config and passed alongside.
     """
-    from ..core.tool_error_recovery import ToolErrorRecovery
-    from .tool_registry import get_tool_registry
+    from ..core.tool_error_recovery import ToolErrorRecoveryConfig
 
-    cfg = dict(config)
-    cfg.setdefault("tool_registry", get_tool_registry())
-    return ToolErrorRecovery(**cfg)
+    declared = dict(config)
+    tool_registry = declared.pop("tool_registry", None)
+    return ToolErrorRecoveryConfig(**declared).build(tool_registry)
 
 
 @register_capability("tool_tracer")

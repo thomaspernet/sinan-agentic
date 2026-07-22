@@ -1,6 +1,7 @@
 """Tests for MCPServerBuilder — building FastMCP servers from registry."""
 
 import json
+from typing import Any
 
 import pytest
 from agents import function_tool
@@ -44,6 +45,30 @@ async def create_page(ctx: ToolContext, title: str, content: str = "") -> str:
     return json.dumps({"title": title})
 
 
+@function_tool
+async def containers(
+    ctx: ToolContext,
+    labels: list[str],
+    matrix: list[list[str]],
+    tags: list[str] | None = None,
+    grid: list[list[int]] | None = None,
+) -> str:
+    """Take container parameters."""
+    return json.dumps({"labels": labels, "matrix": matrix, "tags": tags, "grid": grid})
+
+
+# The SDK's strict schema forbids the ``additionalProperties`` key an open
+# mapping needs, so the dict shapes round-trip through a non-strict tool.
+@function_tool(strict_mode=False)
+async def lenient_containers(
+    ctx: ToolContext,
+    filters: dict[str, Any],
+    extras: dict[str, Any] | None = None,
+) -> str:
+    """Take dict parameters."""
+    return json.dumps({"filters": filters, "extras": extras})
+
+
 @pytest.fixture
 def registry():
     reg = ToolRegistry()
@@ -51,6 +76,14 @@ def registry():
     reg.register(ToolDefinition(name="search", function=search, description="Search"))
     reg.register(
         ToolDefinition(name="create_page", function=create_page, description="Create page")
+    )
+    reg.register(ToolDefinition(name="containers", function=containers, description="Containers"))
+    reg.register(
+        ToolDefinition(
+            name="lenient_containers",
+            function=lenient_containers,
+            description="Lenient containers",
+        )
     )
     return reg
 
@@ -77,6 +110,16 @@ def catalog():
                     "annotations": {"readOnlyHint": False, "destructiveHint": False},
                 },
             },
+            "containers": {
+                "description": "Take container parameters",
+                "category": "graph_navigation",
+                "mcp": {"expose": True},
+            },
+            "lenient_containers": {
+                "description": "Take dict parameters",
+                "category": "graph_navigation",
+                "mcp": {"expose": True},
+            },
         }
     )
 
@@ -86,9 +129,23 @@ def mcp_config():
     return MCPServerConfig(
         name="test_server",
         description="Test MCP Server",
-        tools=["discover", "search"],
+        tools=["discover", "search", "containers", "lenient_containers"],
         write_tools=["create_page"],
     )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def listed_tools(server):
+    """Map the server's advertised MCP tools by name.
+
+    Uses the server's public tool-listing API — the same view an MCP client
+    gets — rather than reading the SDK's internal tool manager.
+    """
+    return {tool.name: tool for tool in await server.list_tools()}
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +153,7 @@ def mcp_config():
 # ---------------------------------------------------------------------------
 
 
-def test_build_server_read_only(registry, catalog, mcp_config):
+async def test_build_server_read_only(registry, catalog, mcp_config):
     """Read-only server should have only read tools."""
     catalog.enrich_registry(registry)
 
@@ -109,13 +166,13 @@ def test_build_server_read_only(registry, catalog, mcp_config):
         include_write_tools=False,
     )
 
-    tools = server._tool_manager._tools
+    tools = await listed_tools(server)
     assert "discover" in tools
     assert "search" in tools
     assert "create_page" not in tools
 
 
-def test_build_server_with_writes(registry, catalog, mcp_config):
+async def test_build_server_with_writes(registry, catalog, mcp_config):
     """With include_write_tools, write tools should be registered."""
     catalog.enrich_registry(registry)
 
@@ -128,13 +185,13 @@ def test_build_server_with_writes(registry, catalog, mcp_config):
         include_write_tools=True,
     )
 
-    tools = server._tool_manager._tools
+    tools = await listed_tools(server)
     assert "discover" in tools
     assert "search" in tools
     assert "create_page" in tools
 
 
-def test_build_server_descriptions_from_yaml(registry, catalog, mcp_config):
+async def test_build_server_descriptions_from_yaml(registry, catalog, mcp_config):
     """Descriptions should come from YAML (via catalog enrichment), not code."""
     catalog.enrich_registry(registry)
 
@@ -146,11 +203,11 @@ def test_build_server_descriptions_from_yaml(registry, catalog, mcp_config):
         context_factory=FakeFactory(),
     )
 
-    discover_tool = server._tool_manager._tools["discover"]
-    assert discover_tool.description == "Discover what's available in the graph"
+    tools = await listed_tools(server)
+    assert tools["discover"].description == "Discover what's available in the graph"
 
 
-def test_build_server_annotations(registry, catalog, mcp_config):
+async def test_build_server_annotations(registry, catalog, mcp_config):
     """MCP annotations should be applied from YAML config."""
     catalog.enrich_registry(registry)
 
@@ -162,12 +219,12 @@ def test_build_server_annotations(registry, catalog, mcp_config):
         context_factory=FakeFactory(),
     )
 
-    discover_tool = server._tool_manager._tools["discover"]
-    assert discover_tool.annotations is not None
-    assert discover_tool.annotations.readOnlyHint is True
+    annotations = (await listed_tools(server))["discover"].annotations
+    assert annotations is not None
+    assert annotations.readOnlyHint is True
 
 
-def test_build_server_missing_tool_skipped(registry, catalog):
+async def test_build_server_missing_tool_skipped(registry, catalog):
     """Tools listed in config but not registered should be skipped."""
     catalog.enrich_registry(registry)
 
@@ -184,12 +241,12 @@ def test_build_server_missing_tool_skipped(registry, catalog):
         context_factory=FakeFactory(),
     )
 
-    tools = server._tool_manager._tools
+    tools = await listed_tools(server)
     assert "discover" in tools
     assert "nonexistent_tool" not in tools
 
 
-def test_build_server_tool_schema(registry, catalog, mcp_config):
+async def test_build_server_tool_schema(registry, catalog, mcp_config):
     """Tool parameters schema should be correct."""
     catalog.enrich_registry(registry)
 
@@ -201,13 +258,11 @@ def test_build_server_tool_schema(registry, catalog, mcp_config):
         context_factory=FakeFactory(),
     )
 
-    search_tool = server._tool_manager._tools["search"]
-    schema = search_tool.parameters
+    schema = (await listed_tools(server))["search"].inputSchema
     assert "query" in schema["properties"]
     assert "limit" in schema["properties"]
 
 
-@pytest.mark.asyncio
 async def test_build_server_tool_invocable(registry, catalog, mcp_config):
     """Built MCP tools should be callable and return correct results."""
     catalog.enrich_registry(registry)
@@ -220,8 +275,95 @@ async def test_build_server_tool_invocable(registry, catalog, mcp_config):
         context_factory=FakeFactory(),
     )
 
-    # Get the tool's handler and call it
-    discover_tool = server._tool_manager._tools["discover"]
-    result = await discover_tool.fn(target="entities")
-    data = json.loads(result)
+    # Dispatch through the server the way an MCP client would
+    content, _structured = await server.call_tool("discover", {"target": "entities"})
+    data = json.loads(content[0].text)
     assert data["target"] == "entities"
+
+
+# ---------------------------------------------------------------------------
+# Tests: container parameters survive the round-trip to an MCP client
+# ---------------------------------------------------------------------------
+
+
+def _without_presentation_keys(schema):
+    """Drop the keys that carry no type information, recursively.
+
+    ``title`` is generated from the parameter name on both sides, and ``default``
+    is present only where a value was declared — neither says anything about the
+    type a client must send.
+    """
+    if isinstance(schema, dict):
+        return {
+            key: _without_presentation_keys(value)
+            for key, value in schema.items()
+            if key not in ("title", "default")
+        }
+    if isinstance(schema, list):
+        return [_without_presentation_keys(item) for item in schema]
+    return schema
+
+
+def _is_nullable(prop):
+    return any(branch.get("type") == "null" for branch in prop.get("anyOf", []))
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "tool_fn"),
+    [("containers", containers), ("lenient_containers", lenient_containers)],
+)
+async def test_the_advertised_schema_matches_the_one_the_sdk_produced(
+    registry, catalog, mcp_config, tool_name, tool_fn
+):
+    """What FastMCP advertises carries the SDK's types, with real requiredness.
+
+    A correct handler signature that FastMCP then renders as a bare ``string``
+    would pass every signature-level assertion, so the comparison runs against
+    the schema an MCP client actually receives.
+    """
+    catalog.enrich_registry(registry)
+
+    server = build_mcp_server(
+        server_name="Test",
+        tool_registry=registry,
+        tool_catalog=catalog,
+        mcp_config=mcp_config,
+        context_factory=FakeFactory(),
+    )
+
+    sdk_schema = tool_fn.params_json_schema
+    advertised = (await listed_tools(server))[tool_name].inputSchema
+
+    assert advertised["properties"].keys() == sdk_schema["properties"].keys()
+    for name, sdk_prop in sdk_schema["properties"].items():
+        assert _without_presentation_keys(advertised["properties"][name]) == (
+            _without_presentation_keys(sdk_prop)
+        ), name
+
+    # The SDK's strict schema lists every parameter as required regardless of
+    # nullability; what reaches the client must not.
+    assert advertised["required"] == [
+        name for name in sdk_schema["required"] if not _is_nullable(sdk_schema["properties"][name])
+    ]
+
+
+async def test_a_tool_with_an_optional_list_is_invocable_through_the_server(
+    registry, catalog, mcp_config
+):
+    catalog.enrich_registry(registry)
+
+    server = build_mcp_server(
+        server_name="Test",
+        tool_registry=registry,
+        tool_catalog=catalog,
+        mcp_config=mcp_config,
+        context_factory=FakeFactory(),
+    )
+
+    omitted, _ = await server.call_tool("containers", {"labels": ["a"], "matrix": [["m"]]})
+    assert json.loads(omitted[0].text)["tags"] is None
+
+    supplied, _ = await server.call_tool(
+        "containers", {"labels": ["a"], "matrix": [["m"]], "tags": ["x", "y"]}
+    )
+    assert json.loads(supplied[0].text)["tags"] == ["x", "y"]

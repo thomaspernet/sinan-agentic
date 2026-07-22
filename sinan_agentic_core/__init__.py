@@ -37,7 +37,23 @@ Quick Start:
     )
 """
 
-from .core import BaseAgentRunner, Capability, ToolErrorRecovery, ToolTracer, TurnBudget
+from .core import (
+    BaseAgentRunner,
+    Capability,
+    ModelRetryConfig,
+    RetryBackoffConfig,
+    RetryTrigger,
+    RunErrorKind,
+    ToolErrorRecovery,
+    ToolOutputTrimConfig,
+    ToolTracer,
+    TurnBudget,
+    TurnBudgetConfig,
+    build_error_handlers,
+    build_run_config,
+    classify_run_error,
+    recover_invalid_final_output,
+)
 from .instructions import InstructionBuilder
 from .llm import (
     AzureOpenAIProviderConfig,
@@ -46,6 +62,7 @@ from .llm import (
     configure_llm_provider,
     load_llm_provider_config,
     parse_llm_provider_config,
+    resolve_openai_client,
 )
 from .models.context import AgentContext
 from .models.outputs import ChatResponse, ToolOutput
@@ -59,6 +76,10 @@ from .registry import (
     CapabilityNotFoundError,
     CapabilityRef,
     CapabilityRegistry,
+    GuardrailCategory,
+    GuardrailDefinition,
+    GuardrailRegistry,
+    ResolvedGuardrails,
     ToolCatalog,
     ToolDefinition,
     ToolRegistry,
@@ -66,11 +87,13 @@ from .registry import (
     create_agent_from_registry,
     get_agent_registry,
     get_capability_registry,
+    get_guardrail_registry,
     get_tool_registry,
     load_agent_catalog,
     load_tool_catalog,
     register_agent,
     register_capability,
+    register_guardrail,
     register_tool,
 )
 from .services import (
@@ -89,10 +112,20 @@ from .utils import tool_error, tool_response, unwrap_context
 __all__ = [
     # Core
     "BaseAgentRunner",
+    "build_error_handlers",
+    "build_run_config",
     "Capability",
+    "classify_run_error",
+    "ModelRetryConfig",
+    "recover_invalid_final_output",
+    "RetryBackoffConfig",
+    "RetryTrigger",
+    "RunErrorKind",
     "ToolErrorRecovery",
+    "ToolOutputTrimConfig",
     "ToolTracer",
     "TurnBudget",
+    "TurnBudgetConfig",
     # Instructions
     "InstructionBuilder",
     # LLM providers
@@ -102,6 +135,7 @@ __all__ = [
     "configure_llm_provider",
     "load_llm_provider_config",
     "parse_llm_provider_config",
+    "resolve_openai_client",
     # Session
     "AgentSession",
     "ConversationHistory",
@@ -132,6 +166,12 @@ __all__ = [
     "ToolRegistry",
     "get_tool_registry",
     "register_tool",
+    "GuardrailCategory",
+    "GuardrailDefinition",
+    "GuardrailRegistry",
+    "ResolvedGuardrails",
+    "get_guardrail_registry",
+    "register_guardrail",
     # Services
     "StreamingRunHooks",
     "chat",

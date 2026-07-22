@@ -1,6 +1,7 @@
 """Tests for MCP extensions to ToolCatalog and AgentCatalog."""
 
 import pytest
+from pydantic import ValidationError
 
 from sinan_agentic_core.registry.agent_catalog import AgentCatalog
 from sinan_agentic_core.registry.tool_catalog import ToolCatalog
@@ -45,6 +46,57 @@ def test_tool_catalog_get_mcp_tools_empty():
         }
     )
     assert catalog.get_mcp_tools() == []
+
+
+def test_tool_catalog_mcp_empty_block_is_a_declaration():
+    """``mcp: {}`` resolves to ToolMCPConfig defaults, not to an absent block."""
+    catalog = ToolCatalog(
+        raw_tools={
+            "think": {"description": "Think", "mcp": {}},
+        }
+    )
+
+    entry = catalog.get("think")
+    assert entry.mcp is not None
+    assert entry.mcp.expose is False
+    assert entry.mcp.annotations == {}
+    # The block declares MCP config with defaults, and the default is not exposed.
+    assert catalog.get_mcp_tools() == []
+
+
+def test_tool_catalog_mcp_null_block_opts_out():
+    """An explicitly null ``mcp`` key means the tool declares no MCP config."""
+    catalog = ToolCatalog(
+        raw_tools={
+            "think": {"description": "Think", "mcp": None},
+        }
+    )
+
+    assert catalog.get("think").mcp is None
+    assert catalog.get_mcp_tools() == []
+
+
+def test_tool_catalog_get_mcp_tools_validates_expose():
+    """``expose`` is validated as a bool, not read for truthiness."""
+    catalog = ToolCatalog(
+        raw_tools={
+            "think": {"description": "Think", "mcp": {"expose": "no"}},
+        }
+    )
+
+    assert catalog.get_mcp_tools() == []
+
+
+def test_tool_catalog_get_mcp_tools_rejects_malformed_expose():
+    """A non-boolean ``expose`` surfaces as a validation error, not as exposure."""
+    catalog = ToolCatalog(
+        raw_tools={
+            "think": {"description": "Think", "mcp": {"expose": "maybe"}},
+        }
+    )
+
+    with pytest.raises(ValidationError):
+        catalog.get_mcp_tools()
 
 
 def test_tool_yaml_entry_mcp_field():
@@ -120,6 +172,61 @@ def test_agent_catalog_get_mcp_server():
     assert config.resources[0].uri == "test://project"
     assert len(config.prompts) == 1
     assert config.prompts[0].name == "research"
+
+
+def test_agent_catalog_get_mcp_server_rejects_an_unrecognized_key():
+    """The whole raw block reaches the model, so a typo fails instead of exposing nothing."""
+    catalog = AgentCatalog(
+        tool_groups={},
+        raw_agents={},
+        raw_mcp_servers={
+            "knowledge_graph": {
+                "description": "My knowledge graph",
+                "write-tools": ["create_page"],
+            },
+        },
+    )
+
+    with pytest.raises(ValidationError, match="write-tools"):
+        catalog.get_mcp_server("knowledge_graph")
+
+
+def test_agent_catalog_get_mcp_server_rejects_an_unrecognized_resource_key():
+    """Nested entries are validated by the model's own fields, on the same terms."""
+    catalog = AgentCatalog(
+        tool_groups={},
+        raw_agents={},
+        raw_mcp_servers={
+            "knowledge_graph": {
+                "resources": [{"uri": "test://project", "descriptions": "Project"}],
+            },
+        },
+    )
+
+    with pytest.raises(ValidationError, match="descriptions"):
+        catalog.get_mcp_server("knowledge_graph")
+
+
+def test_agent_catalog_get_mcp_server_ignores_a_late_edit_to_the_callers_block():
+    """The catalog copies the server blocks, so a caller's later edit does not reach them."""
+    raw_mcp_servers = {
+        "knowledge_graph": {
+            "description": "My knowledge graph",
+            "tools": ["discover"],
+        },
+    }
+    catalog = AgentCatalog(
+        tool_groups={},
+        raw_agents={},
+        raw_mcp_servers=raw_mcp_servers,
+    )
+
+    raw_mcp_servers["knowledge_graph"]["tools"].append("search")
+    raw_mcp_servers["knowledge_graph"]["description"] = "Edited late"
+
+    config = catalog.get_mcp_server("knowledge_graph")
+    assert config.tools == ["discover"]
+    assert config.description == "My knowledge graph"
 
 
 def test_agent_catalog_get_mcp_server_not_found():
