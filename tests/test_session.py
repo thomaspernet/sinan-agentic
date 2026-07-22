@@ -189,6 +189,76 @@ class TestAgentSession:
         assert items[0]["content"] == '{"response": "verbatim"}'
 
 
+# -- AgentSession copies the caller's history ----------------------------------
+
+
+class TestAgentSessionCopiesTheCallersHistory:
+    """The session owns its history, so it and the caller never share a message list."""
+
+    async def test_the_seeded_messages_are_readable(self):
+        history = ConversationHistory()
+        history.add_message("user", "Hello")
+
+        session = AgentSession(session_id="seeded", initial_history=history)
+
+        items = await session.get_items()
+        assert [item["content"] for item in items] == ["Hello"]
+
+    async def test_a_message_added_to_the_callers_history_later_is_not_visible(self):
+        history = ConversationHistory()
+        history.add_message("user", "Hello")
+        session = AgentSession(session_id="seeded", initial_history=history)
+
+        history.add_message("user", "Added late")
+
+        items = await session.get_items()
+        assert [item["content"] for item in items] == ["Hello"]
+
+    async def test_an_edit_inside_a_seeded_message_is_not_visible(self):
+        """Messages nest inside the list, so copying only the list would not detach them."""
+        history = ConversationHistory()
+        history.add_message("user", "Hello")
+        session = AgentSession(session_id="seeded", initial_history=history)
+
+        history.messages[0]["content"] = "Edited late"
+
+        items = await session.get_items()
+        assert items[0]["content"] == "Hello"
+
+    async def test_an_edit_inside_a_nested_content_list_is_not_visible(self):
+        """Structured-output content arrives as a list of dicts, one level deeper again."""
+        history = ConversationHistory()
+        history.messages.append(
+            {"role": "assistant", "content": [{"text": "original", "type": "output_text"}]}
+        )
+        session = AgentSession(session_id="seeded", initial_history=history)
+
+        history.messages[0]["content"][0]["text"] = "edited late"
+
+        items = await session.get_items()
+        assert items[0]["content"][0]["text"] == "original"
+
+    async def test_messages_added_to_the_session_do_not_reach_the_callers_history(self):
+        history = ConversationHistory()
+        history.add_message("user", "Hello")
+        session = AgentSession(session_id="seeded", initial_history=history)
+
+        await session.add_items([{"role": "assistant", "content": "Hi there"}])
+
+        assert [msg["content"] for msg in history.messages] == ["Hello"]
+
+    async def test_two_sessions_seeded_from_one_history_do_not_share_a_message_list(self):
+        history = ConversationHistory()
+        history.add_message("user", "Hello")
+        first = AgentSession(session_id="first", initial_history=history)
+        second = AgentSession(session_id="second", initial_history=history)
+
+        await first.add_items([{"role": "assistant", "content": "only in first"}])
+
+        assert first.get_message_count() == 2
+        assert second.get_message_count() == 1
+
+
 # -- SQLiteSessionStore --------------------------------------------------------
 
 
