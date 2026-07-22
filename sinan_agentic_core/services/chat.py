@@ -51,6 +51,7 @@ from openai.types.responses import ResponseTextDeltaEvent
 from ..core.output_recovery import build_error_handlers
 from ..core.run_config import build_run_config
 from ..core.run_errors import run_error_payload
+from ..core.stream_preview import tool_output_preview
 from ..registry.agent_factory import create_agent_from_registry
 from ..session import AgentSession
 from .hooks import StreamingRunHooks
@@ -360,7 +361,7 @@ async def chat_streamed(
                 elif item.type == "tool_call_output_item":
                     yield {
                         "event": "tool_output",
-                        "data": {"output": str(item.output)[:500]},
+                        "data": {"output": tool_output_preview(item.output)},
                     }
                 elif item.type == "message_output_item":
                     yield {
