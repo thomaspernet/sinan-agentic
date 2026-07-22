@@ -15,6 +15,7 @@ Usage::
     entry.description  # "Find and resolve papers..."
 """
 
+import copy
 import logging
 from pathlib import Path
 from typing import Any
@@ -89,10 +90,25 @@ class ToolCatalog:
     - ``get(name)`` to resolve a single tool's metadata
     - ``enrich_registry(registry)`` to patch ToolDefinitions with YAML metadata
     - ``list_tools()`` to list all tool names
+
+    A catalog is a fixed in-process view of the parsed YAML: the mapping it is
+    given is copied on the way in, so what it resolves never changes after
+    construction.
     """
 
     def __init__(self, raw_tools: dict[str, dict[str, Any]]) -> None:
-        self._raw_tools = raw_tools
+        """Build a catalog over already-parsed ``tools.yaml`` data.
+
+        The mapping is copied, so a later edit to the caller's dict does not
+        reach the catalog and two catalogs built from the same data never share
+        one mapping. Each value is a tool block that nests further mutable
+        values — the ``mcp`` block, its ``annotations`` — so the copy goes all
+        the way down; a shallow copy would leave those nested edit paths open.
+
+        Args:
+            raw_tools: Raw tool entries, keyed by tool name.
+        """
+        self._raw_tools: dict[str, dict[str, Any]] = copy.deepcopy(raw_tools)
 
     def get(self, name: str) -> ToolYamlEntry:
         """Get a resolved tool entry by name.
