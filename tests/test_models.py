@@ -76,6 +76,104 @@ class TestToolOutput:
         assert "metadata" not in d
 
 
+class TestToolOutputOwnsItsMappings:
+    """The result is a fixed record of what the tool produced, at both ends."""
+
+    def test_the_supplied_mappings_are_readable(self):
+        out = ToolOutput(
+            success=True,
+            data={"rows": [{"id": 1}]},
+            metadata={"source": "db"},
+        )
+
+        assert out.data == {"rows": [{"id": 1}]}
+        assert out.metadata == {"source": "db"}
+
+    def test_an_edit_by_the_tool_after_construction_is_not_visible(self):
+        data = {"rows": [{"id": 1}]}
+        metadata = {"source": "db"}
+        out = ToolOutput(success=True, data=data, metadata=metadata)
+
+        data["rows_added_late"] = []
+        metadata["latency"] = 42
+
+        assert out.data == {"rows": [{"id": 1}]}
+        assert out.metadata == {"source": "db"}
+
+    def test_an_edit_inside_a_nested_value_is_not_visible(self):
+        """Values nest inside both mappings, so copying only the outer would not detach them."""
+        data = {"rows": [{"id": 1}]}
+        metadata = {"trace": {"attempts": 1}}
+        out = ToolOutput(success=True, data=data, metadata=metadata)
+
+        data["rows"][0]["id"] = 99
+        metadata["trace"]["attempts"] = 99
+
+        assert out.data == {"rows": [{"id": 1}]}
+        assert out.metadata == {"trace": {"attempts": 1}}
+
+    def test_two_results_built_from_one_mapping_do_not_share_it(self):
+        data = {"rows": [{"id": 1}]}
+        first = ToolOutput(success=True, data=data)
+        second = ToolOutput(success=True, data=data)
+
+        first.data["rows"].append({"id": 2})
+
+        assert second.data == {"rows": [{"id": 1}]}
+
+    def test_an_absent_data_mapping_stays_none(self):
+        out = ToolOutput(success=True)
+
+        assert out.data is None
+
+    def test_a_consumer_edit_to_the_returned_data_does_not_reach_the_result(self):
+        out = ToolOutput(success=True, data={"rows": [{"id": 1}]})
+
+        payload = out.to_dict()
+        payload["data"]["added_late"] = True
+        payload["data"]["rows"][0]["id"] = 99
+
+        assert out.data == {"rows": [{"id": 1}]}
+
+    def test_a_consumer_edit_to_a_merged_metadata_value_does_not_reach_the_result(self):
+        out = ToolOutput(success=True, metadata={"trace": {"attempts": 1}})
+
+        payload = out.to_dict()
+        payload["trace"]["attempts"] = 99
+
+        assert out.metadata == {"trace": {"attempts": 1}}
+
+    def test_two_payloads_from_one_result_do_not_share_a_data_mapping(self):
+        out = ToolOutput(success=True, data={"rows": [{"id": 1}]})
+
+        first = out.to_dict()
+        second = out.to_dict()
+        first["data"]["rows"].append({"id": 2})
+
+        assert second["data"] == {"rows": [{"id": 1}]}
+
+    def test_every_collection_field_is_detached_from_the_caller(self):
+        """A collection field added later without a matching copy fails here, rather than drifting."""
+        seeds: dict[str, Any] = {
+            "data": {"rows": [{"id": 1}]},
+            "metadata": {"trace": {"attempts": 1}},
+        }
+        assert set(_collection_field_names(ToolOutput)) == set(seeds), (
+            "ToolOutput gained or lost a collection field — seed it here "
+            "and copy it in __post_init__"
+        )
+        seeded_as_supplied = copy.deepcopy(seeds)
+
+        out = ToolOutput(success=True, **seeds)
+        for seeded in seeds.values():
+            _edit_every_level(seeded)
+
+        for name, as_supplied in seeded_as_supplied.items():
+            assert (
+                getattr(out, name) == as_supplied
+            ), f"{name} is aliased to the caller's collection"
+
+
 # -- ChatResponse -------------------------------------------------------------
 
 
@@ -113,6 +211,115 @@ class TestChatResponse:
         assert r.tools_called == []
         assert r.error is None
         assert r.usage is None
+
+
+class TestChatResponseOwnsItsCollections:
+    """The response is a fixed record of one turn, at both ends."""
+
+    def test_the_supplied_collections_are_readable(self):
+        r = ChatResponse(
+            success=True,
+            tools_called=["tool_a"],
+            usage={"input_tokens": 100, "input_tokens_details": {"cached_tokens": 10}},
+        )
+
+        assert r.tools_called == ["tool_a"]
+        assert r.usage == {
+            "input_tokens": 100,
+            "input_tokens_details": {"cached_tokens": 10},
+        }
+
+    def test_a_tool_recorded_after_the_turn_is_not_visible(self):
+        """The natural source is a live hooks list that keeps growing for the rest of the run."""
+        tools_called = ["tool_a"]
+        r = ChatResponse(success=True, tools_called=tools_called)
+
+        tools_called.append("tool_b")
+
+        assert r.tools_called == ["tool_a"]
+
+    def test_a_later_write_to_the_usage_record_is_not_visible(self):
+        """The natural source is the runner attribute the next turn overwrites."""
+        usage = {"input_tokens": 100}
+        r = ChatResponse(success=True, usage=usage)
+
+        usage["input_tokens"] = 999
+
+        assert r.usage == {"input_tokens": 100}
+
+    def test_an_edit_inside_the_usage_details_is_not_visible(self):
+        """The usage record nests its token details, so copying only the outer misses them."""
+        usage = {"input_tokens_details": {"cached_tokens": 10}}
+        r = ChatResponse(success=True, usage=usage)
+
+        usage["input_tokens_details"]["cached_tokens"] = 999
+
+        assert r.usage == {"input_tokens_details": {"cached_tokens": 10}}
+
+    def test_two_responses_built_from_one_list_do_not_share_it(self):
+        tools_called = ["tool_a"]
+        first = ChatResponse(success=True, tools_called=tools_called)
+        second = ChatResponse(success=True, tools_called=tools_called)
+
+        first.tools_called.append("tool_b")
+
+        assert second.tools_called == ["tool_a"]
+
+    def test_an_absent_usage_record_stays_none(self):
+        r = ChatResponse(success=True)
+
+        assert r.usage is None
+
+    def test_a_consumer_edit_to_the_returned_tools_called_does_not_reach_the_response(self):
+        r = ChatResponse(success=True, tools_called=["tool_a"])
+
+        payload = r.to_dict()
+        payload["tools_called"].append("tool_b")
+
+        assert r.tools_called == ["tool_a"]
+
+    def test_a_consumer_edit_inside_the_returned_usage_does_not_reach_the_response(self):
+        r = ChatResponse(
+            success=True,
+            usage={"input_tokens": 100, "input_tokens_details": {"cached_tokens": 10}},
+        )
+
+        payload = r.to_dict()
+        payload["usage"]["input_tokens"] = 999
+        payload["usage"]["input_tokens_details"]["cached_tokens"] = 999
+
+        assert r.usage == {
+            "input_tokens": 100,
+            "input_tokens_details": {"cached_tokens": 10},
+        }
+
+    def test_two_payloads_from_one_response_do_not_share_a_usage_record(self):
+        r = ChatResponse(success=True, usage={"input_tokens_details": {"cached_tokens": 10}})
+
+        first = r.to_dict()
+        second = r.to_dict()
+        first["usage"]["input_tokens_details"]["cached_tokens"] = 999
+
+        assert second["usage"] == {"input_tokens_details": {"cached_tokens": 10}}
+
+    def test_every_collection_field_is_detached_from_the_caller(self):
+        """A collection field added later without a matching copy fails here, rather than drifting."""
+        seeds: dict[str, Any] = {
+            "tools_called": ["tool_a"],
+            "usage": {"input_tokens_details": {"cached_tokens": 10}},
+        }
+        assert set(_collection_field_names(ChatResponse)) == set(seeds), (
+            "ChatResponse gained or lost a collection field — seed it here "
+            "and copy it in __post_init__"
+        )
+        seeded_as_supplied = copy.deepcopy(seeds)
+
+        r = ChatResponse(success=True, **seeds)
+        for seeded in seeds.values():
+            _edit_every_level(seeded)
+
+        for name, as_supplied in seeded_as_supplied.items():
+            assert getattr(r, name) == as_supplied, f"{name} is aliased to the caller's collection"
 
 
 # -- AgentContext --------------------------------------------------------------
