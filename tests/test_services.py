@@ -148,6 +148,71 @@ class TestAnswerEventOwnsItsSources:
         assert events[0].sources == []
 
 
+class TestToolCallEventOwnsItsArguments:
+    """The event is a fixed record of one call, so nobody else holds its arguments."""
+
+    def test_the_supplied_arguments_are_readable(self):
+        e = ToolCallEvent(tool_name="search", arguments={"q": "hello", "tags": ["a"]})
+
+        assert e.to_dict()["arguments"] == {"q": "hello", "tags": ["a"]}
+
+    def test_an_argument_added_by_the_caller_later_is_not_visible(self):
+        declared = {"q": "hello"}
+        e = ToolCallEvent(tool_name="search", arguments=declared)
+
+        declared["limit"] = 10
+
+        assert e.arguments == {"q": "hello"}
+
+    def test_an_edit_inside_a_nested_argument_by_the_caller_is_not_visible(self):
+        declared = {"filters": {"tags": ["python"]}}
+        e = ToolCallEvent(tool_name="search", arguments=declared)
+
+        declared["filters"]["tags"].append("added_late")
+
+        assert e.arguments == {"filters": {"tags": ["python"]}}
+
+    def test_a_consumer_editing_the_event_does_not_reach_the_callers_dict(self):
+        declared = {"filters": {"tags": ["python"]}}
+        e = ToolCallEvent(tool_name="search", arguments=declared)
+
+        e.arguments["filters"]["tags"].append("added_by_consumer")
+
+        assert declared == {"filters": {"tags": ["python"]}}
+
+    def test_two_events_built_from_one_dict_do_not_share_arguments(self):
+        declared = {"filters": {"tags": ["python"]}}
+        first = ToolCallEvent(tool_name="search", arguments=declared)
+        second = ToolCallEvent(tool_name="search", arguments=declared)
+
+        first.arguments["filters"]["tags"].append("added_late")
+
+        assert second.arguments == {"filters": {"tags": ["python"]}}
+
+    def test_a_consumer_editing_the_payload_does_not_reach_the_event(self):
+        e = ToolCallEvent(tool_name="search", arguments={"q": "hello"})
+
+        e.to_dict()["arguments"]["limit"] = 10
+
+        assert e.arguments == {"q": "hello"}
+
+    def test_a_consumer_editing_inside_the_payload_does_not_reach_the_event(self):
+        e = ToolCallEvent(tool_name="search", arguments={"filters": {"tags": ["python"]}})
+
+        e.to_dict()["arguments"]["filters"]["tags"].append("added_by_consumer")
+
+        assert e.arguments == {"filters": {"tags": ["python"]}}
+
+    def test_two_payloads_from_one_event_do_not_share_arguments(self):
+        e = ToolCallEvent(tool_name="search", arguments={"filters": {"tags": ["python"]}})
+
+        first = e.to_dict()
+        second = e.to_dict()
+        first["arguments"]["filters"]["tags"].append("added_by_consumer")
+
+        assert second["arguments"] == {"filters": {"tags": ["python"]}}
+
+
 # -- StreamingHelper -----------------------------------------------------------
 
 

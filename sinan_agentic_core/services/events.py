@@ -11,6 +11,7 @@ Usage:
     helper.emit_agent_start("analyzer", iteration=1)
 """
 
+import copy
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -78,18 +79,45 @@ class ThinkingEvent(BaseEvent):
 
 @dataclass
 class ToolCallEvent(BaseEvent):
-    """Emitted when an agent invokes a tool."""
+    """Emitted when an agent invokes a tool.
+
+    The event owns its ``arguments`` mapping: it is a fixed record of the call it
+    describes, so the mapping is copied on the way in and copied again on the way
+    out of ``to_dict()`` rather than aliased to whoever supplied it.
+    """
 
     event_type: str = field(default="tool_call", init=False)
     tool_name: str = ""
     arguments: dict[str, Any] = field(default_factory=dict)
     agent_name: str | None = None
 
+    def __post_init__(self) -> None:
+        """Take ownership of the arguments mapping.
+
+        A caller that keeps the dict it passed and edits it later cannot change
+        an event already delivered, and two events built from one dict do not
+        share it. Copying here rather than in an emit helper covers the other
+        documented path too — building the dataclass directly and pushing it
+        down your own transport.
+
+        The copy is deep. A tool call's arguments are the decoded JSON payload
+        of the call, so a value can be a list or a nested object; detaching only
+        the outer mapping would leave an edit inside such a value reaching the
+        event. That is the opposite call from ``AnswerEvent.sources``, whose
+        elements are opaque caller objects matched back by identity.
+        """
+        self.arguments = copy.deepcopy(self.arguments)
+
     def to_dict(self) -> dict[str, Any]:
+        """Render the event as a payload, with its own copy of the arguments.
+
+        A consumer that edits ``payload["arguments"]`` — at the top level or
+        inside a nested value — must not reach back into the event it read.
+        """
         return {
             "event_type": self.event_type,
             "tool_name": self.tool_name,
-            "arguments": self.arguments,
+            "arguments": copy.deepcopy(self.arguments),
             "agent_name": self.agent_name,
         }
 
