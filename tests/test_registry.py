@@ -1,7 +1,7 @@
 """Tests for agent, tool, and guardrail registries."""
 
 import copy
-from dataclasses import fields
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -30,6 +30,7 @@ from sinan_agentic_core.registry.guardrail_registry import (
     attach_tool_input_guardrails,
 )
 from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
+from tests.conftest import collection_field_names, edit_every_level
 
 # -- AgentDefinition -----------------------------------------------------------
 
@@ -125,18 +126,27 @@ class TestAgentDefinitionOwnsItsListFields:
 
         assert a.capabilities[0] is budget
 
-    def test_every_list_field_is_detached_from_the_caller(self):
-        """A list field added later without a matching copy fails here, rather than drifting."""
-        list_fields = [f.name for f in fields(AgentDefinition) if f.default_factory is list]
-        assert list_fields, "reflection found no list fields to check"
-        declared = {name: ["declared"] for name in list_fields}
+    def test_every_collection_field_is_detached_from_the_caller(self):
+        """A collection field added later without a matching copy fails here, rather than drifting."""
+        seeds: dict[str, Any] = {
+            "tools": ["search"],
+            "guardrails": ["safety"],
+            "handoffs": ["specialist"],
+            "hosted_tools": ["web_search"],
+            "capabilities": ["budget"],
+        }
+        assert set(collection_field_names(AgentDefinition)) == set(seeds), (
+            "AgentDefinition gained or lost a collection field — seed it here "
+            "and copy it in __post_init__"
+        )
+        seeded_as_supplied = copy.deepcopy(seeds)
 
-        a = AgentDefinition(name="a", description="d", instructions="i", **declared)
-        for supplied in declared.values():
-            supplied.append("added_late")
+        a = AgentDefinition(name="a", description="d", instructions="i", **seeds)
+        for seeded in seeds.values():
+            edit_every_level(seeded)
 
-        for name in list_fields:
-            assert getattr(a, name) == ["declared"], f"{name} is aliased to the caller's list"
+        for name, as_supplied in seeded_as_supplied.items():
+            assert getattr(a, name) == as_supplied, f"{name} is aliased to the caller's collection"
 
 
 # -- AgentRegistry -------------------------------------------------------------
