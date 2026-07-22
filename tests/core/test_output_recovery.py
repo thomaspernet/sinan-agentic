@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 from agents import Agent, MessageOutputItem, ModelBehaviorError
@@ -18,6 +18,7 @@ from sinan_agentic_core.core.output_recovery import (
     recover_invalid_final_output,
     salvage_structured_output,
 )
+from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
 
 
 class Extraction(BaseModel):
@@ -28,6 +29,26 @@ class Extraction(BaseModel):
 @pytest.fixture
 def schema():
     return AgentOutputSchema(Extraction)
+
+
+@pytest.fixture
+def recovery_registry():
+    """An isolated registry, patched where ``build_error_handlers`` looks the definition up."""
+    registry = AgentRegistry()
+    registry.register(
+        AgentDefinition(
+            name="strict_agent",
+            description="fails loudly",
+            instructions="answer",
+            invalid_output_recovery=False,
+        )
+    )
+    registry.register(
+        AgentDefinition(name="recovering_agent", description="recovers", instructions="answer")
+    )
+
+    with patch("sinan_agentic_core.core.output_recovery.get_agent_registry", return_value=registry):
+        yield registry
 
 
 def _message_item(text: str) -> MessageOutputItem:
@@ -233,6 +254,34 @@ class TestBuildErrorHandlers:
 
     def test_str_output_type_gets_no_handlers(self):
         assert build_error_handlers(Agent(name="a", output_type=str)) is None
+
+
+class TestDeclaredInvalidOutputRecovery:
+    """The flag has no slot on ``Agent``, so it is resolved through the registry.
+
+    Without it, an agent that declares ``invalid_output_recovery: false`` fails
+    loudly when the runner executes it and is silently recovered when the chat
+    service does — the same declaration honored on one path and dropped on the
+    other.
+    """
+
+    def test_an_agent_opting_out_gets_no_handlers(self, recovery_registry):
+        assert build_error_handlers(Agent(name="strict_agent", output_type=Extraction)) is None
+
+    def test_an_agent_keeping_the_default_gets_the_recovery_handler(self, recovery_registry):
+        handlers = build_error_handlers(Agent(name="recovering_agent", output_type=Extraction))
+
+        assert handlers == {"invalid_final_output": recover_invalid_final_output}
+
+    def test_an_unregistered_agent_keeps_recovery(self, recovery_registry):
+        """A hand-assembled agent under an unknown name has no opt-out to honor."""
+        agent = Agent(name="assembled_by_hand", output_type=Extraction)
+
+        assert build_error_handlers(agent) is not None
+
+    def test_a_plain_text_agent_opting_out_gets_no_handlers(self, recovery_registry):
+        """Both reasons to skip recovery apply at once and still yield defaults."""
+        assert build_error_handlers(Agent(name="strict_agent")) is None
 
 
 class TestInvalidFinalOutputHandlers:

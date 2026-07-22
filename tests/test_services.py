@@ -286,6 +286,35 @@ def trim_registry():
         yield registry
 
 
+def _strict_agent(registry):
+    """A structured agent whose registered definition turns recovery off.
+
+    The flag is a run-level setting with no slot on ``Agent``, so the chat
+    service can only reach it through the definition behind the agent's name.
+    """
+    from sinan_agentic_core.registry.agent_registry import AgentDefinition
+
+    registry.register(
+        AgentDefinition(
+            name="_chat_strict_agent",
+            description="fails loudly",
+            instructions="You extract",
+            invalid_output_recovery=False,
+        )
+    )
+    return Agent(name="_chat_strict_agent", output_type=_Extraction)
+
+
+@pytest.fixture
+def recovery_registry():
+    """An isolated registry, patched where ``build_error_handlers`` looks the definition up."""
+    from sinan_agentic_core.registry.agent_registry import AgentRegistry
+
+    registry = AgentRegistry()
+    with patch("sinan_agentic_core.core.output_recovery.get_agent_registry", return_value=registry):
+        yield registry
+
+
 def _run_result(response="ok"):
     """A run result carrying one response — enough for the usage aggregation."""
     raw = Mock()
@@ -482,6 +511,19 @@ class TestChat:
 
         assert "error_handlers" not in mock_runner.run.call_args.kwargs
 
+    async def test_declared_recovery_opt_out_reaches_the_run(self, recovery_registry):
+        """An agent that asked to fail loudly does so here the way it does under
+        the runner."""
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "Runner") as mock_runner:
+            mock_runner.run = AsyncMock(return_value=_run_result())
+
+            await chat_mod.chat("Hi", agent=_strict_agent(recovery_registry), session=session)
+
+        assert "error_handlers" not in mock_runner.run.call_args.kwargs
+
 
 # -- chat_with_hooks() --------------------------------------------------------
 
@@ -637,6 +679,20 @@ class TestChatWithHooks:
 
                 async for _ in chat_mod.chat_with_hooks("Hi", agent_name="a", session=session):
                     pass
+
+        assert "error_handlers" not in mock_runner.run.call_args.kwargs
+
+    async def test_declared_recovery_opt_out_reaches_the_run(self, recovery_registry):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "Runner") as mock_runner:
+            mock_runner.run = AsyncMock(return_value=_run_result())
+
+            async for _ in chat_mod.chat_with_hooks(
+                "Hi", agent=_strict_agent(recovery_registry), session=session
+            ):
+                pass
 
         assert "error_handlers" not in mock_runner.run.call_args.kwargs
 
@@ -877,6 +933,20 @@ class TestChatStreamed:
 
                 async for _ in chat_mod.chat_streamed("Hi", agent_name="a", session=session):
                     pass
+
+        assert "error_handlers" not in mock_runner.run_streamed.call_args.kwargs
+
+    async def test_declared_recovery_opt_out_reaches_the_run(self, recovery_registry):
+        chat_mod = self._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with patch.object(chat_mod, "Runner") as mock_runner:
+            mock_runner.run_streamed.return_value = _streamed_result()
+
+            async for _ in chat_mod.chat_streamed(
+                "Hi", agent=_strict_agent(recovery_registry), session=session
+            ):
+                pass
 
         assert "error_handlers" not in mock_runner.run_streamed.call_args.kwargs
 
