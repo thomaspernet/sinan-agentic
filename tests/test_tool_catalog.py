@@ -4,6 +4,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from sinan_agentic_core.registry.tool_catalog import (
     ToolCatalog,
@@ -37,6 +38,21 @@ class TestToolYamlEntry:
         assert entry.description == "Search papers"
         assert entry.category == "research"
         assert entry.recovery_hint == "Try different terms"
+
+    def test_rejects_an_unknown_key(self):
+        """A typo must fail loudly rather than silently leave the field empty."""
+        with pytest.raises(ValidationError, match="typo"):
+            ToolYamlEntry(typo="Search papers")
+
+    def test_rejects_a_misspelled_field(self):
+        """The near-miss is the realistic case — the hint would never reach the tool."""
+        with pytest.raises(ValidationError, match="recovery_hints"):
+            ToolYamlEntry(recovery_hints="Try different terms")
+
+    def test_rejects_an_unknown_mcp_key(self):
+        """``mcp: {exposed: true}`` would leave the tool unexposed, silently."""
+        with pytest.raises(ValidationError, match="exposed"):
+            ToolYamlEntry(mcp={"exposed": True})
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +89,12 @@ class TestToolCatalog:
         catalog = ToolCatalog(raw_tools={})
         assert catalog.list_tools() == []
 
+    def test_get_rejects_an_unrecognized_tool_key(self):
+        """A key tools.yaml does not define fails on resolve, not silently."""
+        catalog = ToolCatalog(raw_tools={"search": {"description": "d", "categry": "graph"}})
+        with pytest.raises(ValidationError, match="categry"):
+            catalog.get("search")
+
 
 # ---------------------------------------------------------------------------
 # enrich_registry
@@ -86,6 +108,14 @@ class TestEnrichRegistry:
         for t in tools:
             reg.register(t)
         return reg
+
+    def test_enrich_rejects_an_unrecognized_tool_key(self):
+        """Enrichment reads every entry, so a typo surfaces at startup."""
+        reg = self._make_registry(ToolDefinition(name="search", function=lambda: None))
+        catalog = ToolCatalog(raw_tools={"search": {"descriptions": "Search the graph"}})
+
+        with pytest.raises(ValidationError, match="descriptions"):
+            catalog.enrich_registry(reg)
 
     def test_yaml_overwrites_empty_decorator_fields(self):
         """YAML fills in metadata that the decorator left empty."""

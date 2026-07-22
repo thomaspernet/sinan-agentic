@@ -63,6 +63,20 @@ class TestConfigValidation:
         with pytest.raises(ValidationError):
             RetryBackoffConfig(initial_delay=-1.0)
 
+    def test_rejects_an_unknown_key(self) -> None:
+        """A typo must fail loudly rather than silently leave the field at its default."""
+        with pytest.raises(ValidationError, match="typo"):
+            ModelRetryConfig(typo=5)
+
+    def test_rejects_a_backoff_field_declared_one_level_too_high(self) -> None:
+        """``initial_delay`` belongs under ``backoff:``, not beside it."""
+        with pytest.raises(ValidationError, match="initial_delay"):
+            ModelRetryConfig(initial_delay=0.5)
+
+    def test_rejects_an_unknown_backoff_key(self) -> None:
+        with pytest.raises(ValidationError, match="typo"):
+            RetryBackoffConfig(typo=0.5)
+
 
 class TestBuild:
     def test_produces_sdk_settings_with_a_policy(self) -> None:

@@ -19,7 +19,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from .tool_registry import ToolRegistry
 
@@ -44,12 +44,30 @@ class ToolMCPConfig(BaseModel):
               readOnlyHint: true
     """
 
+    # ``expose`` and ``annotations`` are the whole block, so an unknown key is a
+    # typo — and because ``expose`` defaults to False, an accepted ``exposed:
+    # true`` would leave the tool unexposed while reading as opted in. The
+    # annotation names inside ``annotations`` are not gated here: this model
+    # carries them as a free mapping, and ``MCPAnnotationsConfig``
+    # (``mcp/yaml_schema.py``) is the typed schema that names them.
+    model_config = ConfigDict(extra="forbid")
+
     expose: bool = False
     annotations: dict[str, Any] = {}
 
 
 class ToolYamlEntry(BaseModel):
-    """Resolved tool entry from tools.yaml."""
+    """Resolved tool entry from tools.yaml.
+
+    :meth:`ToolCatalog.get` builds this straight from the raw entry, so these
+    fields are the whole of what a tool may declare in ``tools.yaml``.
+    """
+
+    # An unknown key is a typo or a field that belongs elsewhere (``name`` comes
+    # from the mapping key, and the function binding lives on the decorator), and
+    # this model is the only gate a tool entry passes through — so reject it
+    # rather than drop it silently.
+    model_config = ConfigDict(extra="forbid")
 
     description: str = ""
     category: str = ""
