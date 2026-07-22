@@ -25,7 +25,7 @@ from enum import Enum
 
 from agents import ModelRetryBackoffSettings, ModelRetrySettings, ModelSettings
 from agents.retry import RetryPolicy, retry_policies
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # Attempts after the initial request. Two covers the transient blips a single
 # retry misses without turning a hard outage into a long stall.
@@ -68,6 +68,11 @@ class RetryBackoffConfig(BaseModel):
     provider-supplied ``Retry-After`` always wins over this schedule.
     """
 
+    # Every field being optional is exactly what makes an unknown key dangerous:
+    # a mistyped delay leaves the whole schedule at the SDK's defaults, so the
+    # declaration reads as honored and changes nothing. Reject it instead.
+    model_config = ConfigDict(extra="forbid")
+
     initial_delay: float | None = Field(default=None, ge=0)
     max_delay: float | None = Field(default=None, ge=0)
     multiplier: float | None = Field(default=None, ge=0)
@@ -90,6 +95,12 @@ class ModelRetryConfig(BaseModel):
                 initial_delay: 0.5
                 max_delay: 8.0
     """
+
+    # An unknown key is a typo or a backoff field written one level too high
+    # (``initial_delay`` belongs under ``backoff:``, not beside it), and this
+    # model is the only gate the declaration passes through — so reject it
+    # rather than drop it silently.
+    model_config = ConfigDict(extra="forbid")
 
     max_retries: int = Field(default=DEFAULT_MAX_RETRIES, ge=1)
     retry_on: list[RetryTrigger] = Field(

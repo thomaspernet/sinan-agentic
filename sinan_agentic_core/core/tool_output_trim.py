@@ -27,7 +27,7 @@ from __future__ import annotations
 from typing import Any
 
 from agents.extensions import ToolOutputTrimmer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ToolOutputTrimConfig(BaseModel):
@@ -63,6 +63,12 @@ class ToolOutputTrimConfig(BaseModel):
         trimmable_tools: Tool names whose outputs may be trimmed. Unset means
             every tool is eligible.
     """
+
+    # These four are the whole of the SDK filter (``ToolOutputTrimmer``,
+    # openai-agents 0.18.3), so an unknown key is a typo — and because every
+    # field is optional, an accepted typo would leave the policy at SDK defaults
+    # while reading as honored. Reject it rather than drop it silently.
+    model_config = ConfigDict(extra="forbid")
 
     recent_turns: int | None = Field(default=None, ge=1)
     max_output_chars: int | None = Field(default=None, ge=1)

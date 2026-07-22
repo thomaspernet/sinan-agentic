@@ -365,8 +365,10 @@ class AgentCatalog:
 
         Raises:
             KeyError: If the MCP server is not defined in agents.yaml.
+            ValidationError: If the block declares a key the model does not
+                carry, or a value of the wrong shape.
         """
-        from ..mcp.yaml_schema import MCPPromptConfig, MCPResourceConfig, MCPServerConfig
+        from ..mcp.yaml_schema import MCPServerConfig
 
         if name not in self._raw_mcp_servers:
             available = ", ".join(sorted(self._raw_mcp_servers.keys()))
@@ -376,24 +378,18 @@ class AgentCatalog:
 
         raw = self._raw_mcp_servers[name]
 
-        # Resolve tools (expand groups, evaluate conditions)
-        tools = _resolve_tools(raw.get("tools", []), self._tool_groups, config)
-        write_tools = _resolve_tools(raw.get("write_tools", []), self._tool_groups, config)
-
-        # Parse resources
-        resources = [MCPResourceConfig(**r) for r in raw.get("resources", [])]
-
-        # Parse prompts
-        prompts = [MCPPromptConfig(**p) for p in raw.get("prompts", [])]
-
-        return MCPServerConfig(
+        # The whole raw block is forwarded so an unrecognized key reaches the
+        # model's extra="forbid" gate instead of being dropped here. Only the two
+        # tool lists need resolving first (groups expanded, conditions evaluated);
+        # ``resources`` and ``prompts`` are validated by the model's own fields,
+        # and ``name`` comes from the mapping key rather than the block.
+        resolved = dict(raw)
+        resolved.update(
             name=name,
-            description=raw.get("description", ""),
-            tools=tools,
-            write_tools=write_tools,
-            resources=resources,
-            prompts=prompts,
+            tools=_resolve_tools(raw.get("tools", []), self._tool_groups, config),
+            write_tools=_resolve_tools(raw.get("write_tools", []), self._tool_groups, config),
         )
+        return MCPServerConfig(**resolved)
 
     def list_mcp_servers(self) -> list[str]:
         """List all MCP server names in the catalog."""

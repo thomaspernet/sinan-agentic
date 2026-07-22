@@ -80,6 +80,16 @@ class TestConfigValidation:
         with pytest.raises(ValidationError):
             ToolOutputTrimConfig(preview_chars=-1)
 
+    def test_rejects_an_unknown_key(self) -> None:
+        """A typo must fail loudly rather than silently leave the policy at SDK defaults."""
+        with pytest.raises(ValidationError, match="typo"):
+            ToolOutputTrimConfig(typo=3)
+
+    def test_rejects_a_misspelled_field(self) -> None:
+        """The near-miss is the realistic case — it would trim nothing, silently."""
+        with pytest.raises(ValidationError, match="max_output_char"):
+            ToolOutputTrimConfig(max_output_char=4000)
+
     def test_accepts_a_preview_at_the_cap(self) -> None:
         """The two sizes are independent — the SDK compares replacement to original."""
         config = ToolOutputTrimConfig(max_output_chars=500, preview_chars=500)

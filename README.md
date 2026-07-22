@@ -447,6 +447,8 @@ catalog = load_tool_catalog("tools.yaml")
 catalog.enrich_registry(get_tool_registry())
 ```
 
+Those five fields plus the optional `mcp` block are the whole of a tool entry, and an unrecognized key there is rejected when the catalog resolves the tool — a misspelled `recovery_hints` fails at startup rather than leaving the tool without a hint.
+
 ### How the merge works
 
 Registration happens in two phases:
@@ -546,6 +548,8 @@ mcp_servers:
       - create_record
       - update_record
 ```
+
+`description`, `tools`, `write_tools`, `resources`, and `prompts` are the whole of a server block — the server's own name comes from the mapping key — and an unrecognized key there is rejected when `get_mcp_server()` resolves it. A hyphenated `write-tools` therefore fails instead of exposing nothing. The `mcp:` block on a tool is gated the same way, so `exposed: true` fails rather than leaving the tool unexposed.
 
 ### Building the server
 
@@ -1033,6 +1037,8 @@ agents:
 
 Every field is optional, so `model_retry: {}` opts in with the defaults — two attempts after the initial request, on the triggers listed below. Only a missing key means the agent opts out.
 
+`max_retries`, `retry_on`, and `backoff` are the whole of the `model_retry:` block, and an unrecognized key — there or inside `backoff:` — is rejected at load time. A delay field written beside `backoff:` instead of under it therefore fails, rather than leaving the schedule at SDK defaults while reading as declared.
+
 ```python
 from sinan_agentic_core import AgentDefinition, ModelRetryConfig, register_agent
 
@@ -1083,6 +1089,8 @@ agents:
 ```
 
 Every field is optional and the SDK fills an unset one with its own default, so `tool_output_trim: {}` opts in with defaults throughout.
+
+Those four are the whole of the `tool_output_trim:` block, and an unrecognized key there is rejected at load time — a misspelled `max_output_char` fails instead of trimming on the SDK's default cap.
 
 ```python
 from sinan_agentic_core import AgentDefinition, ToolOutputTrimConfig, register_agent

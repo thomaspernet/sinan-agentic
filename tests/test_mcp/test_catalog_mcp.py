@@ -174,6 +174,39 @@ def test_agent_catalog_get_mcp_server():
     assert config.prompts[0].name == "research"
 
 
+def test_agent_catalog_get_mcp_server_rejects_an_unrecognized_key():
+    """The whole raw block reaches the model, so a typo fails instead of exposing nothing."""
+    catalog = AgentCatalog(
+        tool_groups={},
+        raw_agents={},
+        raw_mcp_servers={
+            "knowledge_graph": {
+                "description": "My knowledge graph",
+                "write-tools": ["create_page"],
+            },
+        },
+    )
+
+    with pytest.raises(ValidationError, match="write-tools"):
+        catalog.get_mcp_server("knowledge_graph")
+
+
+def test_agent_catalog_get_mcp_server_rejects_an_unrecognized_resource_key():
+    """Nested entries are validated by the model's own fields, on the same terms."""
+    catalog = AgentCatalog(
+        tool_groups={},
+        raw_agents={},
+        raw_mcp_servers={
+            "knowledge_graph": {
+                "resources": [{"uri": "test://project", "descriptions": "Project"}],
+            },
+        },
+    )
+
+    with pytest.raises(ValidationError, match="descriptions"):
+        catalog.get_mcp_server("knowledge_graph")
+
+
 def test_agent_catalog_get_mcp_server_not_found():
     """get_mcp_server() raises KeyError for unknown server."""
     catalog = AgentCatalog(
