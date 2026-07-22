@@ -19,7 +19,7 @@ import json
 import logging
 import types
 import uuid
-from typing import Any
+from typing import Any, Union, get_args, get_origin
 
 from ..registry.tool_registry import ToolDefinition, ToolRegistry
 from .context_protocol import MCPContextFactory
@@ -30,6 +30,73 @@ logger = logging.getLogger(__name__)
 def _has_on_invoke_tool(obj: Any) -> bool:
     """Check if *obj* is a FunctionTool with ``on_invoke_tool``."""
     return hasattr(obj, "on_invoke_tool") and callable(obj.on_invoke_tool)
+
+
+_JSON_NULL = "null"
+_JSON_ARRAY = "array"
+_JSON_OBJECT = "object"
+
+# The single authoritative scalar mapping. Both translation directions read it:
+# ``_resolve_annotation`` (schema to annotation) forwards, ``_resolve_schema``
+# (annotation to schema) through the inverse below. A scalar added here reaches
+# both directions at once, so the two cannot drift.
+_JSON_SCALARS: dict[str, Any] = {
+    "string": str,
+    "integer": int,
+    "number": float,
+    "boolean": bool,
+}
+
+_PYTHON_SCALARS: dict[Any, str] = {python: json for json, python in _JSON_SCALARS.items()}
+
+
+def _resolve_schema(annotation: Any) -> tuple[dict[str, Any], bool]:
+    """Resolve a Python annotation into a JSON-schema property.
+
+    Returns the property and whether it accepts ``None``.
+
+    Parameterized annotations resolve through ``get_origin``/``get_args``, so
+    ``list[str]`` keeps its element type and nested containers survive. A union
+    collapses to its branches; a ``None`` member marks the property nullable and
+    adds a ``{"type": "null"}`` branch.
+
+    An annotation the mapping does not cover resolves to an unconstrained
+    property. That is honest about what the builder knows; asserting ``string``
+    — the previous fallback — advertises a type the tool would reject.
+    """
+    if annotation is inspect.Parameter.empty or annotation is Any:
+        return {}, False
+    if annotation is type(None):
+        return {"type": _JSON_NULL}, True
+
+    origin = get_origin(annotation)
+
+    if origin in (types.UnionType, Union):
+        args = get_args(annotation)
+        branches = [arg for arg in args if arg is not type(None)]
+        nullable = len(branches) != len(args)
+        schemas = [_resolve_schema(branch)[0] for branch in branches]
+        if nullable:
+            schemas.append({"type": _JSON_NULL})
+        if len(schemas) == 1:
+            return schemas[0], nullable
+        return {"anyOf": schemas}, nullable
+
+    if origin is list or annotation is list:
+        args = get_args(annotation)
+        prop: dict[str, Any] = {"type": _JSON_ARRAY}
+        items = _resolve_schema(args[0])[0] if args else {}
+        if items:
+            prop["items"] = items
+        return prop, False
+
+    if origin is dict or annotation is dict:
+        return {"type": _JSON_OBJECT}, False
+
+    scalar = _PYTHON_SCALARS.get(annotation)
+    if scalar is not None:
+        return {"type": scalar}, False
+    return {}, False
 
 
 def _get_params_schema(tool_def: ToolDefinition) -> dict[str, Any]:
@@ -49,14 +116,6 @@ def _get_params_schema(tool_def: ToolDefinition) -> dict[str, Any]:
     sig = inspect.signature(fn)
     properties: dict[str, Any] = {}
     required: list[str] = []
-    type_map = {
-        str: "string",
-        int: "integer",
-        float: "number",
-        bool: "boolean",
-        list: "array",
-        dict: "object",
-    }
 
     for name, param in sig.parameters.items():
         if name == "ctx":
@@ -67,30 +126,16 @@ def _get_params_schema(tool_def: ToolDefinition) -> dict[str, Any]:
         ):
             continue
 
-        annotation = param.annotation
-        json_type = type_map.get(annotation, "string")
-        prop: dict[str, Any] = {"type": json_type}
+        prop, nullable = _resolve_schema(param.annotation)
 
-        if param.default is inspect.Parameter.empty:
-            required.append(name)
-        else:
+        if param.default is not inspect.Parameter.empty:
             prop["default"] = param.default
+        elif not nullable:
+            required.append(name)
 
         properties[name] = prop
 
     return {"type": "object", "properties": properties, "required": required}
-
-
-_JSON_NULL = "null"
-_JSON_ARRAY = "array"
-_JSON_OBJECT = "object"
-
-_JSON_SCALARS: dict[str, Any] = {
-    "string": str,
-    "integer": int,
-    "number": float,
-    "boolean": bool,
-}
 
 
 def _resolve_annotation(prop_def: dict[str, Any]) -> tuple[Any, bool]:
