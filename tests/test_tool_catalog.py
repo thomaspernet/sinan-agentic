@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from sinan_agentic_core.registry.tool_catalog import (
     ToolCatalog,
+    ToolMCPConfig,
     ToolYamlEntry,
     load_tool_catalog,
 )
@@ -154,6 +155,86 @@ class TestToolCatalogCopiesTheCallersMap:
 
         assert first.get("search").description == "Search stuff"
         assert second.get("search").description == "Search things"
+
+
+# ---------------------------------------------------------------------------
+# Resolved entries own their values
+# ---------------------------------------------------------------------------
+
+
+class TestResolvedEntriesOwnTheirValues:
+    """A resolved entry is a snapshot too, so editing it cannot reach the catalog.
+
+    Pydantic rebuilds the containers it has a declared type for and stops at
+    ``Any``: ``ToolMCPConfig.annotations`` is ``dict[str, Any]``, so the outer
+    mapping is new on every ``get()`` while an annotation value that is itself a
+    mapping or a list is what the catalog would hand out by reference.
+    """
+
+    @staticmethod
+    def _catalog() -> ToolCatalog:
+        return ToolCatalog(
+            raw_tools={
+                "search": {
+                    "description": "Search stuff",
+                    "mcp": {
+                        "expose": True,
+                        "annotations": {
+                            "audience": ["user"],
+                            "hints": {"readOnlyHint": True},
+                        },
+                    },
+                },
+            }
+        )
+
+    def test_an_edit_inside_a_nested_annotation_mapping_is_not_visible(self):
+        catalog = self._catalog()
+
+        catalog.get("search").mcp.annotations["hints"]["readOnlyHint"] = False
+
+        assert catalog.get("search").mcp.annotations["hints"] == {"readOnlyHint": True}
+
+    def test_an_edit_inside_a_nested_annotation_list_is_not_visible(self):
+        catalog = self._catalog()
+
+        catalog.get("search").mcp.annotations["audience"].append("assistant")
+
+        assert catalog.get("search").mcp.annotations["audience"] == ["user"]
+
+    def test_an_annotation_added_to_a_resolved_entry_is_not_visible(self):
+        catalog = self._catalog()
+
+        catalog.get("search").mcp.annotations["destructiveHint"] = True
+
+        assert list(catalog.get("search").mcp.annotations) == ["audience", "hints"]
+
+    def test_two_entries_do_not_share_a_nested_annotation_mapping(self):
+        catalog = self._catalog()
+        first = catalog.get("search")
+        second = catalog.get("search")
+
+        first.mcp.annotations["hints"]["readOnlyHint"] = False
+
+        assert second.mcp.annotations["hints"] == {"readOnlyHint": True}
+
+    def test_two_entries_do_not_share_a_nested_annotation_list(self):
+        catalog = self._catalog()
+        first = catalog.get("search")
+        second = catalog.get("search")
+
+        first.mcp.annotations["audience"].append("assistant")
+
+        assert second.mcp.annotations["audience"] == ["user"]
+
+    def test_the_declared_values_survive_the_copy(self):
+        entry = self._catalog().get("search")
+
+        assert entry.description == "Search stuff"
+        assert entry.mcp == ToolMCPConfig(
+            expose=True,
+            annotations={"audience": ["user"], "hints": {"readOnlyHint": True}},
+        )
 
 
 # ---------------------------------------------------------------------------
