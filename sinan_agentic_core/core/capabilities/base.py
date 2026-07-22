@@ -151,6 +151,10 @@ class Capability:
         message content from the chat-completions call (``None`` if the
         provider returned no content); ``usage`` is the token-usage dict
         captured from the response (``None`` if the provider omitted it).
+
+        The capability owns its ``usage`` dict: each one receives a deep copy,
+        so it is free to keep or annotate it without reaching the runner's
+        ``last_usage`` record or another capability's copy.
         """
         return None
 

@@ -6,6 +6,7 @@ execute() with flags for streaming, fallback_on_overflow, etc.
 Also retains run_agent() for backward compatibility.
 """
 
+import copy
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -86,6 +87,12 @@ class BaseAgentRunner:
         self.agent_registry = get_agent_registry()
         self.tool_registry = get_tool_registry()
         self.guardrail_registry = get_guardrail_registry()
+
+        # The runner's own record of the last run's token usage. The runner
+        # outlives every run it drives, so this record is never handed to a
+        # consumer as-is: each hand-out (a streamed answer event, a capability's
+        # on_fallback_end) gets its own deep copy. A shallow copy would leave the
+        # nested *_tokens_details mappings shared.
         self.last_usage: dict[str, Any] | None = None
 
         self.tool_map = self.tool_registry.get_all_functions()
@@ -510,7 +517,7 @@ class BaseAgentRunner:
                 self.last_usage = fallback_usage
 
             for cap in capabilities:
-                cap.on_fallback_end(ctx_wrapper, content, fallback_usage)
+                cap.on_fallback_end(ctx_wrapper, content, copy.deepcopy(fallback_usage))
 
             if output_schema is None:
                 return content
@@ -549,6 +556,11 @@ class BaseAgentRunner:
 
         Adds user message to session, streams events via on_event callback,
         and returns final_output.
+
+        The ``answer`` event owns its ``usage`` payload: it is a deep copy of the
+        record kept as ``self.last_usage``, so editing it does not rewrite the
+        runner's own record and a later reader of ``last_usage`` does not see
+        whatever a consumer wrote into a delivered event.
         """
         capabilities = capabilities or []
         agent_def = self._get_agent_definition(agent_name)
@@ -669,7 +681,11 @@ class BaseAgentRunner:
             on_event(
                 {
                     "event": "answer",
-                    "data": {"response": response, "tools_called": tools_called, "usage": usage},
+                    "data": {
+                        "response": response,
+                        "tools_called": tools_called,
+                        "usage": copy.deepcopy(usage),
+                    },
                 }
             )
 
