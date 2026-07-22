@@ -1,13 +1,19 @@
 """Tests for MCPToolAdapter — tool invocation and handler building."""
 
+import inspect
 import json
+from typing import Any
 
 import pytest
 from agents import function_tool
 from agents.tool_context import ToolContext
 
 from sinan_agentic_core.mcp.context_protocol import MCPContextFactory
-from sinan_agentic_core.mcp.tool_adapter import MCPToolAdapter, _get_params_schema
+from sinan_agentic_core.mcp.tool_adapter import (
+    MCPToolAdapter,
+    _get_params_schema,
+    _resolve_annotation,
+)
 from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
 
 # ---------------------------------------------------------------------------
@@ -45,9 +51,28 @@ async def search_tool(ctx: ToolContext, query: str, limit: int = 10) -> str:
     return json.dumps({"query": query, "limit": limit})
 
 
+@function_tool
+async def container_tool(
+    ctx: ToolContext,
+    labels: list[str],
+    counts: list[int],
+    tags: list[str] | None = None,
+    matrix: list[list[str]] | None = None,
+) -> str:
+    """Take container parameters."""
+    return json.dumps({"labels": labels, "counts": counts, "tags": tags, "matrix": matrix})
+
+
 @pytest.fixture
 def registry():
     reg = ToolRegistry()
+    reg.register(
+        ToolDefinition(
+            name="containers",
+            function=container_tool,
+            description="Take container parameters",
+        )
+    )
     reg.register(
         ToolDefinition(
             name="discover",
@@ -134,8 +159,6 @@ def test_build_mcp_handler_signature(adapter):
     assert handler.__name__ == "discover"
     assert handler.__doc__ == "Discover what's available"
 
-    import inspect
-
     sig = inspect.signature(handler)
     assert "target" in sig.parameters
     # ctx should NOT appear
@@ -144,8 +167,6 @@ def test_build_mcp_handler_signature(adapter):
 
 def test_build_mcp_handler_search_signature(adapter):
     handler = adapter.build_mcp_handler("search")
-
-    import inspect
 
     sig = inspect.signature(handler)
     params = sig.parameters
@@ -166,3 +187,120 @@ async def test_build_mcp_handler_callable(adapter):
 def test_build_mcp_handler_unknown_tool(adapter):
     with pytest.raises(KeyError, match="not_real"):
         adapter.build_mcp_handler("not_real")
+
+
+# ---------------------------------------------------------------------------
+# Tests: _resolve_annotation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("prop_def", "expected_annotation", "expected_nullable"),
+    [
+        ({"type": "string"}, str, False),
+        ({"type": "integer"}, int, False),
+        ({"type": "array", "items": {"type": "string"}}, list[str], False),
+        ({"type": "array", "items": {"type": "integer"}}, list[int], False),
+        ({"type": "object"}, dict[str, Any], False),
+        ({"type": "array"}, list[Any], False),
+        (
+            {
+                "type": "array",
+                "items": {"type": "array", "items": {"type": "string"}},
+            },
+            list[list[str]],
+            False,
+        ),
+        (
+            {
+                "anyOf": [
+                    {"type": "array", "items": {"type": "string"}},
+                    {"type": "null"},
+                ]
+            },
+            list[str],
+            True,
+        ),
+        (
+            {
+                "anyOf": [
+                    {
+                        "type": "array",
+                        "items": {"type": "array", "items": {"type": "integer"}},
+                    },
+                    {"type": "null"},
+                ]
+            },
+            list[list[int]],
+            True,
+        ),
+        ({"anyOf": [{"type": "object"}, {"type": "null"}]}, dict[str, Any], True),
+        ({"anyOf": [{"type": "string"}, {"type": "integer"}]}, str | int, False),
+        # No type key and no anyOf: the builder has no information to assert one.
+        ({}, Any, False),
+        ({"type": "unheard-of"}, Any, False),
+    ],
+)
+def test_resolve_annotation(prop_def, expected_annotation, expected_nullable):
+    annotation, nullable = _resolve_annotation(prop_def)
+    assert annotation == expected_annotation
+    assert nullable is expected_nullable
+
+
+# ---------------------------------------------------------------------------
+# Tests: container parameters end-to-end
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("param_name", "expected_annotation", "expected_optional"),
+    [
+        ("labels", list[str], False),
+        ("counts", list[int], False),
+        ("tags", list[str] | None, True),
+        ("matrix", list[list[str]] | None, True),
+    ],
+)
+def test_container_params_keep_their_type(
+    adapter, param_name, expected_annotation, expected_optional
+):
+    handler = adapter.build_mcp_handler("containers")
+    param = inspect.signature(handler).parameters[param_name]
+
+    assert param.annotation == expected_annotation
+    if expected_optional:
+        assert param.default is None
+    else:
+        assert param.default is inspect.Parameter.empty
+
+
+def test_object_property_becomes_a_dict_param(adapter):
+    from sinan_agentic_core.mcp.tool_adapter import _build_mcp_handler
+
+    schema = {
+        "type": "object",
+        "properties": {"filters": {"type": "object"}},
+        "required": ["filters"],
+    }
+    handler = _build_mcp_handler("filtered", schema, "Filtered", adapter)
+    param = inspect.signature(handler).parameters["filters"]
+
+    assert param.annotation == dict[str, Any]
+    assert param.default is inspect.Parameter.empty
+
+
+async def test_optional_container_can_be_omitted(adapter):
+    handler = adapter.build_mcp_handler("containers")
+    data = json.loads(await handler(labels=["a"], counts=[1]))
+
+    assert data["labels"] == ["a"]
+    assert data["counts"] == [1]
+    assert data["tags"] is None
+
+
+async def test_optional_container_accepts_a_list(adapter):
+    handler = adapter.build_mcp_handler("containers")
+    data = json.loads(await handler(labels=["a"], counts=[1], tags=["x", "y"], matrix=[["n"]]))
+
+    assert data["tags"] == ["x", "y"]
+    assert data["matrix"] == [["n"]]

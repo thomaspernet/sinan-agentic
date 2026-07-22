@@ -17,6 +17,7 @@ Two invocation paths:
 import inspect
 import json
 import logging
+import types
 import uuid
 from typing import Any
 
@@ -80,6 +81,55 @@ def _get_params_schema(tool_def: ToolDefinition) -> dict[str, Any]:
     return {"type": "object", "properties": properties, "required": required}
 
 
+_JSON_NULL = "null"
+_JSON_ARRAY = "array"
+_JSON_OBJECT = "object"
+
+_JSON_SCALARS: dict[str, Any] = {
+    "string": str,
+    "integer": int,
+    "number": float,
+    "boolean": bool,
+}
+
+
+def _resolve_annotation(prop_def: dict[str, Any]) -> tuple[Any, bool]:
+    """Resolve a JSON-schema property into a Python annotation.
+
+    Returns the annotation and whether the property accepts ``null``.
+
+    An ``anyOf`` collapses to the union of its non-null branches; a
+    ``{"type": "null"}`` branch marks the property nullable. Arrays keep their
+    element type (``items`` resolves recursively, so nested containers survive)
+    and objects become ``dict[str, Any]``.
+
+    A shape the mapping does not cover resolves to ``Any``. An unconstrained
+    parameter is honest about what the builder knows; asserting ``str`` — the
+    previous fallback — advertises a type the tool would reject at invocation.
+    """
+    any_of = prop_def.get("anyOf")
+    if any_of:
+        branches = [b for b in any_of if b.get("type") != _JSON_NULL]
+        nullable = len(branches) != len(any_of)
+        if not branches:
+            return type(None), True
+        annotation, _ = _resolve_annotation(branches[0])
+        for branch in branches[1:]:
+            annotation = annotation | _resolve_annotation(branch)[0]
+        return annotation, nullable
+
+    json_type = str(prop_def.get("type", ""))
+    if json_type == _JSON_ARRAY:
+        items = prop_def.get("items")
+        item_type = _resolve_annotation(items)[0] if items else Any
+        return types.GenericAlias(list, (item_type,)), False
+    if json_type == _JSON_OBJECT:
+        return dict[str, Any], False
+    if json_type == _JSON_NULL:
+        return type(None), True
+    return _JSON_SCALARS.get(json_type, Any), False
+
+
 def _build_mcp_handler(
     tool_name: str,
     params_schema: dict[str, Any],
@@ -94,29 +144,20 @@ def _build_mcp_handler(
     properties = params_schema.get("properties", {})
     required_set = set(params_schema.get("required", []))
 
-    json_to_python = {
-        "string": str,
-        "integer": int,
-        "number": float,
-        "boolean": bool,
-        "array": list,
-        "object": dict,
-    }
-
     parameters: list[inspect.Parameter] = []
     annotations: dict[str, Any] = {}
 
     for prop_name, prop_def in properties.items():
-        json_type = prop_def.get("type", "string")
-        py_type = json_to_python.get(json_type, str)
+        py_type, nullable = _resolve_annotation(prop_def)
         has_default = "default" in prop_def
-        is_required = prop_name in required_set and not has_default
+        is_required = prop_name in required_set and not has_default and not nullable
 
         if is_required:
             default = inspect.Parameter.empty
         else:
             default = prop_def.get("default", None)
-            py_type = py_type | None  # type: ignore[assignment]
+            if nullable or default is None:
+                py_type = py_type | None
 
         parameters.append(
             inspect.Parameter(
