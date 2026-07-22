@@ -69,7 +69,11 @@ def _resolve_schema(annotation: Any) -> tuple[dict[str, Any], bool]:
     """
     if annotation is inspect.Parameter.empty or annotation is Any:
         return {}, False
-    if annotation is type(None):
+    # Both spellings of the null annotation reach here. ``inspect.signature``
+    # reports ``x: None`` as the literal ``None`` and ``get_args(list[None])``
+    # yields ``None`` too, so ``NoneType`` alone would miss every declaration
+    # short of an explicit ``types.NoneType``.
+    if annotation is None or annotation is type(None):
         return {"type": _JSON_NULL}, True
 
     origin = get_origin(annotation)

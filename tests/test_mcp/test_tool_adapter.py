@@ -70,6 +70,7 @@ async def raw_container_tool(
     labels: list[str],
     counts: list[int],
     filters: dict[str, Any],
+    nothing: None,
     tags: list[str] | None = None,
     matrix: list[list[str]] | None = None,
     extras: dict[str, Any] | None = None,
@@ -317,6 +318,10 @@ def test_resolve_annotation(prop_def, expected_annotation, expected_nullable):
             True,
         ),
         (str | None, {"anyOf": [{"type": "string"}, {"type": "null"}]}, True),
+        # Both spellings of the null annotation, and one nested in a container.
+        (None, {"type": "null"}, True),
+        (type(None), {"type": "null"}, True),
+        (list[None], {"type": "array", "items": {"type": "null"}}, False),
         (str | int, {"anyOf": [{"type": "string"}, {"type": "integer"}]}, False),
         # No information to assert a type from.
         (Any, {}, False),
@@ -340,6 +345,7 @@ def test_resolve_schema(annotation, expected_schema, expected_nullable):
             list[list[int]],
         ),
         ({"type": "object"}, dict[str, Any]),
+        ({"type": "null"}, type(None)),
         (
             {"anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}]},
             list[str] | None,
@@ -366,6 +372,7 @@ def test_the_two_directions_round_trip(prop_def, annotation):
         ("labels", {"type": "array", "items": {"type": "string"}}),
         ("counts", {"type": "array", "items": {"type": "integer"}}),
         ("filters", {"type": "object"}),
+        ("nothing", {"type": "null"}),
         (
             "tags",
             {
@@ -398,6 +405,7 @@ def test_raw_function_containers_keep_their_type(registry, param_name, expected_
 
 
 def test_raw_function_optional_params_are_not_required(registry):
+    """A nullable param stays out of ``required`` even with no default."""
     schema = _get_params_schema(registry.get_tool("raw_containers"))
 
     assert schema["required"] == ["query", "labels", "counts", "filters"]
