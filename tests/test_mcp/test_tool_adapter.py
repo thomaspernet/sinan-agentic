@@ -57,11 +57,54 @@ async def container_tool(
     ctx: ToolContext,
     labels: list[str],
     counts: list[int],
+    matrix: list[list[str]],
     tags: list[str] | None = None,
-    matrix: list[list[str]] | None = None,
+    scores: list[int] | None = None,
+    grid: list[list[str]] | None = None,
 ) -> str:
     """Take container parameters."""
-    return json.dumps({"labels": labels, "counts": counts, "tags": tags, "matrix": matrix})
+    return json.dumps(
+        {
+            "labels": labels,
+            "counts": counts,
+            "matrix": matrix,
+            "tags": tags,
+            "scores": scores,
+            "grid": grid,
+        }
+    )
+
+
+# The SDK's strict schema rejects ``dict[str, Any]`` outright — it forbids the
+# ``additionalProperties`` key Pydantic emits for an open mapping. The dict
+# shapes therefore run through a non-strict ``FunctionTool``: the same
+# ``params_json_schema`` entry point, carrying the one shape strict mode cannot
+# express.
+@function_tool(strict_mode=False)
+async def lenient_container_tool(
+    ctx: ToolContext,
+    labels: list[str],
+    counts: list[int],
+    matrix: list[list[str]],
+    filters: dict[str, Any],
+    tags: list[str] | None = None,
+    scores: list[int] | None = None,
+    grid: list[list[str]] | None = None,
+    extras: dict[str, Any] | None = None,
+) -> str:
+    """Take container parameters, dicts included."""
+    return json.dumps(
+        {
+            "labels": labels,
+            "counts": counts,
+            "matrix": matrix,
+            "filters": filters,
+            "tags": tags,
+            "scores": scores,
+            "grid": grid,
+            "extras": extras,
+        }
+    )
 
 
 async def raw_container_tool(
@@ -69,15 +112,67 @@ async def raw_container_tool(
     query: str,
     labels: list[str],
     counts: list[int],
+    matrix: list[list[str]],
     filters: dict[str, Any],
-    nothing: None,
     tags: list[str] | None = None,
-    matrix: list[list[str]] | None = None,
+    scores: list[int] | None = None,
+    grid: list[list[str]] | None = None,
     extras: dict[str, Any] | None = None,
-    unannotated=None,
 ) -> str:
     """Take container parameters without a FunctionTool wrapper."""
-    return json.dumps({"query": query, "labels": labels, "tags": tags})
+    return json.dumps(
+        {
+            "query": query,
+            "labels": labels,
+            "counts": counts,
+            "matrix": matrix,
+            "filters": filters,
+            "tags": tags,
+            "scores": scores,
+            "grid": grid,
+            "extras": extras,
+        }
+    )
+
+
+async def raw_untyped_tool(ctx: Any, nothing: None, unannotated=None) -> str:
+    """Declare parameters the schema builder has no type to assert."""
+    return json.dumps({"nothing": nothing, "unannotated": unannotated})
+
+
+# The three entry points the schema builder reaches a parameter through. Every
+# container case below runs against all of them, so neither path can regress on
+# its own.
+CONTAINER_ENTRY_POINTS = ("containers", "lenient_containers", "raw_containers")
+
+# Only the paths that can express an open mapping — the SDK's strict schema
+# cannot (see ``lenient_container_tool``).
+DICT_ENTRY_POINTS = ("lenient_containers", "raw_containers")
+
+# (parameter, expected annotation, expected optional)
+CONTAINER_CASES = [
+    ("labels", list[str], False),
+    ("counts", list[int], False),
+    ("matrix", list[list[str]], False),
+    ("tags", list[str] | None, True),
+    ("scores", list[int] | None, True),
+    ("grid", list[list[str]] | None, True),
+]
+
+DICT_CASES = [
+    ("filters", dict[str, Any], False),
+    ("extras", dict[str, Any] | None, True),
+]
+
+CONTAINER_MATRIX = [
+    (tool_name, *case)
+    for cases, entry_points in (
+        (CONTAINER_CASES, CONTAINER_ENTRY_POINTS),
+        (DICT_CASES, DICT_ENTRY_POINTS),
+    )
+    for tool_name in entry_points
+    for case in cases
+]
 
 
 @pytest.fixture
@@ -92,9 +187,23 @@ def registry():
     )
     reg.register(
         ToolDefinition(
+            name="raw_untyped",
+            function=raw_untyped_tool,
+            description="Declare parameters with no type to assert",
+        )
+    )
+    reg.register(
+        ToolDefinition(
             name="containers",
             function=container_tool,
             description="Take container parameters",
+        )
+    )
+    reg.register(
+        ToolDefinition(
+            name="lenient_containers",
+            function=lenient_container_tool,
+            description="Take container parameters, dicts included",
         )
     )
     reg.register(
@@ -372,7 +481,13 @@ def test_the_two_directions_round_trip(prop_def, annotation):
         ("labels", {"type": "array", "items": {"type": "string"}}),
         ("counts", {"type": "array", "items": {"type": "integer"}}),
         ("filters", {"type": "object"}),
-        ("nothing", {"type": "null"}),
+        (
+            "scores",
+            {
+                "anyOf": [{"type": "array", "items": {"type": "integer"}}, {"type": "null"}],
+                "default": None,
+            },
+        ),
         (
             "tags",
             {
@@ -382,6 +497,10 @@ def test_the_two_directions_round_trip(prop_def, annotation):
         ),
         (
             "matrix",
+            {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+        ),
+        (
+            "grid",
             {
                 "anyOf": [
                     {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
@@ -394,8 +513,6 @@ def test_the_two_directions_round_trip(prop_def, annotation):
             "extras",
             {"anyOf": [{"type": "object"}, {"type": "null"}], "default": None},
         ),
-        # No annotation: no type is asserted, rather than defaulting to string.
-        ("unannotated", {"default": None}),
     ],
 )
 def test_raw_function_containers_keep_their_type(registry, param_name, expected_prop):
@@ -404,23 +521,27 @@ def test_raw_function_containers_keep_their_type(registry, param_name, expected_
     assert schema["properties"][param_name] == expected_prop
 
 
+@pytest.mark.parametrize(
+    ("param_name", "expected_prop"),
+    [
+        ("nothing", {"type": "null"}),
+        # No annotation: no type is asserted, rather than defaulting to string.
+        ("unannotated", {"default": None}),
+    ],
+)
+def test_raw_function_untyped_params_assert_no_type(registry, param_name, expected_prop):
+    schema = _get_params_schema(registry.get_tool("raw_untyped"))
+
+    assert schema["properties"][param_name] == expected_prop
+
+
 def test_raw_function_optional_params_are_not_required(registry):
     """A nullable param stays out of ``required`` even with no default."""
     schema = _get_params_schema(registry.get_tool("raw_containers"))
 
-    assert schema["required"] == ["query", "labels", "counts", "filters"]
+    assert schema["required"] == ["query", "labels", "counts", "matrix", "filters"]
     assert "ctx" not in schema["properties"]
-
-
-def test_a_raw_function_handler_keeps_its_container_annotations(adapter):
-    handler = adapter.build_mcp_handler("raw_containers")
-    params = inspect.signature(handler).parameters
-
-    assert params["labels"].annotation == list[str]
-    assert params["labels"].default is inspect.Parameter.empty
-    assert params["tags"].annotation == list[str] | None
-    assert params["tags"].default is None
-    assert params["extras"].annotation == dict[str, Any] | None
+    assert _get_params_schema(registry.get_tool("raw_untyped"))["required"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -429,18 +550,19 @@ def test_a_raw_function_handler_keeps_its_container_annotations(adapter):
 
 
 @pytest.mark.parametrize(
-    ("param_name", "expected_annotation", "expected_optional"),
-    [
-        ("labels", list[str], False),
-        ("counts", list[int], False),
-        ("tags", list[str] | None, True),
-        ("matrix", list[list[str]] | None, True),
-    ],
+    ("tool_name", "param_name", "expected_annotation", "expected_optional"),
+    CONTAINER_MATRIX,
 )
 def test_container_params_keep_their_type(
-    adapter, param_name, expected_annotation, expected_optional
+    adapter, tool_name, param_name, expected_annotation, expected_optional
 ):
-    handler = adapter.build_mcp_handler("containers")
+    """Every entry point resolves a container to its declared shape.
+
+    Both halves of the defect are asserted per parameter: the annotation (an
+    unresolved container used to collapse to ``str``) and the requiredness (a
+    nullable parameter used to reach clients as mandatory).
+    """
+    handler = adapter.build_mcp_handler(tool_name)
     param = inspect.signature(handler).parameters[param_name]
 
     assert param.annotation == expected_annotation
@@ -450,33 +572,35 @@ def test_container_params_keep_their_type(
         assert param.default is inspect.Parameter.empty
 
 
-def test_object_property_becomes_a_dict_param(adapter):
-    from sinan_agentic_core.mcp.tool_adapter import _build_mcp_handler
+# Arguments that satisfy each entry point's required parameters. The optional
+# list under test (``tags``) is deliberately absent from every one.
+REQUIRED_ARGS = {
+    "containers": {"labels": ["a"], "counts": [1], "matrix": [["m"]]},
+    "lenient_containers": {"labels": ["a"], "counts": [1], "matrix": [["m"]], "filters": {}},
+    "raw_containers": {
+        "query": "q",
+        "labels": ["a"],
+        "counts": [1],
+        "matrix": [["m"]],
+        "filters": {},
+    },
+}
 
-    schema = {
-        "type": "object",
-        "properties": {"filters": {"type": "object"}},
-        "required": ["filters"],
-    }
-    handler = _build_mcp_handler("filtered", schema, "Filtered", adapter)
-    param = inspect.signature(handler).parameters["filters"]
 
-    assert param.annotation == dict[str, Any]
-    assert param.default is inspect.Parameter.empty
-
-
-async def test_optional_container_can_be_omitted(adapter):
-    handler = adapter.build_mcp_handler("containers")
-    data = json.loads(await handler(labels=["a"], counts=[1]))
+@pytest.mark.parametrize("tool_name", CONTAINER_ENTRY_POINTS)
+async def test_an_optional_container_can_be_omitted(adapter, tool_name):
+    handler = adapter.build_mcp_handler(tool_name)
+    data = json.loads(await handler(**REQUIRED_ARGS[tool_name]))
 
     assert data["labels"] == ["a"]
     assert data["counts"] == [1]
     assert data["tags"] is None
 
 
-async def test_optional_container_accepts_a_list(adapter):
-    handler = adapter.build_mcp_handler("containers")
-    data = json.loads(await handler(labels=["a"], counts=[1], tags=["x", "y"], matrix=[["n"]]))
+@pytest.mark.parametrize("tool_name", CONTAINER_ENTRY_POINTS)
+async def test_an_optional_container_accepts_a_list(adapter, tool_name):
+    handler = adapter.build_mcp_handler(tool_name)
+    data = json.loads(await handler(**REQUIRED_ARGS[tool_name], tags=["x", "y"], grid=[["n"]]))
 
     assert data["tags"] == ["x", "y"]
-    assert data["matrix"] == [["n"]]
+    assert data["grid"] == [["n"]]
