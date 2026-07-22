@@ -2,6 +2,7 @@
 
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -94,6 +95,65 @@ class TestToolCatalog:
         catalog = ToolCatalog(raw_tools={"search": {"description": "d", "categry": "graph"}})
         with pytest.raises(ValidationError, match="categry"):
             catalog.get("search")
+
+
+# ---------------------------------------------------------------------------
+# ToolCatalog copies the caller's map
+# ---------------------------------------------------------------------------
+
+
+class TestToolCatalogCopiesTheCallersMap:
+    """The catalog owns its data, so a later edit to the caller's dict cannot reach it."""
+
+    def test_a_new_tool_added_after_construction_is_not_visible(self):
+        raw_tools: dict[str, dict[str, Any]] = {"search": {"description": "Search stuff"}}
+        catalog = ToolCatalog(raw_tools=raw_tools)
+
+        raw_tools["late_tool"] = {"description": "Added late"}
+
+        assert catalog.list_tools() == ["search"]
+
+    def test_an_edit_inside_a_tool_block_is_not_visible(self):
+        raw_tools: dict[str, dict[str, Any]] = {
+            "search": {"description": "Search stuff", "category": "graph"}
+        }
+        catalog = ToolCatalog(raw_tools=raw_tools)
+
+        raw_tools["search"]["category"] = "edited late"
+
+        assert catalog.get("search").category == "graph"
+
+    def test_an_edit_inside_a_nested_mcp_block_is_not_visible(self):
+        """``mcp`` nests inside the tool block, so a shallow copy would not detach it."""
+        raw_tools: dict[str, dict[str, Any]] = {
+            "search": {"description": "Search stuff", "mcp": {"expose": True}}
+        }
+        catalog = ToolCatalog(raw_tools=raw_tools)
+
+        raw_tools["search"]["mcp"]["expose"] = False
+
+        assert catalog.get_mcp_tools() == ["search"]
+
+    def test_a_late_edit_does_not_reach_registry_enrichment(self):
+        raw_tools: dict[str, dict[str, Any]] = {"search": {"description": "Search stuff"}}
+        catalog = ToolCatalog(raw_tools=raw_tools)
+        registry = ToolRegistry()
+        registry.register(ToolDefinition(name="search", function=lambda: None))
+
+        raw_tools["search"]["description"] = "Edited late"
+        catalog.enrich_registry(registry)
+
+        assert registry.get_tool("search").description == "Search stuff"
+
+    def test_two_catalogs_built_from_the_same_data_are_independent_snapshots(self):
+        raw_tools: dict[str, dict[str, Any]] = {"search": {"description": "Search stuff"}}
+
+        first = ToolCatalog(raw_tools=raw_tools)
+        raw_tools["search"]["description"] = "Search things"
+        second = ToolCatalog(raw_tools=raw_tools)
+
+        assert first.get("search").description == "Search stuff"
+        assert second.get("search").description == "Search things"
 
 
 # ---------------------------------------------------------------------------
