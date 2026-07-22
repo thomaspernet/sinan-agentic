@@ -33,7 +33,7 @@ def schema():
 
 @pytest.fixture
 def recovery_registry():
-    """An isolated registry, patched where ``build_error_handlers`` looks the definition up."""
+    """An isolated registry, patched inside the shared by-name definition resolver."""
     registry = AgentRegistry()
     registry.register(
         AgentDefinition(
@@ -47,7 +47,9 @@ def recovery_registry():
         AgentDefinition(name="recovering_agent", description="recovers", instructions="answer")
     )
 
-    with patch("sinan_agentic_core.core.output_recovery.get_agent_registry", return_value=registry):
+    with patch(
+        "sinan_agentic_core.registry.agent_registry.get_agent_registry", return_value=registry
+    ):
         yield registry
 
 

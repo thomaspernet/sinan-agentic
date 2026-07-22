@@ -30,7 +30,7 @@ from typing import Any
 
 from agents import Agent, FunctionTool, RunConfig, ToolExecutionConfig
 
-from ..registry.agent_registry import get_agent_registry
+from ..registry.agent_registry import resolve_agent_definition
 from .tool_output_trim import ToolOutputTrimConfig, build_tool_output_trimmer
 
 
@@ -95,10 +95,11 @@ def _declared_tool_output_trim(agent: Agent) -> ToolOutputTrimConfig | None:
 
     Trimming is a run-level setting with no slot on ``Agent``, so unlike
     pre-approval it cannot be read off the built agent — the declaration is
-    resolved through the registry the factory built the agent from. An agent
+    resolved through :func:`~sinan_agentic_core.registry.agent_registry.resolve_agent_definition`,
+    the shared by-name reader every run-level setting goes through. An agent
     assembled under a name the registry does not know declares nothing.
     """
-    agent_def = get_agent_registry().get(agent.name)
+    agent_def = resolve_agent_definition(agent)
     if agent_def is None:
         return None
 

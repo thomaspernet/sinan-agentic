@@ -51,7 +51,7 @@ from agents import (
 from agents.agent_output import AgentOutputSchema, AgentOutputSchemaBase
 from agents.run_error_handlers import RunErrorHandlerInput
 
-from ..registry.agent_registry import get_agent_registry
+from ..registry.agent_registry import resolve_agent_definition
 
 logger = logging.getLogger(__name__)
 
@@ -219,12 +219,13 @@ def _recovery_opted_out(agent: Agent) -> bool:
 
     The flag is a run-level decision with no slot on ``Agent``, so unlike the
     output type it cannot be read off the built agent — the declaration is
-    resolved through the registry the factory built the agent from, the way
-    :func:`sinan_agentic_core.core.run_config.build_run_config` resolves a
-    declared trim policy. An agent assembled under a name the registry does not
-    know declares nothing, so it keeps recovery.
+    resolved through
+    :func:`~sinan_agentic_core.registry.agent_registry.resolve_agent_definition`,
+    the same by-name reader :func:`sinan_agentic_core.core.run_config.build_run_config`
+    goes through for a declared trim policy. An agent assembled under a name the
+    registry does not know declares nothing, so it keeps recovery.
     """
-    agent_def = get_agent_registry().get(agent.name)
+    agent_def = resolve_agent_definition(agent)
 
     return agent_def is not None and not agent_def.invalid_output_recovery
 
