@@ -95,10 +95,19 @@ def register_capability(
 
 @register_capability("turn_budget")
 def _build_turn_budget(config: dict[str, Any]) -> Capability:
-    """Build a :class:`TurnBudget` from YAML config."""
-    from ..core.turn_budget import TurnBudget
+    """Build a :class:`TurnBudget` from YAML config.
 
-    return TurnBudget(**config)
+    Goes through the same :class:`TurnBudgetConfig` translation as the
+    ``turn_budget:`` shorthand on an agent entry, so both paths build the budget
+    one way. ``absolute_max`` is the agent's hard ceiling rather than part of the
+    declared budget, so it is read off the entry and passed alongside; on the
+    shorthand path it comes from the agent's ``max_turns``.
+    """
+    from ..core.turn_budget import TurnBudgetConfig
+
+    declared = dict(config)
+    absolute_max = declared.pop("absolute_max", None)
+    return TurnBudgetConfig(**declared).build(absolute_max)
 
 
 @register_capability("error_recovery")

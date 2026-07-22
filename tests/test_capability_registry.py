@@ -6,10 +6,16 @@ from typing import Any
 
 import pytest
 from agents import RunContextWrapper
+from pydantic import ValidationError
 
 from sinan_agentic_core.core.capabilities import Capability
 from sinan_agentic_core.core.tool_error_recovery import ToolErrorRecovery
-from sinan_agentic_core.core.turn_budget import TurnBudget
+from sinan_agentic_core.core.turn_budget import (
+    DEFAULT_ABSOLUTE_MAX_TURNS,
+    TurnBudget,
+    TurnBudgetConfig,
+    build_turn_budget,
+)
 from sinan_agentic_core.registry.capability_registry import (
     CapabilityNotFoundError,
     CapabilityRegistry,
@@ -206,6 +212,25 @@ class TestBuiltInCapabilities:
         assert isinstance(cap, TurnBudget)
         # Sanity-check the dataclass defaults hold.
         assert cap.default_turns == 10
+
+    def test_build_turn_budget_without_a_ceiling_falls_back_to_the_default(self) -> None:
+        cap = get_capability_registry().build("turn_budget", {"default_turns": 8})
+        assert isinstance(cap, TurnBudget)
+        assert cap.absolute_max == DEFAULT_ABSOLUTE_MAX_TURNS
+
+    def test_build_turn_budget_matches_the_shorthand_path(self) -> None:
+        """Both declaration paths translate one config the same way."""
+        declared = {name: 7 for name in TurnBudgetConfig.model_fields}
+
+        from_list = get_capability_registry().build("turn_budget", {**declared, "absolute_max": 20})
+        from_shorthand = build_turn_budget(TurnBudgetConfig(**declared), 20)
+
+        assert from_list == from_shorthand
+
+    def test_build_turn_budget_rejects_an_unknown_key(self) -> None:
+        """An unrecognized key raised before the shared translator, and still does."""
+        with pytest.raises(ValidationError, match="typo"):
+            get_capability_registry().build("turn_budget", {"typo": 5})
 
     def test_build_error_recovery_uses_global_tool_registry(self) -> None:
         from sinan_agentic_core.registry.tool_registry import (

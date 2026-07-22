@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from ..core.capabilities import Capability
 from ..core.model_retry import ModelRetryConfig
 from ..core.tool_output_trim import ToolOutputTrimConfig
+from ..core.turn_budget import TurnBudget, TurnBudgetConfig, build_turn_budget
 from .capability_registry import (
     CapabilityNotFoundError,
     get_capability_registry,
@@ -44,7 +45,6 @@ from .capability_registry import (
 
 if TYPE_CHECKING:
     from ..core.tool_error_recovery import ToolErrorRecovery
-    from ..core.turn_budget import TurnBudget
     from ..mcp.yaml_schema import MCPServerConfig
 
 logger = logging.getLogger(__name__)
@@ -53,15 +53,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Public resolved type
 # ---------------------------------------------------------------------------
-
-
-class TurnBudgetConfig(BaseModel):
-    """Turn budget configuration from agents.yaml."""
-
-    default_turns: int = 10
-    reminder_at: int = 2
-    max_extensions: int = 3
-    extension_size: int = 5
 
 
 class CapabilityRef(BaseModel):
@@ -97,19 +88,14 @@ class AgentYamlEntry(BaseModel):
     effort: str | None = None
     tool_rules: dict[str, dict[str, Any]] = {}
 
-    def build_turn_budget(self) -> "TurnBudget | None":
-        """Create a TurnBudget from config, or None if not configured."""
-        if self.turn_budget is None:
-            return None
-        from ..core.turn_budget import TurnBudget
+    def build_turn_budget(self) -> TurnBudget | None:
+        """Create a TurnBudget from config, or None if not configured.
 
-        return TurnBudget(
-            default_turns=self.turn_budget.default_turns,
-            reminder_at=self.turn_budget.reminder_at,
-            max_extensions=self.turn_budget.max_extensions,
-            extension_size=self.turn_budget.extension_size,
-            absolute_max=self.max_turns or 25,
-        )
+        The translation itself lives beside :class:`TurnBudget`; this entry only
+        supplies the two things it holds — the declared budget and the agent's
+        ``max_turns`` ceiling.
+        """
+        return build_turn_budget(self.turn_budget, self.max_turns)
 
     def build_error_recovery(self) -> "ToolErrorRecovery | None":
         """Create a ToolErrorRecovery if enabled, or None if disabled."""

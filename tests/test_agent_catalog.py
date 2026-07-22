@@ -15,12 +15,11 @@ from sinan_agentic_core.core.model_retry import (
     RetryTrigger,
 )
 from sinan_agentic_core.core.tool_error_recovery import ToolErrorRecovery
-from sinan_agentic_core.core.turn_budget import TurnBudget
+from sinan_agentic_core.core.turn_budget import TurnBudget, TurnBudgetConfig
 from sinan_agentic_core.registry.agent_catalog import (
     AgentCatalog,
     AgentYamlEntry,
     CapabilityRef,
-    TurnBudgetConfig,
     _check_condition,
     _load_knowledge_dir,
     _parse_capabilities,

@@ -9,6 +9,14 @@ Provides a flexible turn budget that agents can self-manage:
 TurnBudget is a Capability: the runtime calls ``on_llm_start`` to count
 turns and ``instructions`` to inject budget awareness before each LLM call.
 
+``TurnBudgetConfig`` carries the same choice declaratively in ``agents.yaml``.
+Two paths read that declaration — the ``turn_budget:`` shorthand on an agent
+entry and a ``turn_budget`` entry in the explicit ``capabilities:`` list — so
+the translation lives here as ``TurnBudgetConfig.build()``, with
+``build_turn_budget`` adding the "off unless declared" rule the shorthand path
+needs. Neither path unpacks the config field by field, so a field added to the
+model reaches the built budget without a second edit.
+
 Usage:
     budget = TurnBudget(default_turns=10)
     # Wire via AgentDefinition.capabilities=[budget] or pass to execute().
@@ -23,11 +31,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from agents import RunContextWrapper, Tool
+from pydantic import BaseModel, ConfigDict
 
 from .capabilities import Capability
 from .turn_budget_tool import request_extension_tool
 
 logger = logging.getLogger(__name__)
+
+# The hard SDK ceiling an agent runs under when it declares no ``max_turns``.
+# High enough that the soft budget, not this, is what the agent negotiates with.
+DEFAULT_ABSOLUTE_MAX_TURNS = 25
 
 
 @dataclass
@@ -50,7 +63,7 @@ class TurnBudget(Capability):
     reminder_at: int = 2
     max_extensions: int = 3
     extension_size: int = 5
-    absolute_max: int = 25
+    absolute_max: int = DEFAULT_ABSOLUTE_MAX_TURNS
 
     # Mutable state — tracked during execution
     turns_used: int = field(default=0, init=False)
@@ -224,3 +237,81 @@ class TurnBudget(Capability):
         self.extensions_used = int(data.get("extensions_used", 0))
         reasons = data.get("extension_reasons", [])
         self.extension_reasons = [str(r) for r in reasons] if isinstance(reasons, list) else []
+
+
+class TurnBudgetConfig(BaseModel):
+    """Opt-in soft turn budget for one agent.
+
+    Every field is optional, so declaring the key with no fields
+    (``turn_budget: {}``) opts in with the defaults below — only a missing key
+    means the agent opts out.
+
+    The hard ceiling is not a field here: it is the agent's own ``max_turns``,
+    passed to :meth:`build` by whichever path resolved the declaration.
+
+    Declared in ``agents.yaml``::
+
+        agents:
+          research_agent:
+            model: gpt-4o
+            description: Deep research
+            max_turns: 30          # hard ceiling handed to the SDK
+            turn_budget:
+              default_turns: 15    # soft budget the agent perceives
+              reminder_at: 3
+              max_extensions: 2
+              extension_size: 5
+    """
+
+    # An unknown key is a typo or a field that belongs elsewhere (``absolute_max``
+    # is the agent's ``max_turns``), and this model is the only gate both
+    # declaration paths pass through — so reject it rather than drop it silently.
+    model_config = ConfigDict(extra="forbid")
+
+    default_turns: int = 10
+    reminder_at: int = 2
+    max_extensions: int = 3
+    extension_size: int = 5
+
+    def build(self, absolute_max: int | None = None) -> TurnBudget:
+        """Translate this config into a runtime :class:`TurnBudget`.
+
+        Fields are forwarded wholesale rather than named one by one, so a field
+        added to this model reaches the built budget without editing this method.
+
+        Args:
+            absolute_max: The agent's hard turn ceiling. Falls back to
+                :data:`DEFAULT_ABSOLUTE_MAX_TURNS` when the agent declares none.
+        """
+        return TurnBudget(
+            **self.model_dump(),
+            absolute_max=absolute_max or DEFAULT_ABSOLUTE_MAX_TURNS,
+        )
+
+
+def build_turn_budget(
+    turn_budget: TurnBudgetConfig | None,
+    absolute_max: int | None = None,
+) -> TurnBudget | None:
+    """Translate a declared turn budget into the capability a run installs.
+
+    Callers that resolve a budget which may be absent go through this rather
+    than repeating the check — today ``AgentYamlEntry.build_turn_budget()``, for
+    the optional ``turn_budget:`` shorthand — so the "off unless declared" rule
+    lives here instead of once per caller. The explicit ``capabilities:`` list
+    has no absent case (the entry *is* the declaration) and calls
+    :meth:`TurnBudgetConfig.build` directly.
+
+    Args:
+        turn_budget: The agent's declared budget, or None when it opts out.
+        absolute_max: The agent's hard turn ceiling. Falls back to
+            :data:`DEFAULT_ABSOLUTE_MAX_TURNS` when the agent declares none.
+
+    Returns:
+        The configured budget, or None when nothing is declared. Each call builds
+        a fresh budget, so no two agents share one set of counters.
+    """
+    if turn_budget is None:
+        return None
+
+    return turn_budget.build(absolute_max)
