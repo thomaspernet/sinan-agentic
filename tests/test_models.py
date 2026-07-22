@@ -1,6 +1,50 @@
 """Tests for output models and context."""
 
+import copy
+from dataclasses import fields
+from types import UnionType
+from typing import Any, Union, get_args, get_origin, get_type_hints
+from unittest.mock import Mock
+
+from sinan_agentic_core.models.context import AgentContext
 from sinan_agentic_core.models.outputs import ChatResponse, ToolOutput
+
+
+def _declared_members(annotation: object) -> tuple[object, ...]:
+    """The members of an optional annotation, or the annotation itself when it is not one."""
+    if get_origin(annotation) in (Union, UnionType):
+        return get_args(annotation)
+    return (annotation,)
+
+
+def _collection_field_names(cls: type) -> list[str]:
+    """Field names declared as a ``dict[...]``/``list[...]``, optional or not.
+
+    Selecting on the declared type excludes ``database_connector: Any`` and
+    ``schema: str`` without naming either, so the selection does not need
+    editing when a field is added.
+    """
+    hints = get_type_hints(cls)
+    return [
+        f.name
+        for f in fields(cls)
+        if any(get_origin(m) in (dict, list) for m in _declared_members(hints[f.name]))
+    ]
+
+
+def _edit_every_level(seeded: dict[str, Any] | list[Any]) -> None:
+    """Edit the container and the values nested in it — a shallow copy detaches only the outer."""
+    for value in seeded.values() if isinstance(seeded, dict) else seeded:
+        if isinstance(value, list):
+            value.append("added_late")
+        elif isinstance(value, dict):
+            value["added_late"] = True
+
+    if isinstance(seeded, dict):
+        seeded["added_late"] = True
+    else:
+        seeded.append({"added_late": True})
+
 
 # -- ToolOutput ---------------------------------------------------------------
 
@@ -117,3 +161,134 @@ class TestAgentContext:
 
     def test_schema_default(self, context):
         assert context.schema == ""
+
+
+class TestAgentContextCopiesTheCallersCollections:
+    """The context owns what it was seeded with, so a run never writes into a caller's data."""
+
+    def test_the_seeded_collections_are_readable(self):
+        ctx = AgentContext(
+            database_connector=Mock(),
+            schema_data={"tables": ["users"]},
+            query_results=[{"id": 1}],
+            filters={"status": ["active"]},
+            discovered_data={"tags": ["python"]},
+        )
+
+        assert ctx.schema_data == {"tables": ["users"]}
+        assert ctx.query_results == [{"id": 1}]
+        assert ctx.filters == {"status": ["active"]}
+        assert ctx.discovered_data == {"tags": ["python"]}
+
+    def test_a_result_added_by_the_caller_later_is_not_visible(self):
+        seeded = [{"id": 1}]
+        ctx = AgentContext(database_connector=Mock(), query_results=seeded)
+
+        seeded.append({"id": 2})
+
+        assert ctx.query_results == [{"id": 1}]
+
+    def test_an_edit_inside_a_seeded_result_row_is_not_visible(self):
+        """Rows nest inside the list, so copying only the list would not detach them."""
+        seeded = [{"id": 1}]
+        ctx = AgentContext(database_connector=Mock(), query_results=seeded)
+
+        seeded[0]["id"] = 99
+
+        assert ctx.query_results[0]["id"] == 1
+
+    def test_results_added_by_the_run_do_not_reach_the_callers_list(self):
+        seeded = [{"id": 1}]
+        ctx = AgentContext(database_connector=Mock(), query_results=seeded)
+
+        ctx.add_query_result({"data": [{"id": 2}]})
+
+        assert seeded == [{"id": 1}]
+
+    def test_an_item_discovered_by_the_run_does_not_reach_the_callers_dict(self):
+        seeded = {"tags": ["python"]}
+        ctx = AgentContext(database_connector=Mock(), discovered_data=seeded)
+
+        ctx.add_discovered_item("authors", "ada")
+
+        assert seeded == {"tags": ["python"]}
+
+    def test_a_discovery_appended_by_the_run_does_not_reach_the_callers_nested_list(self):
+        """add_discovered_item appends into the list under the key, one level deeper again."""
+        seeded_tags = ["python"]
+        ctx = AgentContext(database_connector=Mock(), discovered_data={"tags": seeded_tags})
+
+        ctx.add_discovered_item("tags", "async")
+
+        assert ctx.get_discovered_items("tags") == ["python", "async"]
+        assert seeded_tags == ["python"]
+
+    def test_a_filter_added_by_the_caller_later_is_not_visible(self):
+        seeded = {"status": ["active"]}
+        ctx = AgentContext(database_connector=Mock(), filters=seeded)
+
+        seeded["owner"] = "someone"
+
+        assert ctx.filters == {"status": ["active"]}
+
+    def test_an_edit_inside_a_nested_filter_value_is_not_visible(self):
+        seeded = {"status": ["active"]}
+        ctx = AgentContext(database_connector=Mock(), filters=seeded)
+
+        seeded["status"].append("archived")
+
+        assert ctx.filters == {"status": ["active"]}
+
+    def test_an_edit_inside_the_seeded_schema_data_is_not_visible(self):
+        seeded = {"tables": {"users": ["id", "name"]}}
+        ctx = AgentContext(database_connector=Mock(), schema_data=seeded)
+
+        seeded["tables"]["users"].append("email")
+
+        assert ctx.schema_data == {"tables": {"users": ["id", "name"]}}
+
+    def test_an_absent_collection_stays_none(self):
+        ctx = AgentContext(database_connector=Mock())
+
+        assert ctx.schema_data is None
+        assert ctx.filters is None
+
+    def test_two_contexts_seeded_from_one_collection_do_not_share_it(self):
+        seeded = [{"id": 1}]
+        first = AgentContext(database_connector=Mock(), query_results=seeded)
+        second = AgentContext(database_connector=Mock(), query_results=seeded)
+
+        first.add_query_result({"data": [{"id": 2}]})
+
+        assert second.query_results == [{"id": 1}]
+
+    def test_the_database_connector_is_not_copied(self):
+        """The connector is a live handle the run uses, not data the context accumulates into."""
+        connector = Mock()
+
+        ctx = AgentContext(database_connector=connector)
+
+        assert ctx.database_connector is connector
+
+    def test_every_collection_field_is_detached_from_the_caller(self):
+        """A collection field added later without a matching copy fails here, rather than drifting."""
+        seeds: dict[str, Any] = {
+            "schema_data": {"tables": ["users"]},
+            "query_results": [{"id": 1}],
+            "filters": {"status": ["active"]},
+            "discovered_data": {"tags": ["python"]},
+        }
+        assert set(_collection_field_names(AgentContext)) == set(seeds), (
+            "AgentContext gained or lost a collection field — seed it here "
+            "and copy it in __post_init__"
+        )
+        seeded_as_supplied = copy.deepcopy(seeds)
+
+        ctx = AgentContext(database_connector=Mock(), **seeds)
+        for seeded in seeds.values():
+            _edit_every_level(seeded)
+
+        for name, as_supplied in seeded_as_supplied.items():
+            assert (
+                getattr(ctx, name) == as_supplied
+            ), f"{name} is aliased to the caller's collection"

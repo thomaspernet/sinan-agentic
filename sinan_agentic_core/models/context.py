@@ -4,6 +4,7 @@ This is a generic version that can be extended for specific use cases.
 Replace 'database_connector' with your specific database implementation.
 """
 
+import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -23,14 +24,29 @@ class AgentContext:
     - filters: User pre-selected filters/parameters
     - discovered_data: Data discovered during workflow execution
 
+    The context owns its ``schema_data``, ``query_results``, ``filters``, and
+    ``discovered_data`` collections: a run writes into them from start to end,
+    so each is copied on construction rather than aliased to whoever seeded it.
+    ``database_connector`` is the one caller-supplied value left shared — it is
+    a live handle the run uses, not data the context accumulates into.
+
     Extend this class for your specific use case by adding domain-specific fields.
+    A subclass that defines its own ``__post_init__`` must call
+    ``super().__post_init__()``, or its instances go back to aliasing the seeds.
+    That call copies the four collections declared here and nothing else — the
+    base class cannot reach a field it does not declare — so a subclass that
+    adds a collection of its own must copy that one itself.
 
     Example:
         @dataclass
         class MyAppContext(AgentContext):
             user_id: str = ""
             workspace_id: str = ""
-            custom_metadata: Dict[str, Any] = field(default_factory=dict)
+            custom_metadata: dict[str, Any] = field(default_factory=dict)
+
+            def __post_init__(self) -> None:
+                super().__post_init__()
+                self.custom_metadata = copy.deepcopy(self.custom_metadata)
     """
 
     database_connector: Any  # Replace with your specific database connector type
@@ -39,6 +55,31 @@ class AgentContext:
     query_results: list[dict[str, Any]] = field(default_factory=list)
     filters: dict[str, Any] | None = None  # User pre-selected filters
     discovered_data: dict[str, Any] = field(default_factory=dict)  # Data discovered during workflow
+
+    def __post_init__(self) -> None:
+        """Take ownership of the seeded collections.
+
+        ``default_factory`` only covers the omitted-argument case. The context
+        is built from caller keyword data — ``setup_context(**context_data)``
+        forwards straight into ``AgentContext(**context_data)`` — so a caller
+        that seeds a collection keeps it aliased into the object a whole run
+        mutates in place: :meth:`add_query_result` extends ``query_results``
+        and :meth:`add_discovered_item` appends into ``discovered_data[key]``.
+        Copying here means a run cannot write back into the caller's own
+        containers, a caller editing them mid-run cannot change what agents
+        read, and two contexts seeded from one collection do not share it.
+
+        The copies are deep. Each of the four nests further mutable values — a
+        result row, a schema block, a list of filter values, the list
+        :meth:`add_discovered_item` appends into — and a shallow copy would
+        detach only the outer container, leaving every one of those still
+        aliased. Live objects belong in ``database_connector``, which is not
+        copied; these four carry data.
+        """
+        self.schema_data = copy.deepcopy(self.schema_data)
+        self.query_results = copy.deepcopy(self.query_results)
+        self.filters = copy.deepcopy(self.filters)
+        self.discovered_data = copy.deepcopy(self.discovered_data)
 
     @property
     def has_data(self) -> bool:
