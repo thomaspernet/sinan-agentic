@@ -43,6 +43,26 @@ logger = logging.getLogger(__name__)
 # retrying the tool outright.
 DEFAULT_MAX_IDENTICAL_BEFORE_STOP = 3
 
+# Bounds on the argument summary the guidance repeats back so the agent can
+# recognise which call failed. That summary is re-sent as instruction text on
+# every subsequent turn of the run, so it stays short: the agent needs to
+# identify the call it already made, not read its payload back whole.
+#
+# Deliberately not the streamed ``TOOL_OUTPUT_PREVIEW_CHARS`` or the rescue
+# call's ``FALLBACK_PROMPT_TOOL_OUTPUT_CHARS``: those cut a tool's *output*, for
+# a stream consumer and for one condensed prompt respectively. These cut a tool's
+# *input*, for text repeated on every turn. The three move for different reasons.
+ARGS_SUMMARY_ELLIPSIS = "..."
+# Whole-summary cut, used when the arguments are not a JSON object — an unparsed
+# string or a bare JSON scalar has no per-parameter structure to cut instead.
+ARGS_SUMMARY_FALLBACK_CHARS = 80
+# Per-parameter value cut. The ellipsis is spent inside this budget, so a
+# truncated value never renders longer than one that fit.
+ARGS_SUMMARY_VALUE_CHARS = 40
+ARGS_SUMMARY_VALUE_HEAD_CHARS = ARGS_SUMMARY_VALUE_CHARS - len(ARGS_SUMMARY_ELLIPSIS)
+# How many parameters the summary names before dropping the rest.
+ARGS_SUMMARY_MAX_PARAMS = 5
+
 
 @dataclass
 class ToolErrorEntry:
@@ -418,13 +438,17 @@ class ToolErrorRecovery(Capability):
 
     @staticmethod
     def _summarize_args(arguments: str) -> str:
-        """Create a short human-readable summary of tool arguments."""
+        """Create a short human-readable summary of tool arguments.
+
+        Every bound is a module constant — :data:`ARGS_SUMMARY_FALLBACK_CHARS`,
+        :data:`ARGS_SUMMARY_VALUE_CHARS`, :data:`ARGS_SUMMARY_MAX_PARAMS`.
+        """
         if not arguments:
             return ""
         try:
             parsed = json.loads(arguments)
             if not isinstance(parsed, dict):
-                return str(parsed)[:80]
+                return str(parsed)[:ARGS_SUMMARY_FALLBACK_CHARS]
             # Show non-empty values only, truncated
             parts = []
             for k, v in parsed.items():
@@ -432,12 +456,12 @@ class ToolErrorRecovery(Capability):
                     parts.append(f"{k}=<empty>")
                 else:
                     val_str = str(v)
-                    if len(val_str) > 40:
-                        val_str = val_str[:37] + "..."
+                    if len(val_str) > ARGS_SUMMARY_VALUE_CHARS:
+                        val_str = val_str[:ARGS_SUMMARY_VALUE_HEAD_CHARS] + ARGS_SUMMARY_ELLIPSIS
                     parts.append(f"{k}={val_str}")
-            return ", ".join(parts[:5])  # max 5 params shown
+            return ", ".join(parts[:ARGS_SUMMARY_MAX_PARAMS])
         except (json.JSONDecodeError, TypeError):
-            return arguments[:80]
+            return arguments[:ARGS_SUMMARY_FALLBACK_CHARS]
 
 
 class ToolErrorRecoveryConfig(BaseModel):
