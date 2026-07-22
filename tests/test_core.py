@@ -540,6 +540,74 @@ class TestExecuteStreaming:
         assert "usage" in answer_events[0]["data"]
 
 
+class TestStreamedAnswerOwnsItsUsageRecord:
+    """The answer event is a fixed record, so it and the runner never share a usage dict."""
+
+    @staticmethod
+    async def _answer_usage(runner):
+        """Run one streamed turn; return the answer event's usage payload."""
+        ctx = AgentContext(database_connector=Mock())
+        session = AgentSession(session_id="test")
+        events = []
+
+        mock_result = Mock()
+        mock_result.final_output = "Streamed answer"
+        mock_result.raw_responses = []
+
+        async def mock_stream_events():
+            return
+            yield
+
+        mock_result.stream_events = mock_stream_events
+
+        with (
+            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
+        ):
+            mock_runner_cls.run_streamed = Mock(return_value=mock_result)
+            await runner._execute_streamed(
+                "basic_agent", ctx, session, lambda e: events.append(e), 10, "hello"
+            )
+
+        answer = next(e for e in events if e["event"] == "answer")
+        return answer["data"]["usage"]
+
+    async def test_the_event_reports_what_the_runner_recorded(self, runner):
+        usage = await self._answer_usage(runner)
+
+        assert usage == runner.last_usage
+
+    async def test_the_event_does_not_share_the_runners_record(self, runner):
+        usage = await self._answer_usage(runner)
+
+        assert usage is not runner.last_usage
+
+    async def test_a_consumer_editing_the_event_does_not_reach_the_runner(self, runner):
+        usage = await self._answer_usage(runner)
+
+        usage["total_tokens"] = 999
+
+        assert runner.last_usage["total_tokens"] == 0
+
+    async def test_a_consumer_editing_a_nested_detail_does_not_reach_the_runner(self, runner):
+        """A shallow copy would leave the *_tokens_details mappings shared."""
+        usage = await self._answer_usage(runner)
+
+        usage["input_tokens_details"]["cached_tokens"] = 42
+
+        assert runner.last_usage["input_tokens_details"]["cached_tokens"] == 0
+
+    async def test_a_later_write_to_the_runner_does_not_change_a_delivered_event(self, runner):
+        """The runner outlives the run; annotating its record cannot rewrite an event."""
+        usage = await self._answer_usage(runner)
+
+        runner.last_usage["total_tokens"] = 999
+        runner.last_usage["output_tokens_details"]["reasoning_tokens"] = 42
+
+        assert usage["total_tokens"] == 0
+        assert usage["output_tokens_details"]["reasoning_tokens"] == 0
+
+
 # ------------------------------------------------------------------ #
 # execute() — fallback mode
 # ------------------------------------------------------------------ #
@@ -984,6 +1052,99 @@ class TestExecuteWithFallback:
         # Capability hooks still fire exactly once each, in order.
         assert recorder.start_calls == 1
         assert recorder.end_calls == 1
+
+
+class TestFallbackCapabilitiesOwnTheirUsageRecord:
+    """Each capability gets its own usage dict, detached from the runner and each other."""
+
+    @staticmethod
+    def _recorder():
+        from sinan_agentic_core.core.capabilities import Capability
+
+        class _Recorder(Capability):
+            def __init__(self):
+                self.usages: list[dict | None] = []
+
+            def on_fallback_end(self, ctx, response, usage):
+                self.usages.append(usage)
+
+        return _Recorder()
+
+    @staticmethod
+    async def _rescue(runner, capabilities, provider_usage):
+        """Drive the recovery branch once with the given provider usage."""
+        ctx = AgentContext(database_connector=Mock())
+        session = AgentSession(session_id="test")
+
+        mock_completion = Mock()
+        mock_completion.choices = [Mock()]
+        mock_completion.choices[0].message.content = "Rescued output"
+        mock_completion.usage = provider_usage
+
+        with (
+            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("sinan_agentic_core.core.base_runner.resolve_openai_client") as mock_resolve,
+        ):
+            mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
+            mock_client = AsyncMock()
+            mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
+            mock_resolve.return_value = mock_client
+
+            await runner._execute_with_fallback(
+                "basic_agent", ctx, session, 10, "hello", None, capabilities=capabilities
+            )
+
+    async def _rescue_one(self, runner):
+        """Rescue with a single capability; return the usage it was handed."""
+        recorder = self._recorder()
+        await self._rescue(
+            runner,
+            [recorder],
+            Mock(prompt_tokens=100, completion_tokens=20, total_tokens=120),
+        )
+        return recorder.usages[0]
+
+    async def test_the_capability_receives_what_the_runner_recorded(self, runner):
+        usage = await self._rescue_one(runner)
+
+        assert usage == runner.last_usage
+
+    async def test_the_capability_does_not_share_the_runners_record(self, runner):
+        usage = await self._rescue_one(runner)
+
+        assert usage is not runner.last_usage
+
+    async def test_a_capability_editing_its_copy_does_not_reach_the_runner(self, runner):
+        usage = await self._rescue_one(runner)
+
+        usage["total_tokens"] = 999
+        usage["input_tokens_details"]["cached_tokens"] = 42
+
+        assert runner.last_usage["total_tokens"] == 120
+        assert runner.last_usage["input_tokens_details"]["cached_tokens"] == 0
+
+    async def test_two_capabilities_do_not_share_one_record(self, runner):
+        first, second = self._recorder(), self._recorder()
+
+        await self._rescue(
+            runner,
+            [first, second],
+            Mock(prompt_tokens=100, completion_tokens=20, total_tokens=120),
+        )
+
+        assert first.usages[0] is not second.usages[0]
+        first.usages[0]["output_tokens_details"]["reasoning_tokens"] = 42
+        assert second.usages[0]["output_tokens_details"]["reasoning_tokens"] == 0
+
+    async def test_a_provider_that_omits_usage_still_reports_none(self, runner):
+        """Copying must not turn the 'no usage reported' signal into an empty dict."""
+        recorder = self._recorder()
+
+        await self._rescue(runner, [recorder], None)
+
+        assert recorder.usages == [None]
+        assert runner.last_usage is None
 
 
 # ------------------------------------------------------------------ #
