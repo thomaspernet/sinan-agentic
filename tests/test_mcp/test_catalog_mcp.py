@@ -207,6 +207,28 @@ def test_agent_catalog_get_mcp_server_rejects_an_unrecognized_resource_key():
         catalog.get_mcp_server("knowledge_graph")
 
 
+def test_agent_catalog_get_mcp_server_ignores_a_late_edit_to_the_callers_block():
+    """The catalog copies the server blocks, so a caller's later edit does not reach them."""
+    raw_mcp_servers = {
+        "knowledge_graph": {
+            "description": "My knowledge graph",
+            "tools": ["discover"],
+        },
+    }
+    catalog = AgentCatalog(
+        tool_groups={},
+        raw_agents={},
+        raw_mcp_servers=raw_mcp_servers,
+    )
+
+    raw_mcp_servers["knowledge_graph"]["tools"].append("search")
+    raw_mcp_servers["knowledge_graph"]["description"] = "Edited late"
+
+    config = catalog.get_mcp_server("knowledge_graph")
+    assert config.tools == ["discover"]
+    assert config.description == "My knowledge graph"
+
+
 def test_agent_catalog_get_mcp_server_not_found():
     """get_mcp_server() raises KeyError for unknown server."""
     catalog = AgentCatalog(

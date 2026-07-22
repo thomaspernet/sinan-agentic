@@ -260,6 +260,88 @@ class TestAgentCatalog:
 
 
 # ---------------------------------------------------------------------------
+# AgentCatalog copies the caller's maps
+# ---------------------------------------------------------------------------
+
+
+class TestAgentCatalogCopiesTheCallersMaps:
+    """The catalog owns its data, so a later edit to a caller's dict cannot reach it."""
+
+    def test_a_new_agent_added_after_construction_is_not_visible(self):
+        raw_agents = {"chatbot": {"model": "reasoning", "description": "Main"}}
+        catalog = AgentCatalog(tool_groups={}, raw_agents=raw_agents)
+
+        raw_agents["late_agent"] = {"model": "fast", "description": "Added late"}
+
+        assert catalog.list_agents() == ["chatbot"]
+
+    def test_an_edit_inside_an_agent_block_is_not_visible(self):
+        raw_agents: dict[str, dict[str, Any]] = {
+            "chatbot": {"model": "reasoning", "description": "Main"}
+        }
+        catalog = AgentCatalog(tool_groups={}, raw_agents=raw_agents)
+
+        raw_agents["chatbot"]["model"] = "fast"
+
+        assert catalog.get("chatbot").model == "reasoning"
+
+    def test_an_edit_inside_a_tool_group_is_not_visible(self):
+        tool_groups = {"nav": ["discover"]}
+        catalog = AgentCatalog(
+            tool_groups=tool_groups,
+            raw_agents={
+                "chatbot": {
+                    "model": "reasoning",
+                    "description": "Main",
+                    "tools": [{"group": "nav"}],
+                },
+            },
+        )
+
+        tool_groups["nav"].append("search")
+
+        assert catalog.get("chatbot").tools == ["discover"]
+
+    def test_an_edit_to_the_knowledge_map_is_not_visible(self):
+        knowledge = {"global": "Graph model."}
+        catalog = AgentCatalog(
+            tool_groups={},
+            raw_agents={
+                "chatbot": {
+                    "model": "reasoning",
+                    "description": "Main",
+                    "knowledge": ["global", "late_scope"],
+                },
+            },
+            knowledge=knowledge,
+        )
+
+        knowledge["late_scope"] = "Added late."
+
+        assert catalog.get("chatbot").knowledge_text == "Graph model."
+
+    def test_a_new_mcp_server_added_after_construction_is_not_visible(self):
+        raw_mcp_servers: dict[str, dict[str, Any]] = {"knowledge_graph": {"description": "Graph"}}
+        catalog = AgentCatalog(tool_groups={}, raw_agents={}, raw_mcp_servers=raw_mcp_servers)
+
+        raw_mcp_servers["late_server"] = {"description": "Added late"}
+
+        assert catalog.list_mcp_servers() == ["knowledge_graph"]
+
+    def test_two_catalogs_built_from_the_same_data_are_independent_snapshots(self):
+        raw_agents: dict[str, dict[str, Any]] = {
+            "chatbot": {"model": "reasoning", "description": "Main"}
+        }
+
+        first = AgentCatalog(tool_groups={}, raw_agents=raw_agents)
+        raw_agents["chatbot"]["model"] = "fast"
+        second = AgentCatalog(tool_groups={}, raw_agents=raw_agents)
+
+        assert first.get("chatbot").model == "reasoning"
+        assert second.get("chatbot").model == "fast"
+
+
+# ---------------------------------------------------------------------------
 # load_agent_catalog
 # ---------------------------------------------------------------------------
 

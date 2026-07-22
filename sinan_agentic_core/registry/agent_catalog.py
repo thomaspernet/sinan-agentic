@@ -28,6 +28,7 @@ Usage::
         ...
 """
 
+import copy
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -279,6 +280,10 @@ class AgentCatalog:
     Holds raw YAML data and resolves tool groups / conditions on ``get()``.
     Knowledge scopes are pre-loaded from YAML files and cached.
     Also stores ``mcp_servers`` definitions for MCP server building.
+
+    A catalog is a fixed in-process view of the parsed YAML: every mapping it
+    is given is copied on the way in, so what it resolves never changes after
+    construction.
     """
 
     def __init__(
@@ -288,10 +293,25 @@ class AgentCatalog:
         knowledge: dict[str, str] | None = None,
         raw_mcp_servers: dict[str, dict[str, Any]] | None = None,
     ) -> None:
-        self._tool_groups = tool_groups
-        self._raw_agents = raw_agents
-        self._knowledge: dict[str, str] = knowledge or {}
-        self._raw_mcp_servers: dict[str, dict[str, Any]] = raw_mcp_servers or {}
+        """Build a catalog over already-parsed YAML data.
+
+        Every mapping is copied, so a later edit to a caller's dict does not
+        reach the catalog and two catalogs built from the same data never share
+        one mapping. ``knowledge`` holds plain strings, which a shallow copy
+        already detaches; the other three nest a mutable value — a group's tool
+        list, an agent block, an MCP server block — so they are copied all the
+        way down.
+
+        Args:
+            tool_groups: Named tool sets, referenced via ``group: name``.
+            raw_agents: Raw agent entries, keyed by agent name.
+            knowledge: Pre-loaded knowledge text, keyed by scope name.
+            raw_mcp_servers: Raw ``mcp_servers`` blocks, keyed by server name.
+        """
+        self._tool_groups: dict[str, list[str]] = copy.deepcopy(tool_groups)
+        self._raw_agents: dict[str, dict[str, Any]] = copy.deepcopy(raw_agents)
+        self._knowledge: dict[str, str] = dict(knowledge or {})
+        self._raw_mcp_servers: dict[str, dict[str, Any]] = copy.deepcopy(raw_mcp_servers or {})
 
     def get(
         self,
