@@ -14,7 +14,6 @@ from agents import (
     Agent,
     ItemHelpers,
     ModelBehaviorError,
-    ModelRetrySettings,
     ModelSettings,
     RunConfig,
     RunContextWrapper,
@@ -40,7 +39,7 @@ from ..session import AgentSession, ConversationHistory
 from ..utils.turn_budget_context import set_turn_budget
 from .capabilities import Capability
 from .errors import structured_tool_error
-from .model_retry import apply_model_retry
+from .model_retry import apply_model_retry, build_model_retry_settings
 from .output_recovery import (
     build_output_schema,
     invalid_final_output_handlers,
@@ -450,7 +449,7 @@ class BaseAgentRunner:
             # branch bypasses. Only the declared attempt count carries over, via
             # the OpenAI client's own retry, so a rescue call is not left on the
             # client default while every other branch honors the agent's budget.
-            retry_settings = self._build_model_retry(agent_def)
+            retry_settings = build_model_retry_settings(agent_def.model_retry)
             if retry_settings is not None and retry_settings.max_retries is not None:
                 client = client.with_options(max_retries=retry_settings.max_retries)
 
@@ -1000,24 +999,6 @@ class BaseAgentRunner:
         except Exception as e:
             logger.error(f"Error building model settings: {e}")
             return None
-
-    def _build_model_retry(self, agent_def: Any) -> ModelRetrySettings | None:
-        """Build the SDK model retry settings for an agent, or None when it opts out.
-
-        Retry is off unless the agent declares ``model_retry``: retrying a model
-        call costs latency and a second billed request, so it is never implied.
-
-        Args:
-            agent_def: Agent definition whose ``model_retry`` config decides the settings
-
-        Returns:
-            Configured retry settings, or None when the agent declares no policy
-        """
-        if agent_def.model_retry is None:
-            return None
-
-        settings: ModelRetrySettings = agent_def.model_retry.build()
-        return settings
 
     def _build_agent_kwargs(
         self,

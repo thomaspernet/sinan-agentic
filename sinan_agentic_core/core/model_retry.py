@@ -6,10 +6,13 @@ schedules a retry. Writing that callback means importing ``agents.retry`` and
 wiring a ``ModelRetrySettings`` by hand at every agent.
 
 This module carries the same choice as data: an attempt count, the error classes
-to retry on, and an optional backoff schedule. ``apply_model_retry`` translates it
-into the SDK object at the point each agent-building path assembles
-``ModelSettings``, so retries stay declarative in ``agents.yaml`` and consumers
-never reach into ``agents.*`` to get them.
+to retry on, and an optional backoff schedule. ``build_model_retry_settings``
+translates it into the SDK object, and ``apply_model_retry`` overlays that object
+onto the ``ModelSettings`` each agent-building path assembles — so retries stay
+declarative in ``agents.yaml`` and consumers never reach into ``agents.*`` to get
+them. The runner's overflow-fallback branch bypasses the SDK runner and so cannot
+use the overlay, but it reads the same translated settings for the one thing it
+can still honor: the attempt count.
 
 Retry is off unless declared: retrying costs latency and duplicate billed
 requests, so it is opt-in per agent.
@@ -110,6 +113,28 @@ class ModelRetryConfig(BaseModel):
         return ModelRetrySettings(max_retries=self.max_retries, backoff=backoff, policy=policy)
 
 
+def build_model_retry_settings(retry: ModelRetryConfig | None) -> ModelRetrySettings | None:
+    """Translate a declared retry policy into the SDK settings a run honors.
+
+    Every path that needs the translated policy calls this — :func:`apply_model_retry`,
+    which overlays it onto the settings an agent carries, and
+    ``BaseAgentRunner._execute_with_fallback()``, which bypasses the SDK runner and
+    can only honor the attempt count — so the "off unless declared" rule lives here
+    instead of once per caller.
+
+    Args:
+        retry: The agent's declared policy, or None when it opts out.
+
+    Returns:
+        The configured settings, or None when nothing is declared. Each call builds
+        a fresh object, so no two agents share one.
+    """
+    if retry is None:
+        return None
+
+    return retry.build()
+
+
 def apply_model_retry(
     retry: ModelRetryConfig | None,
     model_settings: ModelSettings | None = None,
@@ -129,10 +154,11 @@ def apply_model_retry(
         declared, or None when there is neither. Callers omit the
         ``model_settings=`` kwarg on None so the SDK default applies.
     """
-    if retry is None:
+    settings = build_model_retry_settings(retry)
+    if settings is None:
         return model_settings
 
     # resolve() overlays the settings in hand on top of the declared retry
     # policy, so a caller that sets its own retry still wins field-by-field
     # while every other declared agent keeps the policy.
-    return ModelSettings(retry=retry.build()).resolve(model_settings)
+    return ModelSettings(retry=settings).resolve(model_settings)
