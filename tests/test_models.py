@@ -1,50 +1,12 @@
 """Tests for output models and context."""
 
 import copy
-from dataclasses import fields
-from types import UnionType
-from typing import Any, Union, get_args, get_origin, get_type_hints
+from typing import Any
 from unittest.mock import Mock
 
 from sinan_agentic_core.models.context import AgentContext
 from sinan_agentic_core.models.outputs import ChatResponse, ToolOutput
-
-
-def _declared_members(annotation: object) -> tuple[object, ...]:
-    """The members of an optional annotation, or the annotation itself when it is not one."""
-    if get_origin(annotation) in (Union, UnionType):
-        return get_args(annotation)
-    return (annotation,)
-
-
-def _collection_field_names(cls: type) -> list[str]:
-    """Field names declared as a ``dict[...]``/``list[...]``, optional or not.
-
-    Selecting on the declared type excludes ``database_connector: Any`` and
-    ``schema: str`` without naming either, so the selection does not need
-    editing when a field is added.
-    """
-    hints = get_type_hints(cls)
-    return [
-        f.name
-        for f in fields(cls)
-        if any(get_origin(m) in (dict, list) for m in _declared_members(hints[f.name]))
-    ]
-
-
-def _edit_every_level(seeded: dict[str, Any] | list[Any]) -> None:
-    """Edit the container and the values nested in it — a shallow copy detaches only the outer."""
-    for value in seeded.values() if isinstance(seeded, dict) else seeded:
-        if isinstance(value, list):
-            value.append("added_late")
-        elif isinstance(value, dict):
-            value["added_late"] = True
-
-    if isinstance(seeded, dict):
-        seeded["added_late"] = True
-    else:
-        seeded.append({"added_late": True})
-
+from tests.conftest import collection_field_names, edit_every_level
 
 # -- ToolOutput ---------------------------------------------------------------
 
@@ -158,7 +120,7 @@ class TestToolOutputOwnsItsMappings:
             "data": {"rows": [{"id": 1}]},
             "metadata": {"trace": {"attempts": 1}},
         }
-        assert set(_collection_field_names(ToolOutput)) == set(seeds), (
+        assert set(collection_field_names(ToolOutput)) == set(seeds), (
             "ToolOutput gained or lost a collection field — seed it here "
             "and copy it in __post_init__"
         )
@@ -166,7 +128,7 @@ class TestToolOutputOwnsItsMappings:
 
         out = ToolOutput(success=True, **seeds)
         for seeded in seeds.values():
-            _edit_every_level(seeded)
+            edit_every_level(seeded)
 
         for name, as_supplied in seeded_as_supplied.items():
             assert (
@@ -308,7 +270,7 @@ class TestChatResponseOwnsItsCollections:
             "tools_called": ["tool_a"],
             "usage": {"input_tokens_details": {"cached_tokens": 10}},
         }
-        assert set(_collection_field_names(ChatResponse)) == set(seeds), (
+        assert set(collection_field_names(ChatResponse)) == set(seeds), (
             "ChatResponse gained or lost a collection field — seed it here "
             "and copy it in __post_init__"
         )
@@ -316,7 +278,7 @@ class TestChatResponseOwnsItsCollections:
 
         r = ChatResponse(success=True, **seeds)
         for seeded in seeds.values():
-            _edit_every_level(seeded)
+            edit_every_level(seeded)
 
         for name, as_supplied in seeded_as_supplied.items():
             assert getattr(r, name) == as_supplied, f"{name} is aliased to the caller's collection"
@@ -485,7 +447,7 @@ class TestAgentContextCopiesTheCallersCollections:
             "filters": {"status": ["active"]},
             "discovered_data": {"tags": ["python"]},
         }
-        assert set(_collection_field_names(AgentContext)) == set(seeds), (
+        assert set(collection_field_names(AgentContext)) == set(seeds), (
             "AgentContext gained or lost a collection field — seed it here "
             "and copy it in __post_init__"
         )
@@ -493,7 +455,7 @@ class TestAgentContextCopiesTheCallersCollections:
 
         ctx = AgentContext(database_connector=Mock(), **seeds)
         for seeded in seeds.values():
-            _edit_every_level(seeded)
+            edit_every_level(seeded)
 
         for name, as_supplied in seeded_as_supplied.items():
             assert (
