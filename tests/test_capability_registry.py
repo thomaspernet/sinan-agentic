@@ -26,6 +26,7 @@ from sinan_agentic_core.registry.capability_registry import (
     get_capability_registry,
     register_capability,
 )
+from sinan_agentic_core.registry.tool_registry import ToolRegistry, get_tool_registry
 
 # ---------------------------------------------------------------------------
 # Test capability
@@ -41,6 +42,22 @@ class _RecorderCapability(Capability):
 
     def instructions(self, ctx: RunContextWrapper[Any]) -> str | None:
         return f"recorder({self.label}, flag={self.flag})"
+
+
+class _KeeperCapability(Capability):
+    """Capability that keeps its whole config — the shape this module documents."""
+
+    def __init__(self, **config: Any) -> None:
+        self.config = config
+
+    def instructions(self, ctx: RunContextWrapper[Any]) -> str | None:
+        return None
+
+
+def _keeper_registry() -> CapabilityRegistry:
+    reg = CapabilityRegistry()
+    reg.register("keeper", lambda config: _KeeperCapability(**config))
+    return reg
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +160,98 @@ class TestCapabilityRegistry:
 
 
 # ---------------------------------------------------------------------------
+# Built capabilities own their config
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltCapabilitiesOwnTheirConfig:
+    """A factory receives its own config, all the way down.
+
+    ``config`` is typed ``dict[str, Any]``, so a declared value nests. Copying
+    only the outer mapping would leave every value inside it the caller's own
+    object — shared with whoever declared it and with every other capability
+    built from the same declaration.
+    """
+
+    def test_an_edit_inside_a_nested_mapping_does_not_reach_the_capability(self) -> None:
+        config: dict[str, Any] = {"nested": {"k": "before"}}
+        cap = _keeper_registry().build("keeper", config)
+
+        config["nested"]["k"] = "after"
+
+        assert isinstance(cap, _KeeperCapability)
+        assert cap.config["nested"] == {"k": "before"}
+
+    def test_an_edit_inside_a_nested_list_does_not_reach_the_capability(self) -> None:
+        config: dict[str, Any] = {"items": [{"k": "before"}]}
+        cap = _keeper_registry().build("keeper", config)
+
+        config["items"][0]["k"] = "after"
+        config["items"].append({"k": "extra"})
+
+        assert isinstance(cap, _KeeperCapability)
+        assert cap.config["items"] == [{"k": "before"}]
+
+    def test_a_key_added_to_a_nested_mapping_does_not_reach_the_capability(self) -> None:
+        config: dict[str, Any] = {"nested": {"k": "v"}}
+        cap = _keeper_registry().build("keeper", config)
+
+        config["nested"]["late"] = "value"
+
+        assert isinstance(cap, _KeeperCapability)
+        assert "late" not in cap.config["nested"]
+
+    def test_two_capabilities_built_from_one_config_do_not_share_a_nested_value(self) -> None:
+        reg = _keeper_registry()
+        config: dict[str, Any] = {"nested": {"k": "v"}, "items": [1, 2]}
+
+        first = reg.build("keeper", config)
+        second = reg.build("keeper", config)
+
+        assert isinstance(first, _KeeperCapability)
+        assert isinstance(second, _KeeperCapability)
+        assert first.config["nested"] is not second.config["nested"]
+        assert first.config["items"] is not second.config["items"]
+
+        first.config["nested"]["k"] = "mutated"
+        assert second.config["nested"]["k"] == "v"
+
+    def test_a_capability_editing_its_own_config_does_not_reach_the_caller(self) -> None:
+        """The declaration a capability came from stays what it was."""
+        config: dict[str, Any] = {"nested": {"k": "v"}}
+        cap = _keeper_registry().build("keeper", config)
+
+        assert isinstance(cap, _KeeperCapability)
+        cap.config["nested"]["k"] = "mutated"
+
+        assert config["nested"] == {"k": "v"}
+
+    def test_the_declared_values_survive_the_copy(self) -> None:
+        config: dict[str, Any] = {
+            "nested": {"deep": {"k": "v"}},
+            "items": [1, {"k": "v"}],
+            "flag": True,
+        }
+        cap = _keeper_registry().build("keeper", config)
+
+        assert isinstance(cap, _KeeperCapability)
+        assert cap.config == config
+
+    def test_a_live_object_in_the_config_reaches_the_factory_by_identity(self) -> None:
+        """Only the declared containers are copied — a live handle is not.
+
+        Copying it would hand the capability a lookalike that stops tracking
+        what the caller's object does next; see the ``tool_registry`` key
+        ``error_recovery`` reads off its config.
+        """
+        live = ToolRegistry()
+        cap = _keeper_registry().build("keeper", {"handle": live})
+
+        assert isinstance(cap, _KeeperCapability)
+        assert cap.config["handle"] is live
+
+
+# ---------------------------------------------------------------------------
 # Decorator + global registry
 # ---------------------------------------------------------------------------
 
@@ -237,10 +346,6 @@ class TestBuiltInCapabilities:
             get_capability_registry().build("turn_budget", {"typo": 5})
 
     def test_build_error_recovery_uses_global_tool_registry(self) -> None:
-        from sinan_agentic_core.registry.tool_registry import (
-            get_tool_registry,
-        )
-
         reg = get_capability_registry()
         cap = reg.build("error_recovery")
         assert isinstance(cap, ToolErrorRecovery)
@@ -262,8 +367,6 @@ class TestBuiltInCapabilities:
 
     def test_build_error_recovery_honors_an_explicit_registry(self) -> None:
         """A caller holding a registry still overrides the global fallback."""
-        from sinan_agentic_core.registry.tool_registry import ToolRegistry
-
         registry = ToolRegistry()
 
         cap = get_capability_registry().build("error_recovery", {"tool_registry": registry})

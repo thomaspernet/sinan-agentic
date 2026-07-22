@@ -30,6 +30,30 @@ class CapabilityNotFoundError(KeyError):
     """Raised when a YAML capability reference points to an unregistered name."""
 
 
+def _detach(value: Any) -> Any:
+    """Rebuild every mapping and list in *value*, leaving anything else shared.
+
+    Mappings and lists are the two containers YAML produces, so rebuilding them
+    all the way down detaches the whole declared payload. Everything else is
+    handed over as-is: a scalar cannot be edited, and a live object a caller
+    passes alongside its declaration — a tool registry, a tracer sink — is meant
+    to stay that caller's object, which a copy would silently replace with a
+    lookalike.
+    """
+    if isinstance(value, dict):
+        return {key: _detach(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_detach(item) for item in value]
+    return value
+
+
+def _copy_config(config: dict[str, Any] | None) -> dict[str, Any]:
+    """Copy a capability config all the way down before a factory receives it."""
+    if not config:
+        return {}
+    return {key: _detach(value) for key, value in config.items()}
+
+
 class CapabilityRegistry:
     """Central registry mapping capability names to factory callables."""
 
@@ -56,9 +80,18 @@ class CapabilityRegistry:
         return self._factories[name]
 
     def build(self, name: str, config: dict[str, Any] | None = None) -> Capability:
-        """Resolve *name* through the registry and invoke its factory."""
+        """Resolve *name* through the registry and invoke its factory.
+
+        The factory receives its own config: a capability that keeps what it was
+        built with — ``MyCapability(**config)``, the shape this module documents
+        — cannot write back into the declaration it came from, and two
+        capabilities built from one declaration never share a value. The copy
+        goes all the way down because ``config`` is typed ``dict[str, Any]`` and
+        a declared value nests; a one-level copy would detach only the outer
+        mapping and leave every value inside it the caller's own object.
+        """
         factory = self.get(name)
-        return factory(dict(config) if config else {})
+        return factory(_copy_config(config))
 
 
 _global_registry = CapabilityRegistry()
