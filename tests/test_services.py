@@ -2,6 +2,7 @@
 
 import asyncio
 import copy
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -32,7 +33,7 @@ from sinan_agentic_core.services.events import (
 )
 from sinan_agentic_core.services.hooks import StreamingRunHooks
 from sinan_agentic_core.session.agent_session import AgentSession
-from tests.conftest import make_context_overflow_error
+from tests.conftest import collection_field_names, edit_every_level, make_context_overflow_error
 
 # Every run failure a chat function classifies, and the kind it must report.
 RUN_FAILURES = [
@@ -147,6 +148,26 @@ class TestAnswerEventOwnsItsSources:
 
         assert events[0].sources == []
 
+    def test_every_collection_field_is_detached_from_the_caller(self):
+        """A collection field added later without a matching copy fails here, rather than drifting.
+
+        The seeded sources are opaque scalars because only the container is copied
+        here — an edit inside a source is meant to reach the event.
+        """
+        seeds: dict[str, Any] = {"sources": ["data.csv"]}
+        assert set(collection_field_names(AnswerEvent)) == set(seeds), (
+            "AnswerEvent gained or lost a collection field — seed it here "
+            "and copy it in __post_init__"
+        )
+        seeded_as_supplied = copy.deepcopy(seeds)
+
+        e = AnswerEvent(answer="42", **seeds)
+        for seeded in seeds.values():
+            edit_every_level(seeded)
+
+        for name, as_supplied in seeded_as_supplied.items():
+            assert getattr(e, name) == as_supplied, f"{name} is aliased to the caller's collection"
+
 
 class TestToolCallEventOwnsItsArguments:
     """The event is a fixed record of one call, so nobody else holds its arguments."""
@@ -211,6 +232,22 @@ class TestToolCallEventOwnsItsArguments:
         first["arguments"]["filters"]["tags"].append("added_by_consumer")
 
         assert second["arguments"] == {"filters": {"tags": ["python"]}}
+
+    def test_every_collection_field_is_detached_from_the_caller(self):
+        """A collection field added later without a matching copy fails here, rather than drifting."""
+        seeds: dict[str, Any] = {"arguments": {"filters": {"tags": ["python"]}}}
+        assert set(collection_field_names(ToolCallEvent)) == set(seeds), (
+            "ToolCallEvent gained or lost a collection field — seed it here "
+            "and copy it in __post_init__"
+        )
+        seeded_as_supplied = copy.deepcopy(seeds)
+
+        e = ToolCallEvent(tool_name="search", **seeds)
+        for seeded in seeds.values():
+            edit_every_level(seeded)
+
+        for name, as_supplied in seeded_as_supplied.items():
+            assert getattr(e, name) == as_supplied, f"{name} is aliased to the caller's collection"
 
 
 # -- StreamingHelper -----------------------------------------------------------
