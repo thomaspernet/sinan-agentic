@@ -928,6 +928,33 @@ After repeated identical failures:
   Move on to your next task, try a completely different approach, or return your partial results.
 ```
 
+### YAML configuration
+
+Recovery is on by default for every YAML agent. The `error_recovery:` shorthand turns it off, or on with the defaults; the `capabilities:` list turns it on and tunes it:
+
+```yaml
+agents:
+  simple_agent:
+    model: gpt-4o-mini
+    description: Quick tasks
+    error_recovery: false        # off — failures surface untouched
+
+  mcp_agent:
+    model: gpt-4o
+    description: Drives external MCP servers
+    error_recovery: false        # the shorthand is on by default, and both
+                                 # forms apply — leave it on and the agent
+                                 # gets two recovery capabilities
+    capabilities:
+      - name: error_recovery
+        config:
+          max_identical_before_stop: 5
+          mcp_hints:
+            mcp_arxiv_search: Query must be at least 2 characters.
+```
+
+Those two are the whole of that config block, and an unrecognized key there is rejected when the capability is built. `tool_registry` is not one of them: it is a live object rather than something YAML can express, and it falls back to the process-wide registry.
+
 ### Configuration reference
 
 | Parameter | Default | Description |

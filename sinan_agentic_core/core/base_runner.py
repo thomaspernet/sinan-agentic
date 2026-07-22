@@ -47,7 +47,7 @@ from .output_recovery import (
 )
 from .run_config import tool_input_pre_approval
 from .run_errors import FALLBACK_RECOVERABLE_KINDS, classify_run_error
-from .tool_error_recovery import ToolErrorRecovery
+from .tool_error_recovery import ToolErrorRecovery, build_tool_error_recovery
 from .tool_output_trim import build_tool_output_trimmer
 from .turn_budget import TurnBudget
 from .turn_budget_tool import request_extension_tool
@@ -244,11 +244,10 @@ class BaseAgentRunner:
         """
         agent_def = self._get_agent_definition(agent_name)
 
-        # Auto-create error recovery if True was passed
-        if error_recovery is True:
-            error_recovery = ToolErrorRecovery(tool_registry=self.tool_registry)
-        elif error_recovery is False:
-            error_recovery = None
+        # A boolean is a declaration, not a capability — translate it the way the
+        # YAML paths do rather than constructing one here.
+        if isinstance(error_recovery, bool):
+            error_recovery = build_tool_error_recovery(error_recovery, self.tool_registry)
 
         capabilities = self._build_run_capabilities(
             agent_def=agent_def,

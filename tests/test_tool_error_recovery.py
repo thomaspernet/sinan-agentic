@@ -1,14 +1,19 @@
 """Tests for the tool error recovery system (core/tool_error_recovery.py)."""
 
+import inspect
 import json
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from agents import RunContextWrapper
+from pydantic import ValidationError
 
 from sinan_agentic_core.core.capabilities import Capability
 from sinan_agentic_core.core.tool_error_recovery import (
+    DEFAULT_MAX_IDENTICAL_BEFORE_STOP,
     ToolErrorRecovery,
+    ToolErrorRecoveryConfig,
+    build_tool_error_recovery,
 )
 
 # ------------------------------------------------------------------ #
@@ -522,6 +527,43 @@ class TestBaseAgentRunnerIntegration:
             )
         assert not recovery.has_errors  # reset at start
 
+    async def _capabilities_for(self, runner, error_recovery):
+        """Run execute() with *error_recovery* and return the capabilities it installed."""
+        with patch.object(runner, "_execute_basic", new_callable=AsyncMock) as mock_basic:
+            mock_basic.return_value = "output"
+            await runner.execute(
+                "test_agent",
+                Mock(spec=[]),
+                session=Mock(),
+                input_text="hello",
+                error_recovery=error_recovery,
+            )
+        capabilities: list[Capability] = mock_basic.call_args.kwargs["capabilities"]
+        return capabilities
+
+    async def test_execute_translates_error_recovery_true(self, runner, _registries):
+        """``True`` is a declaration; the runner translates it on its own registry."""
+        _, tool_reg, _ = _registries
+
+        built = await self._capabilities_for(runner, True)
+
+        recovery = [c for c in built if isinstance(c, ToolErrorRecovery)]
+        assert len(recovery) == 1
+        assert recovery[0]._registry is tool_reg
+
+    async def test_execute_translates_error_recovery_false(self, runner):
+        built = await self._capabilities_for(runner, False)
+
+        assert not any(isinstance(c, ToolErrorRecovery) for c in built)
+
+    async def test_execute_uses_a_passed_recovery_in_place(self, runner):
+        """An instance is already the capability — it is installed, not rebuilt."""
+        recovery = ToolErrorRecovery()
+
+        built = await self._capabilities_for(runner, recovery)
+
+        assert recovery in built
+
 
 # ------------------------------------------------------------------ #
 # _CompositeHooks
@@ -558,6 +600,94 @@ class TestCompositeHooks:
 
         await composite.on_tool_start(ctx, Mock(), tool)
         cap.on_tool_start.assert_called_once_with(ctx, tool, ctx.tool_arguments)
+
+
+# ------------------------------------------------------------------ #
+# ToolErrorRecoveryConfig — the declared form
+# ------------------------------------------------------------------ #
+
+
+class TestToolErrorRecoveryConfigDefaults:
+    def test_an_empty_declaration_opts_in_with_defaults(self):
+        """``error_recovery: true`` is the whole declaration on the shorthand path."""
+        config = ToolErrorRecoveryConfig()
+        assert config.mcp_hints == {}
+        assert config.max_identical_before_stop == DEFAULT_MAX_IDENTICAL_BEFORE_STOP
+
+    def test_an_unknown_key_is_rejected(self):
+        """A typo must fail loudly rather than silently leave the field at its default."""
+        with pytest.raises(ValidationError, match="typo"):
+            ToolErrorRecoveryConfig(typo=5)
+
+    def test_the_tool_registry_is_not_a_declared_field(self):
+        """The registry is a live object the caller supplies, not something YAML declares."""
+        with pytest.raises(ValidationError, match="tool_registry"):
+            ToolErrorRecoveryConfig(tool_registry=Mock())
+
+
+class TestToolErrorRecoveryConfigBuild:
+    """The translation every declaration path shares."""
+
+    def test_a_declared_config_becomes_a_capability(self):
+        registry = Mock()
+
+        recovery = ToolErrorRecoveryConfig(
+            mcp_hints={"mcp_search": "Use a longer query."},
+            max_identical_before_stop=5,
+        ).build(registry)
+
+        assert recovery._registry is registry
+        assert recovery._mcp_hints == {"mcp_search": "Use a longer query."}
+        assert recovery.max_identical_before_stop == 5
+
+    def test_no_registry_supplied_falls_back_to_the_global_one(self):
+        from sinan_agentic_core.registry.tool_registry import get_tool_registry
+
+        recovery = ToolErrorRecoveryConfig().build()
+
+        assert recovery._registry is get_tool_registry()
+
+    def test_every_declared_field_names_a_constructor_parameter(self):
+        """build() forwards model_dump() wholesale, so a new field must be accepted as-is."""
+        parameters = inspect.signature(ToolErrorRecovery.__init__).parameters
+
+        assert set(ToolErrorRecoveryConfig.model_fields) <= set(parameters)
+
+    def test_each_call_returns_a_fresh_capability(self):
+        """The capability tracks errors per run, so no two agents may share one."""
+        config = ToolErrorRecoveryConfig()
+
+        assert config.build() is not config.build()
+
+
+class TestBuildToolErrorRecovery:
+    """The translator carrying the "off when disabled" rule."""
+
+    def test_enabled_becomes_a_capability(self):
+        recovery = build_tool_error_recovery(True)
+
+        assert isinstance(recovery, ToolErrorRecovery)
+        assert recovery.max_identical_before_stop == DEFAULT_MAX_IDENTICAL_BEFORE_STOP
+
+    def test_disabled_means_no_capability(self):
+        """Recovery rewrites instructions every turn, so it is never implied."""
+        assert build_tool_error_recovery(False) is None
+
+    def test_no_registry_supplied_falls_back_to_the_global_one(self):
+        from sinan_agentic_core.registry.tool_registry import get_tool_registry
+
+        recovery = build_tool_error_recovery(True)
+
+        assert recovery is not None
+        assert recovery._registry is get_tool_registry()
+
+    def test_a_supplied_registry_is_used(self):
+        registry = Mock()
+
+        recovery = build_tool_error_recovery(True, registry)
+
+        assert recovery is not None
+        assert recovery._registry is registry
 
 
 # ------------------------------------------------------------------ #
