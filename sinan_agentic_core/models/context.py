@@ -33,13 +33,20 @@ class AgentContext:
     Extend this class for your specific use case by adding domain-specific fields.
     A subclass that defines its own ``__post_init__`` must call
     ``super().__post_init__()``, or its instances go back to aliasing the seeds.
+    That call copies the four collections declared here and nothing else — the
+    base class cannot reach a field it does not declare — so a subclass that
+    adds a collection of its own must copy that one itself.
 
     Example:
         @dataclass
         class MyAppContext(AgentContext):
             user_id: str = ""
             workspace_id: str = ""
-            custom_metadata: Dict[str, Any] = field(default_factory=dict)
+            custom_metadata: dict[str, Any] = field(default_factory=dict)
+
+            def __post_init__(self) -> None:
+                super().__post_init__()
+                self.custom_metadata = copy.deepcopy(self.custom_metadata)
     """
 
     database_connector: Any  # Replace with your specific database connector type
