@@ -1309,7 +1309,11 @@ If `as_tool_turn_budget` is not set, the runner falls back to `as_tool_max_turns
 | `reminder_at` | 2 | Warn when this many turns remain |
 | `max_extensions` | 3 | Max self-approved extensions |
 | `extension_size` | 5 | Turns added per extension |
-| `absolute_max` | 25 | Hard ceiling passed to SDK |
+
+Those four are the whole of the `turn_budget:` block, and an unrecognized key
+there is rejected at load time. The hard ceiling — `TurnBudget.absolute_max`, 25
+when unset — is not one of them: in YAML it is the agent's own `max_turns`, and
+in code it is a constructor argument.
 
 ## Session Persistence
 

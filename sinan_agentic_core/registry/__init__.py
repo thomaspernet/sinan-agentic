@@ -4,7 +4,6 @@ from .agent_catalog import (
     AgentCatalog,
     AgentYamlEntry,
     CapabilityRef,
-    TurnBudgetConfig,
     load_agent_catalog,
 )
 from .agent_factory import create_agent_from_registry
@@ -36,7 +35,6 @@ __all__ = [
     "AgentCatalog",
     "AgentYamlEntry",
     "CapabilityRef",
-    "TurnBudgetConfig",
     "load_agent_catalog",
     "AgentDefinition",
     "AgentRegistry",

@@ -48,6 +48,7 @@ from .core import (
     ToolOutputTrimConfig,
     ToolTracer,
     TurnBudget,
+    TurnBudgetConfig,
     build_error_handlers,
     build_run_config,
     classify_run_error,
@@ -124,6 +125,7 @@ __all__ = [
     "ToolOutputTrimConfig",
     "ToolTracer",
     "TurnBudget",
+    "TurnBudgetConfig",
     # Instructions
     "InstructionBuilder",
     # LLM providers

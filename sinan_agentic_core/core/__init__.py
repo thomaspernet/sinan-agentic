@@ -11,6 +11,7 @@ This module contains fundamental components for agent execution:
 - build_run_config: Run-level SDK settings a built agent needs
 - ModelRetryConfig: Declarative opt-in retry policy for model calls
 - ToolOutputTrimConfig: Declarative opt-in trimming of oversized tool outputs
+- TurnBudgetConfig: Declarative opt-in soft turn budget for one agent
 - RunErrorKind / classify_run_error: Typed classification of agent-run failures
 """
 
@@ -24,7 +25,7 @@ from .run_errors import RunErrorKind, classify_run_error
 from .tool_error_recovery import ToolErrorRecovery
 from .tool_output_trim import ToolOutputTrimConfig
 from .tool_tracer import ToolTracer
-from .turn_budget import TurnBudget
+from .turn_budget import TurnBudget, TurnBudgetConfig
 
 __all__ = [
     "BaseAgentRunner",
@@ -42,4 +43,5 @@ __all__ = [
     "ToolOutputTrimConfig",
     "ToolTracer",
     "TurnBudget",
+    "TurnBudgetConfig",
 ]
