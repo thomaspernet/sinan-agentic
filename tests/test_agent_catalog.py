@@ -342,6 +342,119 @@ class TestAgentCatalogCopiesTheCallersMaps:
 
 
 # ---------------------------------------------------------------------------
+# Resolved entries own their values
+# ---------------------------------------------------------------------------
+
+
+class _ScopedCapability(Capability):
+    """Custom capability whose config nests a mutable value."""
+
+    def __init__(self, scopes: list[str]) -> None:
+        self.scopes = scopes
+
+    def instructions(self, ctx: RunContextWrapper[Any]) -> str | None:
+        return f"scoped({','.join(self.scopes)})"
+
+
+@pytest.fixture
+def scoped_capability_registered():
+    """Register a capability taking a nested config value, then clean up."""
+    name = "_test_scoped_capability"
+
+    @register_capability(name)
+    def factory(config: dict[str, Any]) -> Capability:
+        return _ScopedCapability(**config)
+
+    yield name
+    get_capability_registry()._factories.pop(name, None)
+
+
+class TestResolvedEntriesOwnTheirValues:
+    """A resolved entry is a snapshot too, so editing it cannot reach the catalog.
+
+    Pydantic rebuilds the containers it has a declared type for and stops at
+    ``Any``, so a value nested inside a tool rule or inside a capability's
+    ``config`` is what the catalog would otherwise hand out by reference.
+    """
+
+    @staticmethod
+    def _catalog(capability_name: str) -> AgentCatalog:
+        return AgentCatalog(
+            tool_groups={},
+            raw_agents={
+                "chatbot": {
+                    "model": "reasoning",
+                    "description": "Main",
+                    "tool_rules": {"discover": {"after": ["think"]}},
+                    "capabilities": [
+                        {"name": capability_name, "config": {"scopes": ["read"]}},
+                    ],
+                },
+            },
+        )
+
+    def test_an_edit_inside_a_tool_rule_is_not_visible(self, scoped_capability_registered):
+        catalog = self._catalog(scoped_capability_registered)
+
+        catalog.get("chatbot").tool_rules["discover"]["after"].append("late")
+
+        assert catalog.get("chatbot").tool_rules == {"discover": {"after": ["think"]}}
+
+    def test_a_tool_rule_added_to_a_resolved_entry_is_not_visible(
+        self, scoped_capability_registered
+    ):
+        catalog = self._catalog(scoped_capability_registered)
+
+        catalog.get("chatbot").tool_rules["late_tool"] = {"after": []}
+
+        assert list(catalog.get("chatbot").tool_rules) == ["discover"]
+
+    def test_an_edit_inside_a_capability_config_is_not_visible(self, scoped_capability_registered):
+        catalog = self._catalog(scoped_capability_registered)
+
+        catalog.get("chatbot").capabilities[0].config["scopes"].append("write")
+
+        assert catalog.get("chatbot").capabilities[0].config == {"scopes": ["read"]}
+
+    def test_two_entries_do_not_share_a_tool_rule(self, scoped_capability_registered):
+        catalog = self._catalog(scoped_capability_registered)
+        first = catalog.get("chatbot")
+        second = catalog.get("chatbot")
+
+        first.tool_rules["discover"]["after"].append("late")
+
+        assert second.tool_rules["discover"]["after"] == ["think"]
+
+    def test_two_entries_do_not_share_a_capability_config(self, scoped_capability_registered):
+        catalog = self._catalog(scoped_capability_registered)
+        first = catalog.get("chatbot")
+        second = catalog.get("chatbot")
+
+        first.capabilities[0].config["scopes"].append("write")
+
+        assert second.capabilities[0].config["scopes"] == ["read"]
+
+    def test_a_capability_built_from_a_resolved_entry_is_not_shared(
+        self, scoped_capability_registered
+    ):
+        catalog = self._catalog(scoped_capability_registered)
+        built = catalog.get("chatbot").build_capabilities()
+
+        scoped = [cap for cap in built if isinstance(cap, _ScopedCapability)]
+        scoped[0].scopes.append("write")
+
+        assert catalog.get("chatbot").capabilities[0].config == {"scopes": ["read"]}
+
+    def test_the_declared_values_survive_the_copy(self, scoped_capability_registered):
+        entry = self._catalog(scoped_capability_registered).get("chatbot")
+
+        assert entry.tool_rules == {"discover": {"after": ["think"]}}
+        assert entry.capabilities == [
+            CapabilityRef(name=scoped_capability_registered, config={"scopes": ["read"]})
+        ]
+
+
+# ---------------------------------------------------------------------------
 # load_agent_catalog
 # ---------------------------------------------------------------------------
 

@@ -281,9 +281,11 @@ class AgentCatalog:
     Knowledge scopes are pre-loaded from YAML files and cached.
     Also stores ``mcp_servers`` definitions for MCP server building.
 
-    A catalog is a fixed in-process view of the parsed YAML: every mapping it
-    is given is copied on the way in, so what it resolves never changes after
-    construction.
+    A catalog is a fixed in-process view of the parsed YAML in both directions:
+    every mapping it is given is copied on the way in, and every entry it
+    resolves owns its values. So what it resolves never changes after
+    construction, and a consumer editing a resolved entry cannot write back
+    into the catalog.
     """
 
     def __init__(
@@ -324,11 +326,21 @@ class AgentCatalog:
         *config*.  If *config* is ``None``, conditional tools are skipped.
         Knowledge scopes listed in the agent's ``knowledge`` key are
         concatenated into ``knowledge_text``.
+
+        The returned entry owns everything it carries: editing it — including a
+        value nested inside ``tool_rules`` or a capability's ``config`` — cannot
+        change the catalog or another entry resolved from it.
         """
         if name not in self._raw_agents:
             available = ", ".join(sorted(self._raw_agents.keys()))
             raise KeyError(f"Agent '{name}' not found in agents.yaml. " f"Available: {available}")
-        raw = self._raw_agents[name]
+        # Copied on the way out for the same reason the constructor copies on the
+        # way in. Pydantic rebuilds only the containers it has a declared type
+        # for and stops at ``Any``: the values inside a tool rule and inside a
+        # ``CapabilityRef.config`` are handed over as-is, so without this copy
+        # they would be the catalog's own objects and editing a resolved entry
+        # would change what every later ``get()`` returns.
+        raw = copy.deepcopy(self._raw_agents[name])
         budget_cfg = _parse_optional_block(raw, "turn_budget", TurnBudgetConfig)
         retry_cfg = _parse_optional_block(raw, "model_retry", ModelRetryConfig)
         trim_cfg = _parse_optional_block(raw, "tool_output_trim", ToolOutputTrimConfig)
