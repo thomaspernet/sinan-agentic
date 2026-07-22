@@ -1,6 +1,7 @@
 """Tests for MCP extensions to ToolCatalog and AgentCatalog."""
 
 import pytest
+from pydantic import ValidationError
 
 from sinan_agentic_core.registry.agent_catalog import AgentCatalog
 from sinan_agentic_core.registry.tool_catalog import ToolCatalog
@@ -45,6 +46,57 @@ def test_tool_catalog_get_mcp_tools_empty():
         }
     )
     assert catalog.get_mcp_tools() == []
+
+
+def test_tool_catalog_mcp_empty_block_is_a_declaration():
+    """``mcp: {}`` resolves to ToolMCPConfig defaults, not to an absent block."""
+    catalog = ToolCatalog(
+        raw_tools={
+            "think": {"description": "Think", "mcp": {}},
+        }
+    )
+
+    entry = catalog.get("think")
+    assert entry.mcp is not None
+    assert entry.mcp.expose is False
+    assert entry.mcp.annotations == {}
+    # The block declares MCP config with defaults, and the default is not exposed.
+    assert catalog.get_mcp_tools() == []
+
+
+def test_tool_catalog_mcp_null_block_opts_out():
+    """An explicitly null ``mcp`` key means the tool declares no MCP config."""
+    catalog = ToolCatalog(
+        raw_tools={
+            "think": {"description": "Think", "mcp": None},
+        }
+    )
+
+    assert catalog.get("think").mcp is None
+    assert catalog.get_mcp_tools() == []
+
+
+def test_tool_catalog_get_mcp_tools_validates_expose():
+    """``expose`` is validated as a bool, not read for truthiness."""
+    catalog = ToolCatalog(
+        raw_tools={
+            "think": {"description": "Think", "mcp": {"expose": "no"}},
+        }
+    )
+
+    assert catalog.get_mcp_tools() == []
+
+
+def test_tool_catalog_get_mcp_tools_rejects_malformed_expose():
+    """A non-boolean ``expose`` surfaces as a validation error, not as exposure."""
+    catalog = ToolCatalog(
+        raw_tools={
+            "think": {"description": "Think", "mcp": {"expose": "maybe"}},
+        }
+    )
+
+    with pytest.raises(ValidationError):
+        catalog.get_mcp_tools()
 
 
 def test_tool_yaml_entry_mcp_field():
