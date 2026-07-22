@@ -660,6 +660,57 @@ class TestCompositeHooks:
         await composite.on_tool_start(ctx, Mock(), tool)
         cap.on_tool_start.assert_called_once_with(ctx, tool, ctx.tool_arguments)
 
+    async def test_the_callers_capability_list_is_not_aliased(self):
+        """The bundle owns its dispatch set, so a later append by the caller does not reach it."""
+        from sinan_agentic_core.core.base_runner import _CompositeHooks
+
+        declared = [Mock(spec=Capability)]
+
+        composite = _CompositeHooks(declared)
+        late = Mock(spec=Capability)
+        declared.append(late)
+        await composite.on_agent_start(Mock(), Mock())
+
+        late.on_agent_start.assert_not_called()
+
+    async def test_two_bundles_built_from_one_list_do_not_share_a_dispatch_set(self):
+        from sinan_agentic_core.core.base_runner import _CompositeHooks
+
+        cap = Mock(spec=Capability)
+        declared = [cap]
+
+        first = _CompositeHooks(declared)
+        second = _CompositeHooks(declared)
+        late = Mock(spec=Capability)
+        first._capabilities.append(late)
+        await second.on_agent_start(Mock(), Mock())
+
+        late.on_agent_start.assert_not_called()
+        assert late not in declared
+
+    def test_the_capabilities_themselves_stay_shared_with_the_caller(self):
+        """Only the container is detached — a budget's live state is read back after the run."""
+        from sinan_agentic_core.core.base_runner import _CompositeHooks
+        from sinan_agentic_core.core.turn_budget import TurnBudget
+
+        budget = TurnBudget()
+
+        composite = _CompositeHooks([budget])
+
+        assert composite._capabilities[0] is budget
+
+    def test_build_hooks_does_not_alias_the_callers_list(self):
+        """Both construction sites go through the constructor, so the guard covers both."""
+        from sinan_agentic_core.core.base_runner import BaseAgentRunner
+
+        declared = [Mock(spec=Capability)]
+
+        hooks = BaseAgentRunner._build_hooks(declared)
+        declared.append(Mock(spec=Capability))
+
+        assert hooks is not None
+        assert len(hooks._capabilities) == 1
+
 
 # ------------------------------------------------------------------ #
 # ToolErrorRecoveryConfig — the declared form
