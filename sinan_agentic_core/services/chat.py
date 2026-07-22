@@ -9,9 +9,11 @@ Three flavours of chat, from simplest to most granular:
 All three handle session history, error handling, and return structured
 events so your API layer stays thin.  They also apply the run-level SDK
 settings the resolved agent needs — an agent whose tools carry tool-input
-guardrails runs them ahead of any human-approval interruption, and an agent
-with a structured ``output_type`` recovers a final message whose payload is
-valid but wrapped in prose or a code fence instead of failing the run.
+guardrails runs them ahead of any human-approval interruption, an agent whose
+definition declares ``tool_output_trim`` has its bulky older tool outputs
+shrunk before each model call, and an agent with a structured ``output_type``
+recovers a final message whose payload is valid but wrapped in prose or a
+code fence instead of failing the run.
 
 A failure never reaches the caller as an exception, so each of the three
 reports *why* it failed: the caught error is classified into a

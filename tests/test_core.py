@@ -1836,21 +1836,11 @@ def trim_runner(_registries):
 
 
 class TestToolOutputTrimWiring:
-    def test_build_trimmer_translates_the_declared_config(self, trim_runner):
-        agent_def = trim_runner._get_agent_definition("trimming_agent")
-        trimmer = trim_runner._build_tool_output_trimmer(agent_def)
-
-        assert trimmer.recent_turns == 3
-        assert trimmer.max_output_chars == 4000
-
-    def test_build_trimmer_none_when_not_declared(self, trim_runner):
-        agent_def = trim_runner._get_agent_definition("plain_agent")
-        assert trim_runner._build_tool_output_trimmer(agent_def) is None
-
     def test_run_config_carries_the_filter(self, trim_runner):
         agent_def = trim_runner._get_agent_definition("trimming_agent")
         run_config = trim_runner._build_run_config(agent_def)
 
+        assert run_config.call_model_input_filter.recent_turns == 3
         assert run_config.call_model_input_filter.max_output_chars == 4000
 
     def test_run_config_omits_the_filter_when_not_declared(self, trim_runner):

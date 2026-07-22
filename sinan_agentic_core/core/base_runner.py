@@ -23,7 +23,6 @@ from agents import (
     Runner,
     Usage,
 )
-from agents.extensions import ToolOutputTrimmer
 from agents.items import TResponseInputItem
 from openai.types.responses import ResponseCompletedEvent, ResponseTextDeltaEvent
 
@@ -50,6 +49,7 @@ from .output_recovery import (
 from .run_config import tool_input_pre_approval
 from .run_errors import FALLBACK_RECOVERABLE_KINDS, classify_run_error
 from .tool_error_recovery import ToolErrorRecovery
+from .tool_output_trim import build_tool_output_trimmer
 from .turn_budget import TurnBudget
 from .turn_budget_tool import request_extension_tool
 
@@ -902,7 +902,7 @@ class BaseAgentRunner:
         if self.guardrail_registry.has_category(agent_def.guardrails, GuardrailCategory.TOOL_INPUT):
             config_kwargs["tool_execution"] = tool_input_pre_approval()
 
-        trimmer = self._build_tool_output_trimmer(agent_def)
+        trimmer = build_tool_output_trimmer(agent_def.tool_output_trim)
         if trimmer is not None:
             config_kwargs["call_model_input_filter"] = trimmer
 
@@ -910,26 +910,6 @@ class BaseAgentRunner:
             return None
 
         return RunConfig(**config_kwargs)
-
-    def _build_tool_output_trimmer(self, agent_def: Any) -> ToolOutputTrimmer | None:
-        """Build the SDK tool-output filter for an agent, or None when it opts out.
-
-        Trimming is off unless the agent declares ``tool_output_trim``: it
-        removes content the model would otherwise have seen, so it is never
-        implied.
-
-        Args:
-            agent_def: Agent definition whose ``tool_output_trim`` config decides
-                the filter
-
-        Returns:
-            Configured trimmer, or None when the agent declares no trim policy
-        """
-        if agent_def.tool_output_trim is None:
-            return None
-
-        trimmer: ToolOutputTrimmer = agent_def.tool_output_trim.build()
-        return trimmer
 
     def _build_error_handlers(self, agent_def: Any) -> RunErrorHandlers[Any] | None:
         """Build the SDK run error handlers for an agent, or None when defaults apply.

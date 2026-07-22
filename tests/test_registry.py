@@ -673,6 +673,27 @@ class TestAgentFactoryRunLevelSettings:
         assert run_config is not None
         assert run_config.tool_execution.pre_approval_tool_input_guardrails is True
 
+    def test_declared_trim_policy_resolves_a_run_config(self):
+        """The factory builds no run config, so trimming has to survive the round trip."""
+        from sinan_agentic_core.core.run_config import build_run_config
+        from sinan_agentic_core.core.tool_output_trim import ToolOutputTrimConfig
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+        from sinan_agentic_core.registry.agent_registry import get_agent_registry
+
+        get_agent_registry().register(
+            AgentDefinition(
+                name="_frl_trimming_agent",
+                description="trims",
+                instructions="You answer",
+                tool_output_trim=ToolOutputTrimConfig(max_output_chars=4000),
+            )
+        )
+
+        run_config = build_run_config(create_agent_from_registry("_frl_trimming_agent"))
+
+        assert run_config is not None
+        assert run_config.call_model_input_filter.max_output_chars == 4000
+
     def test_declared_output_dataclass_resolves_no_error_handlers(self):
         from dataclasses import dataclass
 

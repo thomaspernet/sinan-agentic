@@ -336,7 +336,7 @@ agent = create_agent_from_registry("my_agent")
 result = await Runner.run(agent, "Hello!", run_config=build_run_config(agent))
 ```
 
-It returns `None` when the agent needs no run-level setting, which `Runner.run()` accepts as "use the defaults".
+The same call also carries a declared [tool-output trim policy](#tool-output-trimming), the other run-level setting an agent cannot ride in on. It returns `None` when the agent needs neither, which `Runner.run()` accepts as "use the defaults".
 
 ```python
 from agents import (
@@ -1036,7 +1036,7 @@ The overflow-fallback path is the one partial case. Its rescue call goes straigh
 
 A long **multi-turn** conversation accumulates bulky tool outputs — search results, file dumps, error payloads — that keep costing tokens long after they stop being relevant. Left alone they grow the input until the run dies on `context_length_exceeded`, and the only recovery left is `execute(fallback_on_overflow=True)`, which re-collects the tool outputs and pays for a second, condensed model call.
 
-Declare `tool_output_trim` on an agent and the SDK replaces oversized tool outputs from older turns with a short preview *before* each model call. Recent turns stay at full fidelity, so the agent keeps the context it is actually working with while the tail stops growing. It reaches every execution path that runs through the SDK — `execute()` in all three modes, `run_agent()`, and `as_tool()` sub-agents.
+Declare `tool_output_trim` on an agent and the SDK replaces oversized tool outputs from older turns with a short preview *before* each model call. Recent turns stay at full fidelity, so the agent keeps the context it is actually working with while the tail stops growing. It reaches every execution path that runs through the SDK — `execute()` in all three modes, `run_agent()`, `as_tool()` sub-agents, and the chat functions.
 
 Trimming is off unless declared: it removes content the model would otherwise have seen.
 
@@ -1068,6 +1068,18 @@ register_agent(AgentDefinition(
     # ...or inline: ToolOutputTrimConfig(max_output_chars=4000)
 ))
 ```
+
+The SDK installs the filter through `RunConfig`, so unlike a retry policy it cannot ride on the agent — building one is not enough to get it. `build_run_config()` closes that gap: it looks the declaration up by the agent's name, so an agent resolved in `chat()`, `chat_with_hooks()`, or `chat_streamed()` is trimmed on the same terms as one the runner executes. Driving `Runner` yourself works the same way:
+
+```python
+from agents import Runner
+from sinan_agentic_core import build_run_config, create_agent_from_registry
+
+agent = create_agent_from_registry("researcher")
+result = await Runner.run(agent, "Summarize the new papers", run_config=build_run_config(agent))
+```
+
+An agent assembled by hand under a name the registry does not know declares nothing and keeps the SDK defaults.
 
 Pick `max_output_chars` above the size of an output the agent still reasons over several turns later, and `preview_chars` large enough that the trimmed entry still says what the call returned. The two are independent: an output is replaced only when the preview is genuinely shorter than the original, so `preview_chars: 500` with `max_output_chars: 500` is a valid "keep the first 500 characters of anything bigger" policy — it spares outputs just over the cap and still cuts a 100,000-character one by 99%.
 
