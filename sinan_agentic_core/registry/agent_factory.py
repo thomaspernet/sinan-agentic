@@ -56,12 +56,14 @@ def create_agent_from_registry(
     filter through ``RunConfig`` and there is no slot for it on the agent.
     ``build_error_handlers(agent)`` carries the ``invalid_final_output``
     handler, which re-parses a structured payload the model wrapped in prose or
-    a code fence instead of failing the run; it reads the decision off
-    ``Agent.output_type``, which this factory does not set from the
+    a code fence instead of failing the run. It reads the decision from two
+    places: ``Agent.output_type``, which this factory does not set from the
     definition's ``output_dataclass``, so it returns ``None`` until the caller
-    gives the agent an output type. Both return ``None`` when nothing differs
-    from the SDK defaults, which ``Runner.run()`` accepts. Consumers that do
-    not drive ``Runner`` themselves need neither call:
+    gives the agent an output type; and a declared ``invalid_output_recovery:
+    false``, which it reads off the definition registered under the agent's
+    name, since the flag has no slot on the agent either. Both return ``None``
+    when nothing differs from the SDK defaults, which ``Runner.run()`` accepts.
+    Consumers that do not drive ``Runner`` themselves need neither call:
     ``BaseAgentRunner.execute()`` and the chat service set both automatically.
 
     Args:

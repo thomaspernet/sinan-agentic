@@ -27,9 +27,11 @@ to get recovery: they are passed to ``Runner.run()`` / ``Runner.run_streamed()``
 ``BaseAgentRunner`` decides from the agent *definition*, whose
 ``invalid_output_recovery`` flag it has on every execution branch. Call sites
 that only hold a built ``Agent`` — the chat service, and consumers driving
-``Runner`` themselves — read the decision off the agent with
-:func:`build_error_handlers` instead, so a pre-built agent gets recovery on the
-same terms as a registry-resolved one.
+``Runner`` themselves — call :func:`build_error_handlers` instead, so a
+pre-built agent gets recovery on the same terms as a registry-resolved one: the
+output type comes off the agent, and the ``invalid_output_recovery`` flag off
+the definition registered under the agent's name, since the flag has no slot on
+``Agent``.
 """
 
 from __future__ import annotations
@@ -48,6 +50,8 @@ from agents import (
 )
 from agents.agent_output import AgentOutputSchema, AgentOutputSchemaBase
 from agents.run_error_handlers import RunErrorHandlerInput
+
+from ..registry.agent_registry import get_agent_registry
 
 logger = logging.getLogger(__name__)
 
@@ -173,15 +177,24 @@ def build_error_handlers(agent: Agent) -> RunErrorHandlers[Any] | None:
 
     An agent that answers in plain text has no schema to fail, so there is
     nothing for :func:`recover_invalid_final_output` to salvage and the run
-    keeps the SDK defaults.
+    keeps the SDK defaults. An agent whose definition sets
+    ``invalid_output_recovery: false`` keeps them too: it asked for a malformed
+    response to fail loudly, and that choice holds here the way it holds under
+    ``BaseAgentRunner``.
 
     Args:
         agent: A built agent, from the registry factory or assembled by hand.
+            The recovery flag is looked up by ``agent.name``, so an agent
+            assembled by hand picks up the decision declared for that name.
 
     Returns:
-        Configured handlers, or None when the agent declares no output type.
+        Configured handlers, or None when the agent declares no output type or
+        opts out of recovery.
     """
     if not _is_structured_output(agent.output_type):
+        return None
+
+    if _recovery_opted_out(agent):
         return None
 
     return invalid_final_output_handlers()
@@ -199,6 +212,21 @@ def invalid_final_output_handlers() -> RunErrorHandlers[Any]:
         "invalid_final_output": recover_invalid_final_output,
     }
     return handlers
+
+
+def _recovery_opted_out(agent: Agent) -> bool:
+    """Whether the definition registered under *agent*'s name turns recovery off.
+
+    The flag is a run-level decision with no slot on ``Agent``, so unlike the
+    output type it cannot be read off the built agent — the declaration is
+    resolved through the registry the factory built the agent from, the way
+    :func:`sinan_agentic_core.core.run_config.build_run_config` resolves a
+    declared trim policy. An agent assembled under a name the registry does not
+    know declares nothing, so it keeps recovery.
+    """
+    agent_def = get_agent_registry().get(agent.name)
+
+    return agent_def is not None and not agent_def.invalid_output_recovery
 
 
 def _is_structured_output(output_type: Any) -> bool:

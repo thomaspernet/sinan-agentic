@@ -944,7 +944,7 @@ Every run started through `BaseAgentRunner` or the chat functions installs a rec
 
 Session history reads messages the same way. An agent with a non-dict `output_dataclass` answers under a wrapper key, and `AgentSession` stores the answer rather than the envelope — including when the model fenced its payload or wrote a preamble around it, which previously left the fence markers and the wrapper in the conversation every later turn replays.
 
-Recovery is on by default and covers `execute()` in all three modes plus the overflow-fallback LLM call. `invalid_output_recovery` is an agent-definition flag, so it turns recovery off wherever the runner resolves that definition. Turn it off per agent when a malformed response must fail loudly:
+Recovery is on by default and covers `execute()` in all three modes plus the overflow-fallback LLM call. `invalid_output_recovery` is an agent-definition flag, so it turns recovery off everywhere that definition is resolved — the runner's branches, the chat functions, and a `Runner.run()` you drive yourself. Turn it off per agent when a malformed response must fail loudly:
 
 ```yaml
 # agents.yaml
@@ -965,7 +965,7 @@ register_agent(AgentDefinition(
 ))
 ```
 
-Running `Runner.run()` directly instead of through `BaseAgentRunner`? `build_error_handlers()` reads the decision off the agent, the way `build_run_config()` does — an agent that answers in plain text has no schema to fail, so it gets `None` and `Runner.run()` keeps its defaults:
+Running `Runner.run()` directly instead of through `BaseAgentRunner`? `build_error_handlers()` reads the decision the way `build_run_config()` does — the output type off the agent, and the `invalid_output_recovery` flag off the definition registered under the agent's name, since the flag has no slot on `Agent`. An agent that answers in plain text has no schema to fail, and an agent whose definition turns recovery off asked to fail loudly; both get `None` and `Runner.run()` keeps its defaults:
 
 ```python
 from agents import Runner
