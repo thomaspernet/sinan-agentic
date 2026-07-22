@@ -40,14 +40,16 @@ _JSON_OBJECT = "object"
 # ``_resolve_annotation`` (schema to annotation) forwards, ``_resolve_schema``
 # (annotation to schema) through the inverse below. A scalar added here reaches
 # both directions at once, so the two cannot drift.
-_JSON_SCALARS: dict[str, Any] = {
+_JSON_SCALARS: dict[str, type] = {
     "string": str,
     "integer": int,
     "number": float,
     "boolean": bool,
 }
 
-_PYTHON_SCALARS: dict[Any, str] = {python: json for json, python in _JSON_SCALARS.items()}
+_PYTHON_SCALARS: dict[type, str] = {
+    python_type: json_type for json_type, python_type in _JSON_SCALARS.items()
+}
 
 
 def _resolve_schema(annotation: Any) -> tuple[dict[str, Any], bool]:
@@ -57,8 +59,9 @@ def _resolve_schema(annotation: Any) -> tuple[dict[str, Any], bool]:
 
     Parameterized annotations resolve through ``get_origin``/``get_args``, so
     ``list[str]`` keeps its element type and nested containers survive. A union
-    collapses to its branches; a ``None`` member marks the property nullable and
-    adds a ``{"type": "null"}`` branch.
+    always carries at least two branches — ``Union[X]`` collapses to ``X`` — so it
+    always resolves to an ``anyOf``; a ``None`` member marks the property nullable
+    and contributes a ``{"type": "null"}`` branch.
 
     An annotation the mapping does not cover resolves to an unconstrained
     property. That is honest about what the builder knows; asserting ``string``
@@ -78,8 +81,6 @@ def _resolve_schema(annotation: Any) -> tuple[dict[str, Any], bool]:
         schemas = [_resolve_schema(branch)[0] for branch in branches]
         if nullable:
             schemas.append({"type": _JSON_NULL})
-        if len(schemas) == 1:
-            return schemas[0], nullable
         return {"anyOf": schemas}, nullable
 
     if origin is list or annotation is list:
