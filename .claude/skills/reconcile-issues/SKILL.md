@@ -1,5 +1,5 @@
 ---
-description: "Reconcile orphan issues that have no child-of: pick a parent for each, write the child-of link, and let convergence re-home them. Confirms before touching any issue with a run/branch."
+description: "Reconcile orphan issues that have no child-of: pick a parent for each, write the child-of link, and let convergence re-home them. Confirms before touching any issue with a run/branch, and reports misrouted members without touching them."
 capability: core
 ---
 
@@ -14,6 +14,9 @@ appears. This skill is the human-in-the-loop remainder:
   **confirms** before touching any issue that has a run/branch.
 - **Backlog backfill** — running this skill over the full orphan list in one
   pass is the one-time sweep of issues orphaned before the convergence fix.
+- **Misrouted members** (#3727) — a `child-of` that reaches a different workflow
+  root than the one owning the step. Reported here, never touched: the link is
+  already right, so the fix is a membership re-home, not another link.
 
 This skill **reuses the membership service** — it lists candidates via
 `devwatch attach-candidates` (backed by `attach_service`) and writes the
@@ -32,34 +35,51 @@ REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 Pass `--repo "$REPO"` to every `devwatch` and `gh` command to ensure the correct
 repo is targeted.
 
-## 1. List the orphans
+## 1. List the candidates
 
 ```bash
 devwatch --repo "$REPO" attach-candidates --json
 ```
 
-Each entry is an open, non-epic issue with **no `child-of`** whose only home is
-its own single-member self-rooted workflow — an orphan convergence cannot place
-because there is nothing to project membership from. Fields:
+Each entry is an open, non-epic issue whose membership needs a decision. Fields:
 
-- `number`, `title` — the orphan.
-- `disposition` — `pristine` (a birth-draft or true orphan: no run, no branch —
-  convergence re-homes it the moment a link is written) or `work_started` (a
-  started single-member workflow with a run/branch — convergence will **not**
-  auto-move it; the commit boundary holds).
+- `number`, `title` — the issue.
+- `disposition` — `pristine`, `work_started`, or `misrouted` (see below).
 - `roots` — the candidate parents the link may point at: each is an **epic** or
   a **workflow root** (never a mere step — #1316). Picking one of these is what
   lets convergence re-home the orphan, because the chain reaches a workflow root.
+  Empty for a `misrouted` entry — there is nothing to pick.
+- `divergence` — present only on a `misrouted` entry: `link_root`,
+  `workflow_root`, and the `reason` sentence naming both. `null` otherwise.
 
-If the list is empty, report "No orphan issues to reconcile — every open issue
-has a home." and stop. (Run the plain `devwatch --repo "$REPO" attach-candidates`
-without `--json` for a readable table when reporting to the human.)
+Two shapes, and **only the orphan shape is this skill's job**:
+
+- **Orphans** (`pristine`, `work_started`) — no `child-of` at all, so their only
+  home is their own single-member self-rooted workflow and convergence has
+  nothing to project membership from. `pristine` means no run and no branch, so
+  convergence re-homes it the moment a link is written; `work_started` means a
+  run/branch exists, so convergence will **not** auto-move it (the commit
+  boundary holds). Continue to step 2 with these.
+- **Misrouted** (`misrouted`) — the issue already has a `child-of`, but that
+  chain reaches a different workflow root than the one owning its step (#3727):
+  it renders under one epic and executes on another's integration branch.
+  **Writing another link fixes nothing** — the link is already correct; it is
+  membership that is wrong. Do not offer a parent for these and do not run
+  `devwatch link` on them. Report them to the human, quoting `divergence.reason`
+  verbatim, and say the fix is a re-home of the member onto the workflow rooted
+  at `link_root` — an explicit operator action outside this skill.
+
+If the list is empty, report "Nothing to reconcile — every open issue has a home,
+and every link agrees with it." and stop. (Run the plain
+`devwatch --repo "$REPO" attach-candidates` without `--json` for a readable table
+when reporting to the human.)
 
 ## 2. Present the orphans and ask for a parent
 
 Show the orphans as a table: number, title, disposition, and the candidate
-parents (`#N — title`). Then, for each orphan the human wants to place, ask
-**which candidate parent** it belongs under.
+parents (`#N — title`). List any `misrouted` entries in a separate, read-only
+section — they are reported, not placed. Then, for each **orphan** the human
+wants to place, ask **which candidate parent** it belongs under.
 
 - Offer the orphan's `roots` as the choices. Picking one of them guarantees the
   re-home, because each is a valid workflow root.
@@ -111,6 +131,7 @@ branch, or drive any pipeline step.
 
 ## Boundary
 
-This skill **lists orphans and writes `child-of` links** — nothing else. It does
-not create workflows, cut branches, implement, or force-move committed work.
-Membership lands via convergence on its own schedule.
+This skill **lists candidates and writes `child-of` links for orphans** —
+nothing else. It does not create workflows, cut branches, implement, force-move
+committed work, or act on a `misrouted` entry beyond reporting it. Membership
+lands via convergence on its own schedule.

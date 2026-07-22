@@ -170,20 +170,30 @@ Take the no-op terminal path instead:
 
 **Confirmation gate.** Closing an issue is consequential and outward-facing, so by default present your no-op conclusion — the reason plus the evidence (the duplicate issue / the fixing PR / the commit, or why the reported behaviour is working as intended) — to the human and wait for approval before running the close below. **If `AUTO_APPROVE` is true** (the `--auto-approve` flag was on `$ARGUMENTS`): skip the confirmation entirely — close and report the no-op immediately, with no prompt and no pause. The owning workflow opted into auto-approval (#2349), which is a standing "yes, close it" for this run. The default stays gated.
 
-1. Close the GitHub issue with a comment explaining why:
+1. Close the GitHub issue with a comment explaining why. The reason is your own prose, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
 
-   ```bash
-   gh issue close <ISSUE> --repo "$REPO" --comment "Closing as <reason>: <one-line explanation, link to the duplicate/fixing PR/commit>."
-   ```
+```bash
+COMMENT=$(cat <<'COMMENT_EOF'
+Closing as <reason>: <one-line explanation, link to the duplicate/fixing PR/commit>.
+COMMENT_EOF
+)
 
-2. Report completion as a no-op (no branch, no commits, no files):
+gh issue close <ISSUE> --repo "$REPO" --comment "$COMMENT"
+```
 
-   ```bash
-   devwatch --repo "$REPO" agent-update \
-     --run-id <RUN_ID> \
-     --status completed \
-     --summary "no-op: <one-line reason — duplicate of #N / already fixed by <commit> / invalid because <reason>>"
-   ```
+2. Report completion as a no-op (no branch, no commits, no files). The reason is your own prose, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
+
+```bash
+SUMMARY=$(cat <<'SUMMARY_EOF'
+no-op: <one-line reason — duplicate of #N / already fixed by <commit> / invalid because <reason>>
+SUMMARY_EOF
+)
+
+devwatch --repo "$REPO" agent-update \
+  --run-id <RUN_ID> \
+  --status completed \
+  --summary "$SUMMARY"
+```
 
 The dispatcher detects the closed GitHub issue at IMPLEMENT-SUCCESS time,
 skips the rest of this run's actions (quality / docs / PR), marks the
@@ -234,21 +244,38 @@ devwatch --repo "$REPO" agent-report \
 ```
 Fall back to `--issue <ISSUE> --branch "$(git branch --show-current)"` if RUN_ID is unavailable.
 
-4. Record completion (use `--run-id` if available, fall back to `--issue`):
+4. Record completion (use `--run-id` if available, fall back to `--issue`). The summary is your own prose, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
 ```bash
+SUMMARY=$(cat <<'SUMMARY_EOF'
+<one-line summary of what you fixed>
+SUMMARY_EOF
+)
+
 devwatch --repo "$REPO" agent-update \
   --run-id <RUN_ID> \
   --status ready_for_review \
-  --summary "<one-line summary of what you fixed>" \
+  --summary "$SUMMARY" \
   --files "<comma-separated changed files>" \
   --commits "$(git rev-parse HEAD)"
 ```
 
-5. Post completion comment to GitHub issue:
+5. Post completion comment to GitHub issue. The body is your own prose, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
+
 ```bash
+BODY=$(cat <<'BODY_EOF'
+## Fix Complete
+
+**Summary**: <what you fixed and why>
+**Branch**: <branch-name>
+**Files**: <changed files>
+
+Ready for review.
+BODY_EOF
+)
+
 devwatch --repo "$REPO" agent-comment \
   --issue <ISSUE> \
-  --body "## Fix Complete\n\n**Summary**: <what you fixed and why>\n**Branch**: <branch-name>\n**Files**: <changed files>\n\nReady for review."
+  --body "$BODY"
 ```
 
 ## Boundary

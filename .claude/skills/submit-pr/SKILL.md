@@ -74,7 +74,7 @@ devwatch --repo "$REPO" issue-history <ISSUE>
    devwatch --repo "$REPO" get-report --workflow "$WORKFLOW_ID"
    ```
 
-   `get-report` prints a category-grouped digest (`### Risks` / `### Decisions` / `### Follow-ups`) assembled from the notes earlier agents recorded, or nothing when there are no notes. When the digest is non-empty **and** this issue opens a standalone PR (no epic ancestor — an epic member merges into the integration branch with no PR; see **Member behaviour** below), append it to your `--summary` under a `## Reviewer notes` heading so it lands in the PR body. Omit the section entirely when the digest is empty, and skip it on the epic-member merge path — the workflow ship PR carries the digest via `/submit-epic-pr`. The digest is earlier agents' prose, so the GitHub-writing rules in **Execution** below apply to it: strip banned tokens and personal data before embedding.
+   `get-report` prints a category-grouped digest (`### Risks` / `### Decisions` / `### Follow-ups`) assembled from the notes earlier agents recorded, or nothing when there are no notes. When the digest is non-empty **and** this issue opens a standalone PR (no epic ancestor — an epic member merges into the integration branch with no PR; see **Member behaviour** below), append it to your `--summary` under a `## Reviewer notes` heading so it lands in the PR body. Omit the section entirely when the digest is empty, and skip it on the epic-member merge path — the workflow ship PR carries the digest via `/submit-epic-pr`. The digest is earlier agents' prose, so the GitHub-writing rules in **Execution** below apply to it: strip banned tokens and personal data before embedding. It is also why `--summary` goes through a quoted heredoc in **Execution** — the digest is prose you did not write and cannot sanitise by reading, and it routinely carries the backticks and `$` a hand-quoted string would execute.
 5. Choose labels: area labels (`area:backend`, `area:frontend`, etc.). Labels are best-effort — the CLI retries without them if they don't exist in the target repo.
 
 ## Execution
@@ -101,12 +101,22 @@ devwatch --repo "$REPO" agent-report \
 ```
 Fall back to `--issue <ISSUE> --branch "$(git branch --show-current)"` if RUN_ID is unavailable.
 
-3. Submit the PR:
+3. Submit the PR. The commit message and the summary are both your own prose — pass each through a **quoted heredoc** so it survives verbatim; an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
 
 ```bash
+MESSAGE=$(cat <<'MESSAGE_EOF'
+<your commit message>
+MESSAGE_EOF
+)
+
+SUMMARY=$(cat <<'SUMMARY_EOF'
+<your PR summary, plus the `## Reviewer notes` section when the digest is non-empty>
+SUMMARY_EOF
+)
+
 devwatch --repo "$REPO" submit-pr \
-  --message "<your commit message>" \
-  --summary "<your PR summary>" \
+  --message "$MESSAGE" \
+  --summary "$SUMMARY" \
   --label "<label1>" --label "<label2>" \
   --run-id <RUN_ID>
 ```

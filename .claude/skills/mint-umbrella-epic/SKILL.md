@@ -85,10 +85,22 @@ Do **not** proceed past this gate without an explicit approval in the conversati
 
 Once — and only once — the human approves, create the epic via the approval-gated CLI command. `--approve` is the machine-level assertion that the human signed off; the command refuses to create anything without it.
 
+The approved name and the approved body are both drafted prose that name issues and symbols in backticks, so pass each through its own **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command. Mangling either one between the approval gate and the create defeats what the gate guarantees: the epic that lands must be the epic the human signed off on.
+
 ```bash
+TITLE=$(cat <<'TITLE_EOF'
+<approved name>
+TITLE_EOF
+)
+
+BODY=$(cat <<'BODY_EOF'
+<approved body>
+BODY_EOF
+)
+
 devwatch --repo "$REPO" mint-umbrella-epic \
-  --title "<approved name>" \
-  --body "<approved body>" \
+  --title "$TITLE" \
+  --body "$BODY" \
   --area <backend|frontend|agents|infrastructure> \
   --priority <P0-critical|P1-high|P2-medium|P3-low> \
   --approve

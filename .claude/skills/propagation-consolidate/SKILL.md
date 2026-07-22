@@ -1,9 +1,9 @@
 ---
-description: "Consolidate this run's flat propagation: issues into one umbrella per (class, helper) key, fold the folded issues' pipeline steps. Never scans the diff."
+description: "Consolidate this run's flat propagation: issues into one umbrella per (class, helper) key, fold the folded issues' pipeline steps, and regroup an off-theme group onto its own epic. Never scans the diff."
 capability: core
 ---
 
-Consolidate the per-site `propagation:` issues a `/propagation-scan` just filed (#2518, epic #2514). Group them — plus the epic's open `propagation:` issues sharing the same coarse `(class, helper)` key (#2515) — into **one umbrella per pattern**, close the folded per-site issues onto it, and reconcile their devwatch steps via #2516's fold primitive so the dashboard matches GitHub.
+Consolidate the per-site `propagation:` issues a `/propagation-scan` just filed (#2518, epic #2514). Group them — plus the epic's open `propagation:` issues sharing the same coarse `(class, helper)` key (#2515) — into **one umbrella per pattern**, close the folded per-site issues onto it, and reconcile their devwatch steps via #2516's fold primitive so the dashboard matches GitHub. When a group turns out to be its own subject rather than the epic's, move it onto a fresh umbrella epic of its own (#3725).
 
 This is the relief valve for the flood (#2514): propagation issues are created one child at a time, so consolidation runs one child at a time, right behind the scan — the umbrella grows per child instead of N flat issues piling up. The dispatcher fires this automatically after a child's scan that found ≥1 site; it is also a manual button in the per-issue side panel.
 
@@ -66,9 +66,15 @@ Group the kept issues by serialised coarse key.
 For each coarse-key group, decide whether it collapses into an umbrella:
 
 - **Mechanical sweep — `new_helper` / `new_pattern` / `perf_fix`.** A find-and-replace refactor whose natural scope is the whole codebase. **Collapse the group into one umbrella.** Every site in the group folds onto a single umbrella checklist.
-- **`bugfix_shape` — never collapse.** A recurring bug-shape is semantically distinct per site (each guard may differ and merits individual review). **Leave each `bugfix_shape` issue exactly as it is** — open, individual, untouched. Do not umbrella it, do not close it.
+- **`bugfix_shape` — never collapse on your own judgment.** A recurring bug-shape is semantically distinct per site (each guard may differ and merits individual review). **Leave each `bugfix_shape` issue exactly as it is** — open, individual, untouched. Do not umbrella it, do not close it. The one exception is human-gated and below.
 
 The class is the issue's recorded `**Class:**` — never inferred from the group's site count.
+
+**The settled-class exception — a human's call, never yours (#3553).** A human may decide a `bugfix_shape` class has **settled**: its fix is byte-identical at every site, and per-site review across prior waves has stopped surfacing per-site divergence. They record that decision the only way this machinery reads — by hand-minting an umbrella carrying the class's marker line. #3535, #3552, and #3563 each did exactly this for the quoted-heredoc class.
+
+So when a `bugfix_shape` group's coarse key **already matches an open umbrella** (§3's discovery above), the collapse decision has already been made, by a human, and Case A applies to it exactly as to a mechanical sweep: append the group's untracked sites and fold them. You are executing a decision, not making one.
+
+Absent that marker, the default stands: leave the group individual. **Case B is closed to `bugfix_shape` — you never mint its umbrella.** That asymmetry is the whole gate: minting is the judgment, appending is the bookkeeping. "Settled" is a claim about a class's history across waves, which this run cannot see.
 
 For each mechanical-sweep group, first discover whether an **open umbrella already exists** for the key (so this run appends rather than minting a second):
 
@@ -83,32 +89,40 @@ Match an umbrella when its body contains a line **exactly equal** to `propagatio
 
 For each mechanical-sweep coarse-key group:
 
-**Case A — an open umbrella already exists (append).** For every site in the group not already on the umbrella's checklist, append it via comment (additive and auditable — never rewrite the umbrella body):
+**Case A — an open umbrella already exists (append).** For every site in the group not already on the umbrella's checklist, append it via comment (additive and auditable — never rewrite the umbrella body). The summary is your own prose and sits beside a backticked path, so pass the body through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
 
 ```bash
-gh issue comment <umbrella> --repo "$REPO" \
-  --body "Appending propagation site (consolidated by /propagation-consolidate on #<ISSUE>):
+BODY=$(cat <<'BODY_EOF'
+Appending propagation site (consolidated by /propagation-consolidate on #<ISSUE>):
 
-- [ ] \`<file>:<line range>\` — <one-line summary>"
+- [ ] `<file>:<line range>` — <one-line summary>
+BODY_EOF
+)
+
+gh issue comment <umbrella> --repo "$REPO" --body "$BODY"
 ```
 
-**Case B — no umbrella exists yet (create one).** Mint a single umbrella carrying the marker line, seeding its `## Sites` checklist with **every** site in the group (deduped by fine key):
+**Case B — no umbrella exists yet (create one).** Mint a single umbrella carrying the marker line, seeding its `## Sites` checklist with **every** site in the group (deduped by fine key). The body is your own prose and its checklist names paths in backticks, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
 
 ```bash
-devwatch --repo "$REPO" create-issue \
-  --type feature \
-  --title "propagation umbrella: <class>:<helper-or-signal>" \
-  --body "## Propagation umbrella
+BODY=$(cat <<'BODY_EOF'
+## Propagation umbrella
 
 propagation-umbrella: <class>:<helper-or-signal>
 
-Consolidates the mechanical \`<class>\` sweep for \`<helper-or-signal>\` (#2517). One find-and-replace refactor across the codebase; each checklist item is one site, picked up individually through the normal pipeline.
+Consolidates the mechanical `<class>` sweep for `<helper-or-signal>` (#2517). One find-and-replace refactor across the codebase; each checklist item is one site, picked up individually through the normal pipeline.
 
 ## Sites
 
-- [ ] \`<file>:<line range>\` — <one-line summary>
-- [ ] \`<file>:<line range>\` — <one-line summary>
-" \
+- [ ] `<file>:<line range>` — <one-line summary>
+- [ ] `<file>:<line range>` — <one-line summary>
+BODY_EOF
+)
+
+devwatch --repo "$REPO" create-issue \
+  --type feature \
+  --title "propagation umbrella: <class>:<helper-or-signal>" \
+  --body "$BODY" \
   --area <area> \
   --priority <P2-medium|P3-low> \
   --parent <ISSUE> \
@@ -120,24 +134,82 @@ The umbrella is a flat `child-of` child of the scan target exactly like a per-si
 
 ## 5. Close the folded per-site issues and reconcile their devwatch steps
 
-Once a mechanical-sweep group's sites live on the umbrella (appended or seeded), every **open** per-site `propagation:` issue in the group is redundant. Close each one onto the umbrella:
+Once a mechanical-sweep group's sites live on the umbrella (appended or seeded), every **open** per-site `propagation:` issue in the group is redundant. Close each one onto the umbrella **and** reconcile its now-orphaned devwatch step — **one command does both**, applied once per folded issue:
 
 ```bash
-gh issue close <folded> --repo "$REPO" \
-  --comment "Closing as not planned — folded into propagation umbrella #<umbrella> for the \`<class>:<helper-or-signal>\` mechanical sweep. The site (\`<file>:<line range>\`) is tracked on the umbrella's checklist."
+devwatch --repo "$REPO" close-folded-issue <folded> \
+  --comment "Folded into propagation umbrella #<umbrella> for the \`<class>:<helper-or-signal>\` mechanical sweep. The site (\`<file>:<line range>\`) is tracked on the umbrella's checklist."
 ```
 
-**Close, never edit.** The only mutation to a folded issue is closing it onto the umbrella. Never re-title, re-label, re-parent, re-link, or reopen one. Never close a `bugfix_shape` issue. Never close the umbrella.
+The server closes `<folded>` as **not planned** with your comment and — only on a successful close — reconciles its workflow step to `CANCELLED` via #2516's fold. `CANCELLED`, never `DONE`, is honest: the step never ran its work. Closing a per-site issue any other way leaves its step `pending` — the run-lifecycle fold fires only for an *active* run (the exact #770 divergence), and only the 10-minute reconcile tick would eventually catch up (#3574). Folding it into the close is why the dashboard never shows a phantom `pending` step beside a `Closed` stage. A step whose issue has an active run is left untouched: that run's own drain owns it. Re-running after a successful close-and-fold is a clean no-op.
 
-Then **fold the closed issues' devwatch steps.** Closing a per-site issue out-of-band leaves its workflow step `pending` forever — the run-lifecycle fold only fires for an *active* run (the exact #770 divergence). Reconcile the folded steps on demand with #2516's primitive, scoped to exactly the issues just closed:
+**Close, never edit.** The only mutation to a folded issue is closing it onto the umbrella. Never re-title, re-label, re-parent, re-link, or reopen one. Never close the umbrella. Never close a `bugfix_shape` issue **unless a human has already minted an umbrella carrying its coarse key's marker** (§3's settled-class exception) — that marker is the human's recorded decision, and folding onto it is Case A bookkeeping. With no such umbrella, a `bugfix_shape` issue stays open and untouched.
+
+**`close-folded-issue` is the only verb that closes-and-folds here — never substitute another (#3574).** It closes as *not planned* and reconciles exactly the one issue you name; nothing else. In particular `mark-done` is not its cousin: it sweeps every step at or before the one named, converges live runs, and stamps `DONE` on steps that never ran (#3539, #3540). If `close-folded-issue` fails, say so in the summary and stop — a folded issue with an unreconciled step is a phantom `pending` row someone can fix; a live run stamped `done` is lost work.
+
+## 6. Regroup a group that is its own subject (#3725)
+
+Every issue the scan files joins whatever epic the scan target belongs to. That rule is purely structural — does the `child-of` chain reach a workflow root binding — with no check on subject, and it is right almost always: a follow-up found while fixing X usually does belong with X. It breaks when the epic is named for a narrow symptom while the scan found a broad pattern, and the epic silently becomes a bucket for work its own title does not describe. `wunova-core-app`'s epic #1353 ("ArcadeDB root password regenerates on upgrade") absorbed follow-ups spanning OpenAI routing, ORCID enrichment, settings key-validation and CI readiness loops.
+
+You are the only surface that sees the whole batch at once, so "has this batch drifted off-theme?" is yours to answer — per coarse key, never per site. **The default is no regroup.** Most runs end at §5.
+
+### 6a. Is the group its own subject?
+
+Resolve the workflow root, then read it:
 
 ```bash
-fold_closed_issue_steps(only_issues={(<folded>, "$REPO"), …})
+devwatch --repo "$REPO" workflow-get --issue <ISSUE>
+gh issue view <root_issue_number> --repo "$REPO" --json title,body
 ```
 
-Pass the closed issues as the `only_issues` set so the fold touches only them — the on-demand path, not the every-step tick. Each folded step reconciles to `CANCELLED` via the single writer `set_workflow_step_status` (#2516); the dashboard no longer shows a phantom `pending` step for a closed propagation issue.
+Compare what the group's coarse key names against what the **root** is about:
 
-## 6. Summary comment and record completion
+- The root's subject **covers this sweep** → leave the group where it is. This is the normal answer.
+- It does not → the group is its own subject. Regroup it.
+
+This is the one judgment in this skill, and it is deliberately here rather than at file time: a divergence gate at issue-creation time would be per-site agent judgment, and #2095's finding was that an invariant expressed as agent judgment fails intermittently. The creation default — join the ongoing epic — stays exactly as it is.
+
+### 6b. Which groups may be regrouped
+
+- **Mechanical sweep (`new_helper:` / `new_pattern:` / `perf_fix:`)** — regroup on your own recognition. "N sites need the same mechanical change" is a countable fact, and the new epic lands **unstarted**, so a human still sees it before any of it runs.
+- **`bugfix_shape`** — never regrouped unless §3's settled-class marker already exists. Same asymmetry as §3: minting is the judgment, moving is the bookkeeping. With no human-minted umbrella carrying the coarse key's marker, a `bugfix_shape` group stays exactly where it is.
+
+### 6c. Move the group
+
+The issues to move are the group's **still-open members of this workflow**: after §5 that is the group's umbrella, since every per-site issue in a folded group is closed. Never the scan target `#<ISSUE>` itself, and never the workflow root — an epic binds through `root_issue_number`, not as a step.
+
+The title and the body are your own prose, so pass each through its own **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
+
+```bash
+TITLE=$(cat <<'TITLE_EOF'
+<title>
+TITLE_EOF
+)
+
+BODY=$(cat <<'BODY_EOF'
+<markdown body>
+BODY_EOF
+)
+
+devwatch --repo "$REPO" regroup-onto-new-epic \
+  --title "$TITLE" \
+  --body "$BODY" \
+  --member <N> \
+  --member <M> \
+  --area <area> \
+  --priority <P2-medium|P3-low> \
+  --approve
+```
+
+One command, one server-side operation: it mints the umbrella epic, roots a `draft` workflow on it (an epic issue alone is only a label — issues cannot be members of it), and moves each `--member` across with the re-home primitive, so membership and the `child-of` graph never disagree about which integration branch the issues execute on. The new epic inherits this workflow's base branch and action set, and lands with every autonomy toggle off — not started, not queued.
+
+`--approve` is the class policy from §6b asserted at the command, not a human gate you skipped. Do not pass it for a `bugfix_shape` group with no marker.
+
+Moved issues keep every other `child-of` they carry, so their link to the original scan target survives — only the edge that routed them to the old epic is dropped.
+
+**Report what it left behind.** The command refuses to move an issue that has already executed — one with a branch (that is a rebase, not bookkeeping) or with any run — and prints each one with its reason instead of half-moving it. Carry those into §7 verbatim. A group where *nothing* can move is refused outright and creates no epic; that is a clean outcome, not a failure — record it and move on.
+
+## 7. Summary comment and record completion
 
 Post a single summary comment on the scan target `#<ISSUE>`:
 
@@ -146,11 +218,12 @@ gh issue comment <ISSUE> --repo "$REPO" --body "## Propagation consolidate — <
 
 - Umbrella #<N> (\`<class>:<helper-or-signal>\`) — <created|appended>, <K> sites, closed #<a>, #<b>, …
 - Left individual: <J> \`bugfix_shape\` sites (#<x>, #<y>)
+- Regrouped onto epic #<E> (draft workflow <W>): #<m>, #<n> — left in place: #<x> (already has a branch or a run)
 
 See the propagation-scan rule for the coarse-key + threshold policy."
 ```
 
-Drop a line that would print zeros — when no mechanical sweep crossed into an umbrella but `bugfix_shape` sites were left individual, the comment still records that nothing was folded.
+Drop a line that would print zeros — when no mechanical sweep crossed into an umbrella but `bugfix_shape` sites were left individual, the comment still records that nothing was folded. The regroup line is absent on the normal run, where no group diverged.
 
 Then emit the run report (advisory — a failed post must never fail the step), then flip the run status:
 
@@ -182,7 +255,9 @@ Fall back to `--issue <ISSUE> --branch "$(git branch --show-current)"` if RUN_ID
 
 - **Never scans the diff.** This skill is a consolidator, not a discoverer. It reads no `git diff`, greps no codebase, files no per-site issue. `/propagation-scan` is the only discoverer; all per-site filing lives there.
 - **Operates on filed issues only.** Its input is the open per-site `propagation:` issues the scan filed (this target + the epic's other children, by coarse key). Nothing else.
-- **Mechanical sweep → umbrella; `bugfix_shape` → untouched.** It collapses only `new_helper` / `new_pattern` / `perf_fix` groups. It never umbrellas, closes, or otherwise touches a `bugfix_shape` issue.
+- **Mechanical sweep → umbrella; `bugfix_shape` → never minted.** It mints an umbrella only for a `new_helper` / `new_pattern` / `perf_fix` group. It **never mints** a `bugfix_shape` umbrella — that call is the human's, never yours (§3's settled-class exception). Where a human has already minted one carrying the class's marker, appending the group's untracked sites and folding them onto it is Case A bookkeeping, permitted exactly as for a mechanical sweep. Absent that marker, a `bugfix_shape` issue stays open, individual, and untouched.
 - **One umbrella per coarse key.** Appends to the existing open umbrella when one carries the marker; mints at most one when none does. Never a second umbrella for the same marker.
-- **Closes folded issues, folds their steps, edits nothing else.** Permitted mutations: appending a site to / creating an umbrella, closing folded per-site issues onto it, and reconciling their devwatch steps via #2516's `fold_closed_issue_steps(only_issues=…)`. Never re-titles, re-labels, re-parents, re-links, reopens, or rewrites the body of any issue; never closes an umbrella or a `bugfix_shape` issue; never creates an epic.
+- **Closes folded issues, folds their steps, edits nothing else.** Permitted mutations: appending a site to / creating an umbrella, closing each folded per-site issue onto it while reconciling its devwatch step in one operation via `devwatch close-folded-issue <folded>` (close as not-planned + #2516's fold, #3574), and the §6 regroup. Never re-titles, re-labels, reopens, or rewrites the body of any issue; never closes an umbrella; never closes a `bugfix_shape` issue **except onto a human-minted umbrella carrying its coarse key's marker** (§3, §5).
+- **Regroups only through the one command, only a whole coarse-key group.** `devwatch regroup-onto-new-epic` is the only way this skill creates an epic or moves a member, and it moves a coarse-key group whose subject the workflow root does not cover (§6) — never an individual site it judged one at a time, never the scan target, never the workflow root. It **never regroups** a `bugfix_shape` group unless a human has already minted an umbrella carrying that coarse key's marker (§3's settled-class exception) — the same asymmetry as the fold: minting is the judgment, moving is the bookkeeping. It never re-parents or re-links an issue by hand; the command owns both, so membership and the `child-of` graph move together.
+- **Closes-and-folds with the one verb, never a substitute.** `devwatch close-folded-issue` is the only command this skill uses to close a folded issue and converge its step. It never calls `gh issue close` separately (the close and the fold must land together, #3574), and never calls `mark-done` (or any other terminal-step verb) to reconcile a folded issue — that one sweeps live runs and writes `DONE` to steps that never ran (#3539, #3540).
 - **No code, no commits, no PR.** File / issue mutations only — never edits source, never commits, never opens a PR.

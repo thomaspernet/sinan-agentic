@@ -95,13 +95,20 @@ The three **destructive** primitives — `mark-pr-green` (force a red PR green),
 
 ## Record completion
 
-Record the outcome (use `--run-id` if available, else `--issue`). Always `--status completed` — this agent finished its recovery reasoning; the halted run's own state is separate and advances on its own once unblocked:
+Record the outcome (use `--run-id` if available, else `--issue`). Always `--status completed` — this agent finished its recovery reasoning; the halted run's own state is separate and advances on its own once unblocked.
+
+The summary is your own prose and names the files and problems you found, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
 
 ```bash
+SUMMARY=$(cat <<'SUMMARY_EOF'
+<recovered via resume-run / fixed <file> and resumed / filed #<N> for out-of-scope <problem> / escalated: only <destructive primitive> would help>
+SUMMARY_EOF
+)
+
 devwatch --repo "$REPO" agent-update \
   --run-id <RUN_ID> \
   --status completed \
-  --summary "<recovered via resume-run / fixed <file> and resumed / filed #<N> for out-of-scope <problem> / escalated: only <destructive primitive> would help>"
+  --summary "$SUMMARY"
 ```
 
 ## Boundary
