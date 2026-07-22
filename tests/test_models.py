@@ -1,5 +1,8 @@
 """Tests for output models and context."""
 
+from unittest.mock import Mock
+
+from sinan_agentic_core.models.context import AgentContext
 from sinan_agentic_core.models.outputs import ChatResponse, ToolOutput
 
 # -- ToolOutput ---------------------------------------------------------------
@@ -117,3 +120,111 @@ class TestAgentContext:
 
     def test_schema_default(self, context):
         assert context.schema == ""
+
+
+class TestAgentContextCopiesTheCallersCollections:
+    """The context owns what it was seeded with, so a run never writes into a caller's data."""
+
+    def test_the_seeded_collections_are_readable(self):
+        ctx = AgentContext(
+            database_connector=Mock(),
+            schema_data={"tables": ["users"]},
+            query_results=[{"id": 1}],
+            filters={"status": ["active"]},
+            discovered_data={"tags": ["python"]},
+        )
+
+        assert ctx.schema_data == {"tables": ["users"]}
+        assert ctx.query_results == [{"id": 1}]
+        assert ctx.filters == {"status": ["active"]}
+        assert ctx.discovered_data == {"tags": ["python"]}
+
+    def test_a_result_added_by_the_caller_later_is_not_visible(self):
+        seeded = [{"id": 1}]
+        ctx = AgentContext(database_connector=Mock(), query_results=seeded)
+
+        seeded.append({"id": 2})
+
+        assert ctx.query_results == [{"id": 1}]
+
+    def test_an_edit_inside_a_seeded_result_row_is_not_visible(self):
+        """Rows nest inside the list, so copying only the list would not detach them."""
+        seeded = [{"id": 1}]
+        ctx = AgentContext(database_connector=Mock(), query_results=seeded)
+
+        seeded[0]["id"] = 99
+
+        assert ctx.query_results[0]["id"] == 1
+
+    def test_results_added_by_the_run_do_not_reach_the_callers_list(self):
+        seeded = [{"id": 1}]
+        ctx = AgentContext(database_connector=Mock(), query_results=seeded)
+
+        ctx.add_query_result({"data": [{"id": 2}]})
+
+        assert seeded == [{"id": 1}]
+
+    def test_an_item_discovered_by_the_run_does_not_reach_the_callers_dict(self):
+        seeded = {"tags": ["python"]}
+        ctx = AgentContext(database_connector=Mock(), discovered_data=seeded)
+
+        ctx.add_discovered_item("authors", "ada")
+
+        assert seeded == {"tags": ["python"]}
+
+    def test_a_discovery_appended_by_the_run_does_not_reach_the_callers_nested_list(self):
+        """add_discovered_item appends into the list under the key, one level deeper again."""
+        seeded_tags = ["python"]
+        ctx = AgentContext(database_connector=Mock(), discovered_data={"tags": seeded_tags})
+
+        ctx.add_discovered_item("tags", "async")
+
+        assert ctx.get_discovered_items("tags") == ["python", "async"]
+        assert seeded_tags == ["python"]
+
+    def test_a_filter_added_by_the_caller_later_is_not_visible(self):
+        seeded = {"status": ["active"]}
+        ctx = AgentContext(database_connector=Mock(), filters=seeded)
+
+        seeded["owner"] = "someone"
+
+        assert ctx.filters == {"status": ["active"]}
+
+    def test_an_edit_inside_a_nested_filter_value_is_not_visible(self):
+        seeded = {"status": ["active"]}
+        ctx = AgentContext(database_connector=Mock(), filters=seeded)
+
+        seeded["status"].append("archived")
+
+        assert ctx.filters == {"status": ["active"]}
+
+    def test_an_edit_inside_the_seeded_schema_data_is_not_visible(self):
+        seeded = {"tables": {"users": ["id", "name"]}}
+        ctx = AgentContext(database_connector=Mock(), schema_data=seeded)
+
+        seeded["tables"]["users"].append("email")
+
+        assert ctx.schema_data == {"tables": {"users": ["id", "name"]}}
+
+    def test_an_absent_collection_stays_none(self):
+        ctx = AgentContext(database_connector=Mock())
+
+        assert ctx.schema_data is None
+        assert ctx.filters is None
+
+    def test_two_contexts_seeded_from_one_collection_do_not_share_it(self):
+        seeded = [{"id": 1}]
+        first = AgentContext(database_connector=Mock(), query_results=seeded)
+        second = AgentContext(database_connector=Mock(), query_results=seeded)
+
+        first.add_query_result({"data": [{"id": 2}]})
+
+        assert second.query_results == [{"id": 1}]
+
+    def test_the_database_connector_is_not_copied(self):
+        """The connector is a live handle the run uses, not data the context accumulates into."""
+        connector = Mock()
+
+        ctx = AgentContext(database_connector=connector)
+
+        assert ctx.database_connector is connector
