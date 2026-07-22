@@ -88,6 +88,66 @@ class TestEvents:
         assert e.to_dict()["error"] == "boom"
 
 
+class TestAnswerEventOwnsItsSources:
+    """The event is a fixed record, so it and the caller never share a sources list."""
+
+    def test_the_supplied_sources_are_readable(self):
+        e = AnswerEvent(answer="42", sources=["data.csv"])
+
+        assert e.to_dict()["sources"] == ["data.csv"]
+
+    def test_a_source_added_by_the_caller_later_is_not_visible(self):
+        declared = ["data.csv"]
+        e = AnswerEvent(answer="42", sources=declared)
+
+        declared.append("added_late.csv")
+
+        assert e.sources == ["data.csv"]
+
+    def test_a_consumer_editing_the_event_does_not_reach_the_callers_list(self):
+        declared = ["data.csv"]
+        e = AnswerEvent(answer="42", sources=declared)
+
+        e.sources.append("added_by_consumer.csv")
+
+        assert declared == ["data.csv"]
+
+    def test_two_events_built_from_one_list_do_not_share_sources(self):
+        declared = ["data.csv"]
+        first = AnswerEvent(answer="42", sources=declared)
+        second = AnswerEvent(answer="43", sources=declared)
+
+        first.sources.append("added_late.csv")
+
+        assert second.sources == ["data.csv"]
+
+    def test_the_sources_themselves_stay_shared_with_the_caller(self):
+        """Only the container is copied — a consumer matches sources by identity."""
+        source = {"file": "data.csv"}
+
+        e = AnswerEvent(answer="42", sources=[source])
+
+        assert e.sources[0] is source
+
+    def test_an_emitted_event_is_detached_from_the_callers_list(self):
+        events = []
+        helper = StreamingHelper(event_callback=events.append)
+        declared = ["data.csv"]
+
+        helper.emit_answer("result", sources=declared)
+        declared.append("added_late.csv")
+
+        assert events[0].sources == ["data.csv"]
+
+    def test_emitting_without_sources_yields_an_empty_list(self):
+        events = []
+        helper = StreamingHelper(event_callback=events.append)
+
+        helper.emit_answer("result")
+
+        assert events[0].sources == []
+
+
 # -- StreamingHelper -----------------------------------------------------------
 
 
