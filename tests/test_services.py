@@ -278,11 +278,13 @@ def _trimming_agent(registry):
 
 @pytest.fixture
 def trim_registry():
-    """An isolated registry, patched where ``build_run_config`` looks the definition up."""
+    """An isolated registry, patched inside the shared by-name definition resolver."""
     from sinan_agentic_core.registry.agent_registry import AgentRegistry
 
     registry = AgentRegistry()
-    with patch("sinan_agentic_core.core.run_config.get_agent_registry", return_value=registry):
+    with patch(
+        "sinan_agentic_core.registry.agent_registry.get_agent_registry", return_value=registry
+    ):
         yield registry
 
 
@@ -307,11 +309,13 @@ def _strict_agent(registry):
 
 @pytest.fixture
 def recovery_registry():
-    """An isolated registry, patched where ``build_error_handlers`` looks the definition up."""
+    """An isolated registry, patched inside the shared by-name definition resolver."""
     from sinan_agentic_core.registry.agent_registry import AgentRegistry
 
     registry = AgentRegistry()
-    with patch("sinan_agentic_core.core.output_recovery.get_agent_registry", return_value=registry):
+    with patch(
+        "sinan_agentic_core.registry.agent_registry.get_agent_registry", return_value=registry
+    ):
         yield registry
 
 

@@ -1,9 +1,11 @@
 """Tests for agent, tool, and guardrail registries."""
 
 import copy
+from unittest.mock import patch
 
 import pytest
 from agents import (
+    Agent,
     GuardrailFunctionOutput,
     ToolGuardrailFunctionOutput,
     function_tool,
@@ -13,7 +15,11 @@ from agents import (
 )
 
 from sinan_agentic_core.core.model_retry import ModelRetryConfig
-from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
+from sinan_agentic_core.registry.agent_registry import (
+    AgentDefinition,
+    AgentRegistry,
+    resolve_agent_definition,
+)
 from sinan_agentic_core.registry.guardrail_registry import (
     GuardrailCategory,
     GuardrailDefinition,
@@ -99,6 +105,57 @@ class TestAgentRegistry:
         a = AgentDefinition(name="_global_helper_agent", description="d", instructions="i")
         register_agent(a)
         assert get_agent_registry().get("_global_helper_agent") is a
+
+
+# -- resolve_agent_definition --------------------------------------------------
+
+
+class TestResolveAgentDefinition:
+    """A built ``Agent`` carries no slot for a definition-level setting.
+
+    Every run-level reader that holds only a built agent — the trim policy in
+    ``core/run_config.py``, the recovery flag in ``core/output_recovery.py`` —
+    goes back to the declaration through this one resolver, so the by-name
+    correspondence is not re-derived once per setting.
+    """
+
+    @pytest.fixture
+    def registry(self):
+        registry = AgentRegistry()
+        registry.register(
+            AgentDefinition(name="registered_agent", description="d", instructions="i")
+        )
+
+        with patch(
+            "sinan_agentic_core.registry.agent_registry.get_agent_registry", return_value=registry
+        ):
+            yield registry
+
+    def test_resolves_the_definition_registered_under_the_agent_name(self, registry):
+        agent_def = resolve_agent_definition(Agent(name="registered_agent"))
+
+        assert agent_def is registry.get("registered_agent")
+
+    def test_an_unregistered_name_resolves_to_none(self, registry):
+        """A hand-assembled agent under an unknown name has no declaration."""
+        assert resolve_agent_definition(Agent(name="assembled_by_hand")) is None
+
+    def test_a_hand_assembled_agent_picks_up_the_name_it_was_given(self, registry):
+        """Resolution is by name alone — the factory is not involved."""
+        agent = Agent(name="registered_agent", instructions="assembled elsewhere")
+
+        assert resolve_agent_definition(agent).description == "d"
+
+    def test_reads_the_global_registry_when_nothing_is_patched(self):
+        """Unpatched, the resolver reaches the same registry ``register_agent`` writes to."""
+        from sinan_agentic_core.registry.agent_registry import register_agent
+
+        agent_def = AgentDefinition(
+            name="_global_resolved_agent", description="d", instructions="i"
+        )
+        register_agent(agent_def)
+
+        assert resolve_agent_definition(Agent(name="_global_resolved_agent")) is agent_def
 
 
 # -- ToolRegistry --------------------------------------------------------------

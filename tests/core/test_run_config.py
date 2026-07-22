@@ -53,7 +53,7 @@ def _guarded(tool, guardrail):
 
 @pytest.fixture
 def trim_registry():
-    """An isolated registry, patched where ``build_run_config`` looks the definition up."""
+    """An isolated registry, patched inside the shared by-name definition resolver."""
     registry = AgentRegistry()
     registry.register(
         AgentDefinition(
@@ -67,7 +67,9 @@ def trim_registry():
         AgentDefinition(name="plain_agent", description="plain", instructions="answer")
     )
 
-    with patch("sinan_agentic_core.core.run_config.get_agent_registry", return_value=registry):
+    with patch(
+        "sinan_agentic_core.registry.agent_registry.get_agent_registry", return_value=registry
+    ):
         yield registry
 
 

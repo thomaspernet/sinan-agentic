@@ -4,6 +4,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from agents import Agent
+
 from ..core.capabilities import Capability
 from ..core.model_retry import ModelRetryConfig
 from ..core.tool_output_trim import ToolOutputTrimConfig
@@ -83,3 +85,25 @@ def get_agent_registry() -> AgentRegistry:
 def register_agent(agent_def: AgentDefinition) -> None:
     """Register an agent in the global registry."""
     _global_agent_registry.register(agent_def)
+
+
+def resolve_agent_definition(agent: Agent) -> AgentDefinition | None:
+    """Get the definition registered under *agent*'s name, or None when unknown.
+
+    A setting declared in ``agents.yaml`` that has no slot on the SDK's ``Agent``
+    — a ``tool_output_trim`` policy, an ``invalid_output_recovery`` flag — cannot
+    be read back off a built agent. Every run-level reader that holds only a
+    built ``Agent`` resolves it here instead, so the correspondence between a
+    built agent and its declaration is written once rather than once per setting.
+
+    Args:
+        agent: A built agent, from :func:`create_agent_from_registry` or
+            assembled by hand. Only its name is read, so a hand-assembled agent
+            resolves to the definition registered under the name it was given.
+
+    Returns:
+        The registered definition, or None when no agent is registered under
+        that name. Callers decide what an absent declaration means for their own
+        setting — the two differ, so this resolver does not choose for them.
+    """
+    return get_agent_registry().get(agent.name)
