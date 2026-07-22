@@ -1,24 +1,33 @@
 """Agent Factory - Build Agent instances from the registry.
 
-Resolves an AgentDefinition + its registered tools into a ready-to-use
-OpenAI Agents SDK ``Agent`` instance.
+Resolves an AgentDefinition + its registered tools and guardrails into a
+ready-to-use OpenAI Agents SDK ``Agent`` instance.
 
 Usage:
-    from sinan_agentic_core import create_agent_from_registry
+    from sinan_agentic_core import (
+        build_error_handlers,
+        build_run_config,
+        create_agent_from_registry,
+    )
+    from agents import Runner
 
     agent = create_agent_from_registry("weather_assistant")
-    result = await Runner.run(agent, "What's the weather?")
+    result = await Runner.run(
+        agent,
+        "What's the weather?",
+        run_config=build_run_config(agent),
+        error_handlers=build_error_handlers(agent),
+    )
 """
 
-import logging
-from typing import Any, cast
+from typing import Any
 
 from agents import Agent
 
+from ..core.model_retry import apply_model_retry
 from .agent_registry import get_agent_registry
+from .guardrail_registry import attach_tool_input_guardrails, get_guardrail_registry
 from .tool_registry import get_tool_registry
-
-logger = logging.getLogger(__name__)
 
 
 def create_agent_from_registry(
@@ -27,8 +36,35 @@ def create_agent_from_registry(
 ) -> Agent:
     """Build an Agent instance from registry definitions.
 
-    Looks up the AgentDefinition by name, resolves all its tool references
-    through the ToolRegistry, and returns a fully configured Agent.
+    Looks up the AgentDefinition by name, resolves its tool references through
+    the ToolRegistry and its guardrail references through the GuardrailRegistry,
+    and returns a fully configured Agent. Each guardrail lands in the SDK slot
+    its category maps to: ``input`` and ``output`` on the agent, ``tool_input``
+    on the agent's local function tools. A declared ``model_retry`` policy rides
+    on the agent's model settings, so transient model-API failures retry inside
+    the SDK instead of failing the run.
+
+    NOTE: run-level settings are not wired here — they belong to the run, not
+    the agent, so a caller driving ``Runner`` themselves passes them in.
+    ``build_run_config(agent)`` carries two of them. The
+    ``pre_approval_tool_input_guardrails`` setting: declared tool-input
+    guardrails still run before their tool executes, but without it they run
+    after the SDK emits a pending human-approval interruption rather than
+    before it (``openai-agents`` 0.18.3, ``agents.run_internal.tool_execution``).
+    And a declared ``tool_output_trim``, which it reads off the definition
+    registered under the agent's name, since the SDK installs the trimming
+    filter through ``RunConfig`` and there is no slot for it on the agent.
+    ``build_error_handlers(agent)`` carries the ``invalid_final_output``
+    handler, which re-parses a structured payload the model wrapped in prose or
+    a code fence instead of failing the run. It reads the decision from two
+    places: ``Agent.output_type``, which this factory does not set from the
+    definition's ``output_dataclass``, so it returns ``None`` until the caller
+    gives the agent an output type; and a declared ``invalid_output_recovery:
+    false``, which it reads off the definition registered under the agent's
+    name, since the flag has no slot on the agent either. Both return ``None``
+    when nothing differs from the SDK defaults, which ``Runner.run()`` accepts.
+    Consumers that do not drive ``Runner`` themselves need neither call:
+    ``BaseAgentRunner.execute()`` and the chat service set both automatically.
 
     Args:
         agent_name: Name of a previously registered agent.
@@ -42,25 +78,47 @@ def create_agent_from_registry(
 
     Example::
 
-        from sinan_agentic_core import create_agent_from_registry
+        from sinan_agentic_core import (
+            build_error_handlers,
+            build_run_config,
+            create_agent_from_registry,
+        )
         from agents import Runner
 
         agent = create_agent_from_registry("my_agent")
-        result = await Runner.run(agent, "Hello!")
+        result = await Runner.run(
+            agent,
+            "Hello!",
+            run_config=build_run_config(agent),
+            error_handlers=build_error_handlers(agent),
+        )
     """
     agent_registry = get_agent_registry()
     tool_registry = get_tool_registry()
+    guardrail_registry = get_guardrail_registry()
 
     agent_def = agent_registry.get(agent_name)
     if not agent_def:
         available = agent_registry.list_all()
         raise ValueError(f"Agent '{agent_name}' not found. Available: {available}")
 
-    tools = tool_registry.get_tool_functions(agent_def.tools)
-
-    return Agent(
-        name=agent_def.name,
-        instructions=agent_def.instructions,
-        model=model_override or agent_def.model,
-        tools=cast(list[Any], tools),
+    guardrails = guardrail_registry.resolve(agent_def.guardrails)
+    tools = attach_tool_input_guardrails(
+        tool_registry.get_tool_functions(agent_def.tools),
+        guardrails.tool_input_guardrails,
     )
+
+    agent_kwargs: dict[str, Any] = {
+        "name": agent_def.name,
+        "instructions": agent_def.instructions,
+        "model": model_override or agent_def.model,
+        "tools": tools,
+        "input_guardrails": guardrails.input_guardrails,
+        "output_guardrails": guardrails.output_guardrails,
+    }
+
+    model_settings = apply_model_retry(agent_def.model_retry)
+    if model_settings is not None:
+        agent_kwargs["model_settings"] = model_settings
+
+    return Agent(**agent_kwargs)

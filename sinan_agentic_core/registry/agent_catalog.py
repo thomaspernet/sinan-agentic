@@ -28,21 +28,24 @@ Usage::
         ...
 """
 
+import copy
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel
 
 from ..core.capabilities import Capability
+from ..core.model_retry import ModelRetryConfig
+from ..core.tool_error_recovery import ToolErrorRecovery, build_tool_error_recovery
+from ..core.tool_output_trim import ToolOutputTrimConfig
+from ..core.turn_budget import TurnBudget, TurnBudgetConfig, build_turn_budget
 from .capability_registry import (
     CapabilityNotFoundError,
     get_capability_registry,
 )
 
 if TYPE_CHECKING:
-    from ..core.tool_error_recovery import ToolErrorRecovery
-    from ..core.turn_budget import TurnBudget
     from ..mcp.yaml_schema import MCPServerConfig
 
 logger = logging.getLogger(__name__)
@@ -51,15 +54,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Public resolved type
 # ---------------------------------------------------------------------------
-
-
-class TurnBudgetConfig(BaseModel):
-    """Turn budget configuration from agents.yaml."""
-
-    default_turns: int = 10
-    reminder_at: int = 2
-    max_extensions: int = 3
-    extension_size: int = 5
 
 
 class CapabilityRef(BaseModel):
@@ -83,36 +77,35 @@ class AgentYamlEntry(BaseModel):
     model: str
     description: str
     tools: list[str] = []
+    guardrails: list[str] = []
     knowledge_text: str = ""
     max_turns: int | None = None
     turn_budget: TurnBudgetConfig | None = None
     error_recovery: bool = True
+    invalid_output_recovery: bool = True
+    model_retry: ModelRetryConfig | None = None
+    tool_output_trim: ToolOutputTrimConfig | None = None
     capabilities: list[CapabilityRef] = []
     effort: str | None = None
     tool_rules: dict[str, dict[str, Any]] = {}
 
-    def build_turn_budget(self) -> "TurnBudget | None":
-        """Create a TurnBudget from config, or None if not configured."""
-        if self.turn_budget is None:
-            return None
-        from ..core.turn_budget import TurnBudget
+    def build_turn_budget(self) -> TurnBudget | None:
+        """Create a TurnBudget from config, or None if not configured.
 
-        return TurnBudget(
-            default_turns=self.turn_budget.default_turns,
-            reminder_at=self.turn_budget.reminder_at,
-            max_extensions=self.turn_budget.max_extensions,
-            extension_size=self.turn_budget.extension_size,
-            absolute_max=self.max_turns or 25,
-        )
+        The translation itself lives beside :class:`TurnBudget`; this entry only
+        supplies the two things it holds — the declared budget and the agent's
+        ``max_turns`` ceiling.
+        """
+        return build_turn_budget(self.turn_budget, self.max_turns)
 
-    def build_error_recovery(self) -> "ToolErrorRecovery | None":
-        """Create a ToolErrorRecovery if enabled, or None if disabled."""
-        if not self.error_recovery:
-            return None
-        from ..core.tool_error_recovery import ToolErrorRecovery
-        from ..registry import get_tool_registry
+    def build_error_recovery(self) -> ToolErrorRecovery | None:
+        """Create a ToolErrorRecovery if enabled, or None if disabled.
 
-        return ToolErrorRecovery(tool_registry=get_tool_registry())
+        The translation itself lives beside :class:`ToolErrorRecovery`; this
+        entry only supplies the one thing it holds — whether the agent declared
+        recovery on.
+        """
+        return build_tool_error_recovery(self.error_recovery)
 
     def build_capabilities(self) -> list[Capability]:
         """Build all capabilities for this agent from YAML.
@@ -253,6 +246,30 @@ def _parse_capabilities(agent_name: str, raw: Any) -> list[CapabilityRef]:
 
 
 # ---------------------------------------------------------------------------
+# Optional config blocks
+# ---------------------------------------------------------------------------
+
+_ConfigT = TypeVar("_ConfigT", bound=BaseModel)
+
+
+def _parse_optional_block(
+    raw: dict[str, Any],
+    key: str,
+    model: type[_ConfigT],
+) -> _ConfigT | None:
+    """Build *model* from an optional config block on an agent entry.
+
+    Every optional block is fully defaulted, so an empty mapping is a
+    declaration — ``turn_budget: {}`` opts in with defaults. Only a missing
+    key (or an explicitly null one) means the agent opts out.
+    """
+    block = raw.get(key)
+    if block is None:
+        return None
+    return model(**block)
+
+
+# ---------------------------------------------------------------------------
 # Catalog
 # ---------------------------------------------------------------------------
 
@@ -263,6 +280,12 @@ class AgentCatalog:
     Holds raw YAML data and resolves tool groups / conditions on ``get()``.
     Knowledge scopes are pre-loaded from YAML files and cached.
     Also stores ``mcp_servers`` definitions for MCP server building.
+
+    A catalog is a fixed in-process view of the parsed YAML in both directions:
+    every mapping it is given is copied on the way in, and every entry it
+    resolves owns its values. So what it resolves never changes after
+    construction, and a consumer editing a resolved entry cannot write back
+    into the catalog.
     """
 
     def __init__(
@@ -272,10 +295,25 @@ class AgentCatalog:
         knowledge: dict[str, str] | None = None,
         raw_mcp_servers: dict[str, dict[str, Any]] | None = None,
     ) -> None:
-        self._tool_groups = tool_groups
-        self._raw_agents = raw_agents
-        self._knowledge: dict[str, str] = knowledge or {}
-        self._raw_mcp_servers: dict[str, dict[str, Any]] = raw_mcp_servers or {}
+        """Build a catalog over already-parsed YAML data.
+
+        Every mapping is copied, so a later edit to a caller's dict does not
+        reach the catalog and two catalogs built from the same data never share
+        one mapping. ``knowledge`` holds plain strings, which a shallow copy
+        already detaches; the other three nest a mutable value — a group's tool
+        list, an agent block, an MCP server block — so they are copied all the
+        way down.
+
+        Args:
+            tool_groups: Named tool sets, referenced via ``group: name``.
+            raw_agents: Raw agent entries, keyed by agent name.
+            knowledge: Pre-loaded knowledge text, keyed by scope name.
+            raw_mcp_servers: Raw ``mcp_servers`` blocks, keyed by server name.
+        """
+        self._tool_groups: dict[str, list[str]] = copy.deepcopy(tool_groups)
+        self._raw_agents: dict[str, dict[str, Any]] = copy.deepcopy(raw_agents)
+        self._knowledge: dict[str, str] = dict(knowledge or {})
+        self._raw_mcp_servers: dict[str, dict[str, Any]] = copy.deepcopy(raw_mcp_servers or {})
 
     def get(
         self,
@@ -288,13 +326,24 @@ class AgentCatalog:
         *config*.  If *config* is ``None``, conditional tools are skipped.
         Knowledge scopes listed in the agent's ``knowledge`` key are
         concatenated into ``knowledge_text``.
+
+        The returned entry owns everything it carries: editing it — including a
+        value nested inside ``tool_rules`` or a capability's ``config`` — cannot
+        change the catalog or another entry resolved from it.
         """
         if name not in self._raw_agents:
             available = ", ".join(sorted(self._raw_agents.keys()))
             raise KeyError(f"Agent '{name}' not found in agents.yaml. " f"Available: {available}")
-        raw = self._raw_agents[name]
-        raw_budget = raw.get("turn_budget")
-        budget_cfg = TurnBudgetConfig(**raw_budget) if raw_budget else None
+        # Copied on the way out for the same reason the constructor copies on the
+        # way in. Pydantic rebuilds only the containers it has a declared type
+        # for and stops at ``Any``: the values inside a tool rule and inside a
+        # ``CapabilityRef.config`` are handed over as-is, so without this copy
+        # they would be the catalog's own objects and editing a resolved entry
+        # would change what every later ``get()`` returns.
+        raw = copy.deepcopy(self._raw_agents[name])
+        budget_cfg = _parse_optional_block(raw, "turn_budget", TurnBudgetConfig)
+        retry_cfg = _parse_optional_block(raw, "model_retry", ModelRetryConfig)
+        trim_cfg = _parse_optional_block(raw, "tool_output_trim", ToolOutputTrimConfig)
 
         capabilities = _parse_capabilities(name, raw.get("capabilities", []))
 
@@ -302,10 +351,14 @@ class AgentCatalog:
             model=raw["model"],
             description=raw["description"],
             tools=_resolve_tools(raw.get("tools", []), self._tool_groups, config),
+            guardrails=raw.get("guardrails", []),
             knowledge_text=_resolve_knowledge(raw.get("knowledge", []), self._knowledge),
             max_turns=raw.get("max_turns"),
             turn_budget=budget_cfg,
             error_recovery=raw.get("error_recovery", True),
+            invalid_output_recovery=raw.get("invalid_output_recovery", True),
+            model_retry=retry_cfg,
+            tool_output_trim=trim_cfg,
             capabilities=capabilities,
             tool_rules=raw.get("tool_rules", {}),
             effort=raw.get("effort"),
@@ -344,8 +397,10 @@ class AgentCatalog:
 
         Raises:
             KeyError: If the MCP server is not defined in agents.yaml.
+            ValidationError: If the block declares a key the model does not
+                carry, or a value of the wrong shape.
         """
-        from ..mcp.yaml_schema import MCPPromptConfig, MCPResourceConfig, MCPServerConfig
+        from ..mcp.yaml_schema import MCPServerConfig
 
         if name not in self._raw_mcp_servers:
             available = ", ".join(sorted(self._raw_mcp_servers.keys()))
@@ -355,24 +410,18 @@ class AgentCatalog:
 
         raw = self._raw_mcp_servers[name]
 
-        # Resolve tools (expand groups, evaluate conditions)
-        tools = _resolve_tools(raw.get("tools", []), self._tool_groups, config)
-        write_tools = _resolve_tools(raw.get("write_tools", []), self._tool_groups, config)
-
-        # Parse resources
-        resources = [MCPResourceConfig(**r) for r in raw.get("resources", [])]
-
-        # Parse prompts
-        prompts = [MCPPromptConfig(**p) for p in raw.get("prompts", [])]
-
-        return MCPServerConfig(
+        # The whole raw block is forwarded so an unrecognized key reaches the
+        # model's extra="forbid" gate instead of being dropped here. Only the two
+        # tool lists need resolving first (groups expanded, conditions evaluated);
+        # ``resources`` and ``prompts`` are validated by the model's own fields,
+        # and ``name`` comes from the mapping key rather than the block.
+        resolved = dict(raw)
+        resolved.update(
             name=name,
-            description=raw.get("description", ""),
-            tools=tools,
-            write_tools=write_tools,
-            resources=resources,
-            prompts=prompts,
+            tools=_resolve_tools(raw.get("tools", []), self._tool_groups, config),
+            write_tools=_resolve_tools(raw.get("write_tools", []), self._tool_groups, config),
         )
+        return MCPServerConfig(**resolved)
 
     def list_mcp_servers(self) -> list[str]:
         """List all MCP server names in the catalog."""

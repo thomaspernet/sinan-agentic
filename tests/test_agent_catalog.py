@@ -6,15 +6,27 @@ from typing import Any
 
 import pytest
 from agents import RunContextWrapper
+from pydantic import ValidationError
 
 from sinan_agentic_core.core.capabilities import Capability
+from sinan_agentic_core.core.model_retry import (
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_RETRY_TRIGGERS,
+    RetryTrigger,
+)
 from sinan_agentic_core.core.tool_error_recovery import ToolErrorRecovery
-from sinan_agentic_core.core.turn_budget import TurnBudget
+from sinan_agentic_core.core.turn_budget import (
+    DEFAULT_EXTENSION_SIZE,
+    DEFAULT_MAX_EXTENSIONS,
+    DEFAULT_REMINDER_AT,
+    DEFAULT_TURNS,
+    TurnBudget,
+    TurnBudgetConfig,
+)
 from sinan_agentic_core.registry.agent_catalog import (
     AgentCatalog,
     AgentYamlEntry,
     CapabilityRef,
-    TurnBudgetConfig,
     _check_condition,
     _load_knowledge_dir,
     _parse_capabilities,
@@ -202,6 +214,24 @@ class TestAgentCatalog:
         with pytest.raises(KeyError, match="not found"):
             catalog.get("nonexistent")
 
+    def test_get_resolves_guardrails(self):
+        catalog = AgentCatalog(
+            tool_groups={},
+            raw_agents={
+                "guarded": {
+                    "model": "reasoning",
+                    "description": "Guarded agent",
+                    "guardrails": ["block_pii", "block_destructive_cypher"],
+                },
+            },
+        )
+        entry = catalog.get("guarded")
+        assert entry.guardrails == ["block_pii", "block_destructive_cypher"]
+
+    def test_get_defaults_guardrails_to_empty(self):
+        catalog = self._make_catalog()
+        assert catalog.get("always_on").guardrails == []
+
     def test_is_enabled_true(self):
         catalog = self._make_catalog()
         cfg = _make_config(**{"web.enabled": True})
@@ -227,6 +257,201 @@ class TestAgentCatalog:
     def test_list_agents(self):
         catalog = self._make_catalog()
         assert set(catalog.list_agents()) == {"chatbot", "web_agent", "always_on"}
+
+
+# ---------------------------------------------------------------------------
+# AgentCatalog copies the caller's maps
+# ---------------------------------------------------------------------------
+
+
+class TestAgentCatalogCopiesTheCallersMaps:
+    """The catalog owns its data, so a later edit to a caller's dict cannot reach it."""
+
+    def test_a_new_agent_added_after_construction_is_not_visible(self):
+        raw_agents = {"chatbot": {"model": "reasoning", "description": "Main"}}
+        catalog = AgentCatalog(tool_groups={}, raw_agents=raw_agents)
+
+        raw_agents["late_agent"] = {"model": "fast", "description": "Added late"}
+
+        assert catalog.list_agents() == ["chatbot"]
+
+    def test_an_edit_inside_an_agent_block_is_not_visible(self):
+        raw_agents: dict[str, dict[str, Any]] = {
+            "chatbot": {"model": "reasoning", "description": "Main"}
+        }
+        catalog = AgentCatalog(tool_groups={}, raw_agents=raw_agents)
+
+        raw_agents["chatbot"]["model"] = "fast"
+
+        assert catalog.get("chatbot").model == "reasoning"
+
+    def test_an_edit_inside_a_tool_group_is_not_visible(self):
+        tool_groups = {"nav": ["discover"]}
+        catalog = AgentCatalog(
+            tool_groups=tool_groups,
+            raw_agents={
+                "chatbot": {
+                    "model": "reasoning",
+                    "description": "Main",
+                    "tools": [{"group": "nav"}],
+                },
+            },
+        )
+
+        tool_groups["nav"].append("search")
+
+        assert catalog.get("chatbot").tools == ["discover"]
+
+    def test_an_edit_to_the_knowledge_map_is_not_visible(self):
+        knowledge = {"global": "Graph model."}
+        catalog = AgentCatalog(
+            tool_groups={},
+            raw_agents={
+                "chatbot": {
+                    "model": "reasoning",
+                    "description": "Main",
+                    "knowledge": ["global", "late_scope"],
+                },
+            },
+            knowledge=knowledge,
+        )
+
+        knowledge["late_scope"] = "Added late."
+
+        assert catalog.get("chatbot").knowledge_text == "Graph model."
+
+    def test_a_new_mcp_server_added_after_construction_is_not_visible(self):
+        raw_mcp_servers: dict[str, dict[str, Any]] = {"knowledge_graph": {"description": "Graph"}}
+        catalog = AgentCatalog(tool_groups={}, raw_agents={}, raw_mcp_servers=raw_mcp_servers)
+
+        raw_mcp_servers["late_server"] = {"description": "Added late"}
+
+        assert catalog.list_mcp_servers() == ["knowledge_graph"]
+
+    def test_two_catalogs_built_from_the_same_data_are_independent_snapshots(self):
+        raw_agents: dict[str, dict[str, Any]] = {
+            "chatbot": {"model": "reasoning", "description": "Main"}
+        }
+
+        first = AgentCatalog(tool_groups={}, raw_agents=raw_agents)
+        raw_agents["chatbot"]["model"] = "fast"
+        second = AgentCatalog(tool_groups={}, raw_agents=raw_agents)
+
+        assert first.get("chatbot").model == "reasoning"
+        assert second.get("chatbot").model == "fast"
+
+
+# ---------------------------------------------------------------------------
+# Resolved entries own their values
+# ---------------------------------------------------------------------------
+
+
+class _ScopedCapability(Capability):
+    """Custom capability whose config nests a mutable value."""
+
+    def __init__(self, scopes: list[str]) -> None:
+        self.scopes = scopes
+
+    def instructions(self, ctx: RunContextWrapper[Any]) -> str | None:
+        return f"scoped({','.join(self.scopes)})"
+
+
+@pytest.fixture
+def scoped_capability_registered():
+    """Register a capability taking a nested config value, then clean up."""
+    name = "_test_scoped_capability"
+
+    @register_capability(name)
+    def factory(config: dict[str, Any]) -> Capability:
+        return _ScopedCapability(**config)
+
+    yield name
+    get_capability_registry()._factories.pop(name, None)
+
+
+class TestResolvedEntriesOwnTheirValues:
+    """A resolved entry is a snapshot too, so editing it cannot reach the catalog.
+
+    Pydantic rebuilds the containers it has a declared type for and stops at
+    ``Any``, so a value nested inside a tool rule or inside a capability's
+    ``config`` is what the catalog would otherwise hand out by reference.
+    """
+
+    @staticmethod
+    def _catalog(capability_name: str) -> AgentCatalog:
+        return AgentCatalog(
+            tool_groups={},
+            raw_agents={
+                "chatbot": {
+                    "model": "reasoning",
+                    "description": "Main",
+                    "tool_rules": {"discover": {"after": ["think"]}},
+                    "capabilities": [
+                        {"name": capability_name, "config": {"scopes": ["read"]}},
+                    ],
+                },
+            },
+        )
+
+    def test_an_edit_inside_a_tool_rule_is_not_visible(self, scoped_capability_registered):
+        catalog = self._catalog(scoped_capability_registered)
+
+        catalog.get("chatbot").tool_rules["discover"]["after"].append("late")
+
+        assert catalog.get("chatbot").tool_rules == {"discover": {"after": ["think"]}}
+
+    def test_a_tool_rule_added_to_a_resolved_entry_is_not_visible(
+        self, scoped_capability_registered
+    ):
+        catalog = self._catalog(scoped_capability_registered)
+
+        catalog.get("chatbot").tool_rules["late_tool"] = {"after": []}
+
+        assert list(catalog.get("chatbot").tool_rules) == ["discover"]
+
+    def test_an_edit_inside_a_capability_config_is_not_visible(self, scoped_capability_registered):
+        catalog = self._catalog(scoped_capability_registered)
+
+        catalog.get("chatbot").capabilities[0].config["scopes"].append("write")
+
+        assert catalog.get("chatbot").capabilities[0].config == {"scopes": ["read"]}
+
+    def test_two_entries_do_not_share_a_tool_rule(self, scoped_capability_registered):
+        catalog = self._catalog(scoped_capability_registered)
+        first = catalog.get("chatbot")
+        second = catalog.get("chatbot")
+
+        first.tool_rules["discover"]["after"].append("late")
+
+        assert second.tool_rules["discover"]["after"] == ["think"]
+
+    def test_two_entries_do_not_share_a_capability_config(self, scoped_capability_registered):
+        catalog = self._catalog(scoped_capability_registered)
+        first = catalog.get("chatbot")
+        second = catalog.get("chatbot")
+
+        first.capabilities[0].config["scopes"].append("write")
+
+        assert second.capabilities[0].config["scopes"] == ["read"]
+
+    def test_a_capability_built_from_a_resolved_entry_is_not_shared(
+        self, scoped_capability_registered
+    ):
+        catalog = self._catalog(scoped_capability_registered)
+        built = catalog.get("chatbot").build_capabilities()
+
+        scoped = [cap for cap in built if isinstance(cap, _ScopedCapability)]
+        scoped[0].scopes.append("write")
+
+        assert catalog.get("chatbot").capabilities[0].config == {"scopes": ["read"]}
+
+    def test_the_declared_values_survive_the_copy(self, scoped_capability_registered):
+        entry = self._catalog(scoped_capability_registered).get("chatbot")
+
+        assert entry.tool_rules == {"discover": {"after": ["think"]}}
+        assert entry.capabilities == [
+            CapabilityRef(name=scoped_capability_registered, config={"scopes": ["read"]})
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -569,6 +794,44 @@ class TestCatalogTurnBudget:
         assert budget.absolute_max == 30
         assert budget.default_turns == 15
 
+    def test_an_empty_mapping_opts_in_with_defaults(self, tmp_path):
+        """``turn_budget: {}`` is a declaration, not an absence."""
+        yaml_content = textwrap.dedent("""\
+            agents:
+              agent:
+                model: fast
+                max_turns: 25
+                description: Test
+                tools: []
+                turn_budget: {}
+        """)
+        (tmp_path / "agents.yaml").write_text(yaml_content)
+        entry = load_agent_catalog(tmp_path / "agents.yaml").get("agent")
+
+        assert entry.turn_budget is not None
+        assert entry.turn_budget.default_turns == DEFAULT_TURNS
+        assert entry.turn_budget.reminder_at == DEFAULT_REMINDER_AT
+        assert entry.turn_budget.max_extensions == DEFAULT_MAX_EXTENSIONS
+        assert entry.turn_budget.extension_size == DEFAULT_EXTENSION_SIZE
+        assert entry.build_turn_budget() is not None
+
+    def test_an_explicitly_null_key_opts_out(self, tmp_path):
+        """A key with no value is an absence, same as omitting it."""
+        yaml_content = textwrap.dedent("""\
+            agents:
+              agent:
+                model: fast
+                max_turns: 25
+                description: Test
+                tools: []
+                turn_budget:
+        """)
+        (tmp_path / "agents.yaml").write_text(yaml_content)
+        entry = load_agent_catalog(tmp_path / "agents.yaml").get("agent")
+
+        assert entry.turn_budget is None
+        assert entry.build_turn_budget() is None
+
     def test_no_turn_budget_in_yaml(self, tmp_path):
         yaml_content = textwrap.dedent("""\
             agents:
@@ -601,9 +864,9 @@ class TestCatalogTurnBudget:
         entry = catalog.get("agent")
 
         assert entry.turn_budget.default_turns == 12
-        assert entry.turn_budget.reminder_at == 2  # default
-        assert entry.turn_budget.max_extensions == 3  # default
-        assert entry.turn_budget.extension_size == 5  # default
+        assert entry.turn_budget.reminder_at == DEFAULT_REMINDER_AT
+        assert entry.turn_budget.max_extensions == DEFAULT_MAX_EXTENSIONS
+        assert entry.turn_budget.extension_size == DEFAULT_EXTENSION_SIZE
 
 
 # ---------------------------------------------------------------------------
@@ -855,3 +1118,177 @@ class TestCatalogIntegrationWithCapabilities:
         assert built[0].default_turns == 12
         assert built[2].label == "from_yaml"
         assert built[2].level == 9
+
+
+# ---------------------------------------------------------------------------
+# invalid_output_recovery key
+# ---------------------------------------------------------------------------
+
+
+class TestInvalidOutputRecovery:
+    def _catalog(self, entry: dict) -> AgentCatalog:
+        return AgentCatalog(tool_groups={}, raw_agents={"extractor": entry})
+
+    def test_defaults_to_enabled(self) -> None:
+        catalog = self._catalog({"model": "fast", "description": "Extracts"})
+        assert catalog.get("extractor").invalid_output_recovery is True
+
+    def test_can_be_disabled(self) -> None:
+        catalog = self._catalog(
+            {"model": "fast", "description": "Extracts", "invalid_output_recovery": False}
+        )
+        assert catalog.get("extractor").invalid_output_recovery is False
+
+    def test_loads_from_yaml(self, tmp_path) -> None:
+        path = tmp_path / "agents.yaml"
+        path.write_text(textwrap.dedent("""\
+                agents:
+                  extractor:
+                    model: fast
+                    description: Extracts
+                    invalid_output_recovery: false
+            """))
+        assert load_agent_catalog(path).get("extractor").invalid_output_recovery is False
+
+
+# ---------------------------------------------------------------------------
+# model_retry key
+# ---------------------------------------------------------------------------
+
+
+class TestModelRetry:
+    def _catalog(self, entry: dict) -> AgentCatalog:
+        return AgentCatalog(tool_groups={}, raw_agents={"researcher": entry})
+
+    def test_defaults_to_off(self) -> None:
+        catalog = self._catalog({"model": "fast", "description": "Reads papers"})
+        assert catalog.get("researcher").model_retry is None
+
+    def test_an_empty_mapping_opts_in_with_defaults(self) -> None:
+        """``model_retry: {}`` is a declaration, not an absence."""
+        catalog = self._catalog({"model": "fast", "description": "Reads papers", "model_retry": {}})
+        retry = catalog.get("researcher").model_retry
+
+        assert retry is not None
+        assert retry.max_retries == DEFAULT_MAX_RETRIES
+        assert retry.retry_on == list(DEFAULT_RETRY_TRIGGERS)
+
+    def test_an_explicitly_null_key_opts_out(self) -> None:
+        """A key with no value is an absence, same as omitting it."""
+        catalog = self._catalog(
+            {"model": "fast", "description": "Reads papers", "model_retry": None}
+        )
+        assert catalog.get("researcher").model_retry is None
+
+    def test_parses_the_declared_policy(self) -> None:
+        catalog = self._catalog(
+            {
+                "model": "fast",
+                "description": "Reads papers",
+                "model_retry": {"max_retries": 3, "retry_on": ["retry_after"]},
+            }
+        )
+        retry = catalog.get("researcher").model_retry
+
+        assert retry.max_retries == 3
+        assert retry.retry_on == [RetryTrigger.RETRY_AFTER]
+
+    def test_rejects_an_unknown_trigger(self) -> None:
+        catalog = self._catalog(
+            {
+                "model": "fast",
+                "description": "Reads papers",
+                "model_retry": {"retry_on": ["sometimes"]},
+            }
+        )
+        with pytest.raises(ValidationError):
+            catalog.get("researcher")
+
+    def test_loads_from_yaml(self, tmp_path) -> None:
+        path = tmp_path / "agents.yaml"
+        path.write_text(textwrap.dedent("""\
+                agents:
+                  researcher:
+                    model: fast
+                    description: Reads papers
+                    model_retry:
+                      max_retries: 3
+                      retry_on: [provider_suggested]
+                      backoff:
+                        initial_delay: 0.5
+                        max_delay: 8.0
+            """))
+        retry = load_agent_catalog(path).get("researcher").model_retry
+
+        assert retry.max_retries == 3
+        assert retry.retry_on == [RetryTrigger.PROVIDER_SUGGESTED]
+        assert retry.backoff.initial_delay == 0.5
+        assert retry.backoff.max_delay == 8.0
+
+
+# ---------------------------------------------------------------------------
+# tool_output_trim key
+# ---------------------------------------------------------------------------
+
+
+class TestToolOutputTrim:
+    def _catalog(self, entry: dict) -> AgentCatalog:
+        return AgentCatalog(tool_groups={}, raw_agents={"researcher": entry})
+
+    def test_defaults_to_off(self) -> None:
+        catalog = self._catalog({"model": "fast", "description": "Reads papers"})
+        assert catalog.get("researcher").tool_output_trim is None
+
+    def test_an_empty_mapping_opts_in_with_sdk_defaults(self) -> None:
+        catalog = self._catalog(
+            {"model": "fast", "description": "Reads papers", "tool_output_trim": {}}
+        )
+        trim = catalog.get("researcher").tool_output_trim
+
+        assert trim is not None
+        assert trim.max_output_chars is None
+
+    def test_parses_the_declared_policy(self) -> None:
+        catalog = self._catalog(
+            {
+                "model": "fast",
+                "description": "Reads papers",
+                "tool_output_trim": {"max_output_chars": 4000, "trimmable_tools": ["web_search"]},
+            }
+        )
+        trim = catalog.get("researcher").tool_output_trim
+
+        assert trim.max_output_chars == 4000
+        assert trim.trimmable_tools == ["web_search"]
+
+    def test_rejects_an_out_of_range_policy_at_load_time(self) -> None:
+        """The SDK would only raise on the first model call; the catalog raises now."""
+        catalog = self._catalog(
+            {
+                "model": "fast",
+                "description": "Reads papers",
+                "tool_output_trim": {"recent_turns": 0},
+            }
+        )
+        with pytest.raises(ValidationError):
+            catalog.get("researcher")
+
+    def test_loads_from_yaml(self, tmp_path) -> None:
+        path = tmp_path / "agents.yaml"
+        path.write_text(textwrap.dedent("""\
+                agents:
+                  researcher:
+                    model: fast
+                    description: Reads papers
+                    tool_output_trim:
+                      recent_turns: 3
+                      max_output_chars: 4000
+                      preview_chars: 500
+                      trimmable_tools: [web_search]
+            """))
+        trim = load_agent_catalog(path).get("researcher").tool_output_trim
+
+        assert trim.recent_turns == 3
+        assert trim.max_output_chars == 4000
+        assert trim.preview_chars == 500
+        assert trim.trimmable_tools == ["web_search"]

@@ -6,7 +6,11 @@ from sinan_agentic_core.core.capabilities import Capability
 from sinan_agentic_core.core.tool_error_recovery import ToolErrorRecovery
 from sinan_agentic_core.core.turn_budget import TurnBudget
 from sinan_agentic_core.session.agent_session import AgentSession, ConversationHistory
-from sinan_agentic_core.session.sqlite_store import SQLiteSessionStore
+from sinan_agentic_core.session.sqlite_store import (
+    SESSION_TITLE_CHARS,
+    SESSION_TITLE_ELLIPSIS,
+    SQLiteSessionStore,
+)
 
 # -- ConversationHistory -------------------------------------------------------
 
@@ -132,6 +136,128 @@ class TestAgentSession:
         assert len(items) == 1
         assert '"parsed answer"' in items[0]["content"]
 
+    async def test_unwraps_fenced_structured_output(self, session):
+        """A model that fences its payload still stores the answer, not the envelope."""
+        await session.add_items(
+            [
+                {
+                    "role": "assistant",
+                    "content": '```json\n{"response": "fenced answer"}\n```',
+                }
+            ]
+        )
+        items = await session.get_items()
+        assert items[0]["content"] == '"fenced answer"'
+
+    async def test_unwraps_structured_output_behind_a_preamble(self, session):
+        await session.add_items(
+            [
+                {
+                    "role": "assistant",
+                    "content": 'Here is the result:\n{"response": "prose answer"}',
+                }
+            ]
+        )
+        items = await session.get_items()
+        assert items[0]["content"] == '"prose answer"'
+
+    async def test_unwraps_structured_output_with_braces_in_the_value(self, session):
+        await session.add_items(
+            [
+                {
+                    "role": "assistant",
+                    "content": '```json\n{"response": "use {braces} freely"}\n```',
+                }
+            ]
+        )
+        items = await session.get_items()
+        assert items[0]["content"] == '"use {braces} freely"'
+
+    async def test_json_without_the_wrapper_key_is_stored_as_is(self, session):
+        await session.add_items([{"role": "assistant", "content": '{"answer": "yes"}'}])
+        items = await session.get_items()
+        assert items[0]["content"] == '{"answer": "yes"}'
+
+    async def test_plain_text_is_stored_as_is(self, session):
+        await session.add_items([{"role": "assistant", "content": "just a sentence"}])
+        items = await session.get_items()
+        assert items[0]["content"] == "just a sentence"
+
+    async def test_non_assistant_messages_are_never_unwrapped(self, session):
+        await session.add_items([{"role": "user", "content": '{"response": "verbatim"}'}])
+        items = await session.get_items()
+        assert items[0]["content"] == '{"response": "verbatim"}'
+
+
+# -- AgentSession copies the caller's history ----------------------------------
+
+
+class TestAgentSessionCopiesTheCallersHistory:
+    """The session owns its history, so it and the caller never share a message list."""
+
+    async def test_the_seeded_messages_are_readable(self):
+        history = ConversationHistory()
+        history.add_message("user", "Hello")
+
+        session = AgentSession(session_id="seeded", initial_history=history)
+
+        items = await session.get_items()
+        assert [item["content"] for item in items] == ["Hello"]
+
+    async def test_a_message_added_to_the_callers_history_later_is_not_visible(self):
+        history = ConversationHistory()
+        history.add_message("user", "Hello")
+        session = AgentSession(session_id="seeded", initial_history=history)
+
+        history.add_message("user", "Added late")
+
+        items = await session.get_items()
+        assert [item["content"] for item in items] == ["Hello"]
+
+    async def test_an_edit_inside_a_seeded_message_is_not_visible(self):
+        """Messages nest inside the list, so copying only the list would not detach them."""
+        history = ConversationHistory()
+        history.add_message("user", "Hello")
+        session = AgentSession(session_id="seeded", initial_history=history)
+
+        history.messages[0]["content"] = "Edited late"
+
+        items = await session.get_items()
+        assert items[0]["content"] == "Hello"
+
+    async def test_an_edit_inside_a_nested_content_list_is_not_visible(self):
+        """Structured-output content arrives as a list of dicts, one level deeper again."""
+        history = ConversationHistory()
+        history.messages.append(
+            {"role": "assistant", "content": [{"text": "original", "type": "output_text"}]}
+        )
+        session = AgentSession(session_id="seeded", initial_history=history)
+
+        history.messages[0]["content"][0]["text"] = "edited late"
+
+        items = await session.get_items()
+        assert items[0]["content"][0]["text"] == "original"
+
+    async def test_messages_added_to_the_session_do_not_reach_the_callers_history(self):
+        history = ConversationHistory()
+        history.add_message("user", "Hello")
+        session = AgentSession(session_id="seeded", initial_history=history)
+
+        await session.add_items([{"role": "assistant", "content": "Hi there"}])
+
+        assert [msg["content"] for msg in history.messages] == ["Hello"]
+
+    async def test_two_sessions_seeded_from_one_history_do_not_share_a_message_list(self):
+        history = ConversationHistory()
+        history.add_message("user", "Hello")
+        first = AgentSession(session_id="first", initial_history=history)
+        second = AgentSession(session_id="second", initial_history=history)
+
+        await first.add_items([{"role": "assistant", "content": "only in first"}])
+
+        assert first.get_message_count() == 2
+        assert second.get_message_count() == 1
+
 
 # -- SQLiteSessionStore --------------------------------------------------------
 
@@ -197,6 +323,19 @@ class TestSQLiteSessionStore:
         store.add_message("s1", "user", "What is Python?")
         s = store.get_or_create_session("s1")
         assert s["title"] == "What is Python?"
+
+    def test_title_at_the_bound_is_kept_whole(self, store):
+        content = "a" * SESSION_TITLE_CHARS
+        store.add_message("s1", "user", content)
+        assert store.get_or_create_session("s1")["title"] == content
+
+    def test_longer_title_is_cut_to_the_bound_and_marked(self, store):
+        content = "a" * (SESSION_TITLE_CHARS + 1)
+        store.add_message("s1", "user", content)
+        title = store.get_or_create_session("s1")["title"]
+        assert title == "a" * SESSION_TITLE_CHARS + SESSION_TITLE_ELLIPSIS
+        # The message itself is untouched — only the label is cut.
+        assert store.get_messages("s1")[0]["content"] == content
 
     def test_message_metadata(self, store):
         store.add_message("s1", "user", "msg", metadata={"source": "web"})

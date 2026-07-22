@@ -13,6 +13,14 @@ ToolErrorRecovery is a Capability — wire it via
 
 Works for all tool types: custom @function_tool, agent-as-tool, and MCP tools.
 
+``ToolErrorRecoveryConfig`` carries the same choice declaratively. Three paths
+read a declaration — the ``error_recovery:`` shorthand on an agent entry, an
+``error_recovery`` entry in the explicit ``capabilities:`` list, and the
+``error_recovery=`` kwarg on ``execute()`` — so the translation lives here as
+``ToolErrorRecoveryConfig.build()``, with ``build_tool_error_recovery`` adding
+the "off when disabled" rule the two boolean paths need. No path constructs
+``ToolErrorRecovery`` itself, so the tool-registry default is decided once.
+
 Usage:
     recovery = ToolErrorRecovery(tool_registry=registry)
     agent_def = AgentDefinition(..., capabilities=[recovery])
@@ -25,10 +33,35 @@ from dataclasses import dataclass
 from typing import Any
 
 from agents import RunContextWrapper, Tool
+from pydantic import BaseModel, ConfigDict
 
 from .capabilities import Capability
 
 logger = logging.getLogger(__name__)
+
+# Identical failures tolerated before the guidance tells the agent to stop
+# retrying the tool outright.
+DEFAULT_MAX_IDENTICAL_BEFORE_STOP = 3
+
+# Bounds on the argument summary the guidance repeats back so the agent can
+# recognise which call failed. That summary is re-sent as instruction text on
+# every subsequent turn of the run, so it stays short: the agent needs to
+# identify the call it already made, not read its payload back whole.
+#
+# Deliberately not the streamed ``TOOL_OUTPUT_PREVIEW_CHARS`` or the rescue
+# call's ``FALLBACK_PROMPT_TOOL_OUTPUT_CHARS``: those cut a tool's *output*, for
+# a stream consumer and for one condensed prompt respectively. These cut a tool's
+# *input*, for text repeated on every turn. The three move for different reasons.
+ARGS_SUMMARY_ELLIPSIS = "..."
+# Whole-summary cut, used when the arguments are not a JSON object — an unparsed
+# string or a bare JSON scalar has no per-parameter structure to cut instead.
+ARGS_SUMMARY_FALLBACK_CHARS = 80
+# Per-parameter value cut. The ellipsis is spent inside this budget, so a
+# truncated value never renders longer than one that fit.
+ARGS_SUMMARY_VALUE_CHARS = 40
+ARGS_SUMMARY_VALUE_HEAD_CHARS = ARGS_SUMMARY_VALUE_CHARS - len(ARGS_SUMMARY_ELLIPSIS)
+# How many parameters the summary names before dropping the rest.
+ARGS_SUMMARY_MAX_PARAMS = 5
 
 
 @dataclass
@@ -63,15 +96,20 @@ class ToolErrorRecovery(Capability):
     LLM call, so the agent always has up-to-date error awareness.
 
     Attributes:
+        mcp_hints: Recovery hints for MCP tool names the registry does not know.
         max_identical_before_stop: After this many identical failures, the
             instruction section tells the agent to stop retrying entirely.
+
+    Every field of :class:`ToolErrorRecoveryConfig` is stored as an attribute of
+    the same name, which is what lets :meth:`clone` rebuild a copy from the
+    declaration wholesale instead of naming each field by hand.
     """
 
     def __init__(
         self,
         tool_registry: Any = None,
         mcp_hints: dict[str, str] | None = None,
-        max_identical_before_stop: int = 3,
+        max_identical_before_stop: int = DEFAULT_MAX_IDENTICAL_BEFORE_STOP,
     ) -> None:
         """Initialize the recovery tracker.
 
@@ -80,14 +118,17 @@ class ToolErrorRecovery(Capability):
                 If None, only mcp_hints are used for hint lookup.
             mcp_hints: Mapping of MCP tool names to recovery hint strings.
                 Use this for tools you don't control (external MCP servers).
+                Copied, so the caller's dict is not aliased into the tracker
+                and no two trackers built from it end up sharing one mapping.
             max_identical_before_stop: After N identical failures, instruct
-                the agent to stop retrying. Default: 3.
+                the agent to stop retrying. Defaults to
+                :data:`DEFAULT_MAX_IDENTICAL_BEFORE_STOP`.
         """
         self._registry = tool_registry
-        self._mcp_hints = mcp_hints or {}
         self._errors: dict[str, ToolErrorEntry] = {}  # key: tool_name
         self._last_args: dict[str, str] = {}  # tool_name -> last args_hash
         self._pending_args: dict[str, str] = {}  # tool_name -> in-flight args
+        self.mcp_hints = dict(mcp_hints or {})
         self.max_identical_before_stop = max_identical_before_stop
 
     # Status values that indicate a tool failure (used by _extract_error).
@@ -260,12 +301,17 @@ class ToolErrorRecovery(Capability):
             )
 
     def clone(self) -> "ToolErrorRecovery":
-        """Return a fresh ``ToolErrorRecovery`` with the same configuration and zeroed state."""
-        return ToolErrorRecovery(
-            tool_registry=self._registry,
-            mcp_hints=dict(self._mcp_hints),
-            max_identical_before_stop=self.max_identical_before_stop,
-        )
+        """Return a fresh ``ToolErrorRecovery`` with the same configuration and zeroed state.
+
+        The declared fields are read back off :class:`ToolErrorRecoveryConfig`
+        and forwarded wholesale, mirroring :meth:`ToolErrorRecoveryConfig.build`
+        in the other direction, so a field added to that model survives cloning
+        without a second edit here. ``tool_registry`` is passed separately for
+        the same reason it is not a config field: it is a live object rather
+        than something a declaration can carry.
+        """
+        declared = {name: getattr(self, name) for name in ToolErrorRecoveryConfig.model_fields}
+        return ToolErrorRecovery(tool_registry=self._registry, **declared)
 
     def to_snapshot(self) -> dict[str, Any]:
         """Serialize tracked errors and last-args map so retries survive restarts."""
@@ -375,7 +421,7 @@ class ToolErrorRecovery(Capability):
             if tool_def and getattr(tool_def, "recovery_hint", ""):
                 hint: str = tool_def.recovery_hint
                 return hint
-        return self._mcp_hints.get(tool_name, "")
+        return self.mcp_hints.get(tool_name, "")
 
     @staticmethod
     def _hash_args(arguments: str) -> str:
@@ -392,13 +438,17 @@ class ToolErrorRecovery(Capability):
 
     @staticmethod
     def _summarize_args(arguments: str) -> str:
-        """Create a short human-readable summary of tool arguments."""
+        """Create a short human-readable summary of tool arguments.
+
+        Every bound is a module constant — :data:`ARGS_SUMMARY_FALLBACK_CHARS`,
+        :data:`ARGS_SUMMARY_VALUE_CHARS`, :data:`ARGS_SUMMARY_MAX_PARAMS`.
+        """
         if not arguments:
             return ""
         try:
             parsed = json.loads(arguments)
             if not isinstance(parsed, dict):
-                return str(parsed)[:80]
+                return str(parsed)[:ARGS_SUMMARY_FALLBACK_CHARS]
             # Show non-empty values only, truncated
             parts = []
             for k, v in parsed.items():
@@ -406,9 +456,91 @@ class ToolErrorRecovery(Capability):
                     parts.append(f"{k}=<empty>")
                 else:
                     val_str = str(v)
-                    if len(val_str) > 40:
-                        val_str = val_str[:37] + "..."
+                    if len(val_str) > ARGS_SUMMARY_VALUE_CHARS:
+                        val_str = val_str[:ARGS_SUMMARY_VALUE_HEAD_CHARS] + ARGS_SUMMARY_ELLIPSIS
                     parts.append(f"{k}={val_str}")
-            return ", ".join(parts[:5])  # max 5 params shown
+            return ", ".join(parts[:ARGS_SUMMARY_MAX_PARAMS])
         except (json.JSONDecodeError, TypeError):
-            return arguments[:80]
+            return arguments[:ARGS_SUMMARY_FALLBACK_CHARS]
+
+
+class ToolErrorRecoveryConfig(BaseModel):
+    """Opt-in tool error recovery for one agent.
+
+    Every field is optional, so declaring the capability with no config opts in
+    with the defaults below. The tool registry is not a field here: it is a live
+    object rather than something YAML can express, so it is passed to
+    :meth:`build` by whichever path resolved the declaration.
+
+    Declared in ``agents.yaml``::
+
+        agents:
+          research_agent:
+            model: gpt-4o
+            description: Deep research
+            error_recovery: true      # shorthand — defaults, nothing to tune
+            capabilities:
+              - name: error_recovery  # explicit — same capability, tuned
+                config:
+                  max_identical_before_stop: 5
+                  mcp_hints:
+                    mcp_arxiv_search: Query must be at least 2 characters.
+    """
+
+    # An unknown key is a typo or a field that belongs elsewhere
+    # (``tool_registry`` is supplied by the caller, not declared), and this model
+    # is the only gate the declaration passes through — so reject it rather than
+    # drop it silently.
+    model_config = ConfigDict(extra="forbid")
+
+    mcp_hints: dict[str, str] = {}
+    max_identical_before_stop: int = DEFAULT_MAX_IDENTICAL_BEFORE_STOP
+
+    def build(self, tool_registry: Any = None) -> ToolErrorRecovery:
+        """Translate this config into a runtime :class:`ToolErrorRecovery`.
+
+        Fields are forwarded wholesale rather than named one by one, so a field
+        added to this model reaches the built capability without editing this
+        method.
+
+        Args:
+            tool_registry: Registry consulted for each tool's ``recovery_hint``.
+                Falls back to the process-wide registry, so a declaration that
+                names no registry still resolves hints.
+        """
+        # Imported here rather than at module scope: ``registry`` imports this
+        # module, so a module-level import would close the cycle.
+        from ..registry.tool_registry import get_tool_registry
+
+        return ToolErrorRecovery(
+            **self.model_dump(),
+            tool_registry=tool_registry if tool_registry is not None else get_tool_registry(),
+        )
+
+
+def build_tool_error_recovery(
+    enabled: bool,
+    tool_registry: Any = None,
+) -> ToolErrorRecovery | None:
+    """Translate a declared error-recovery flag into the capability a run installs.
+
+    Callers whose declaration is a boolean go through this rather than repeating
+    the check — the ``error_recovery:`` shorthand on an agent entry, and the
+    ``error_recovery=`` kwarg on ``execute()`` — so the "off when disabled" rule
+    lives here instead of once per caller. The explicit ``capabilities:`` list
+    has no disabled case (the entry *is* the declaration) and calls
+    :meth:`ToolErrorRecoveryConfig.build` directly.
+
+    Args:
+        enabled: Whether the agent declared recovery on.
+        tool_registry: Registry consulted for each tool's ``recovery_hint``.
+            Falls back to the process-wide registry.
+
+    Returns:
+        The configured capability, or None when recovery is off. Each call builds
+        a fresh capability, so no two agents share one set of tracked errors.
+    """
+    if not enabled:
+        return None
+
+    return ToolErrorRecoveryConfig().build(tool_registry)

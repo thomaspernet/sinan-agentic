@@ -6,7 +6,7 @@ execute() with flags for streaming, fallback_on_overflow, etc.
 Also retains run_agent() for backward compatibility.
 """
 
-import json
+import copy
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -14,8 +14,11 @@ from typing import Any
 from agents import (
     Agent,
     ItemHelpers,
+    ModelBehaviorError,
     ModelSettings,
+    RunConfig,
     RunContextWrapper,
+    RunErrorHandlers,
     RunHooks,
     Runner,
     Usage,
@@ -23,18 +26,48 @@ from agents import (
 from agents.items import TResponseInputItem
 from openai.types.responses import ResponseCompletedEvent, ResponseTextDeltaEvent
 
+from ..llm import resolve_openai_client
 from ..models import outputs as output_models
 from ..models.context import AgentContext
 from ..registry import get_agent_registry, get_guardrail_registry, get_tool_registry
 from ..registry.agent_registry import AgentDefinition
+from ..registry.guardrail_registry import (
+    GuardrailCategory,
+    ResolvedGuardrails,
+    attach_tool_input_guardrails,
+)
 from ..session import AgentSession, ConversationHistory
+from ..utils.turn_budget_context import set_turn_budget
 from .capabilities import Capability
 from .errors import structured_tool_error
-from .tool_error_recovery import ToolErrorRecovery
+from .model_retry import apply_model_retry, build_model_retry_settings
+from .output_recovery import (
+    build_output_schema,
+    invalid_final_output_handlers,
+    salvage_structured_output,
+)
+from .run_config import tool_input_pre_approval
+from .run_errors import FALLBACK_RECOVERABLE_KINDS, classify_run_error
+from .stream_preview import tool_output_preview
+from .tool_error_recovery import ToolErrorRecovery, build_tool_error_recovery
+from .tool_output_trim import build_tool_output_trimmer
 from .turn_budget import TurnBudget
 from .turn_budget_tool import request_extension_tool
 
 logger = logging.getLogger(__name__)
+
+# How much of each collected tool output the default fallback prompt carries into
+# the condensed rescue call. That call only happens because the run already ran
+# out of context or turns, so replaying every gathered output whole would
+# reproduce the failure it is rescuing — the head of each one is what the model
+# needs to still produce a final answer.
+#
+# Deliberately not ``stream_preview.TOOL_OUTPUT_PREVIEW_CHARS``: that bound
+# shortens what a stream consumer is *shown* and never reaches a model, so it is
+# free to be much smaller. This one shapes a model's input. The two move for
+# different reasons and are named separately so neither drags the other with it.
+# A caller needing a different bound passes its own ``fallback_prompt_builder``.
+FALLBACK_PROMPT_TOOL_OUTPUT_CHARS = 2000
 
 
 class BaseAgentRunner:
@@ -54,21 +87,19 @@ class BaseAgentRunner:
         self.agent_registry = get_agent_registry()
         self.tool_registry = get_tool_registry()
         self.guardrail_registry = get_guardrail_registry()
+
+        # The runner's own record of the last run's token usage. The runner
+        # outlives every run it drives, so this record is never handed to a
+        # consumer as-is: each hand-out (a streamed answer event, a capability's
+        # on_fallback_end) gets its own deep copy. A shallow copy would leave the
+        # nested *_tokens_details mappings shared.
         self.last_usage: dict[str, Any] | None = None
 
-        self.tool_map = {
-            name: tool_def.function for name, tool_def in self.tool_registry._tools.items()
-        }
+        self.tool_map = self.tool_registry.get_all_functions()
 
-        self.guardrail_map = {
-            name: guardrail_def.function
-            for name, guardrail_def in self.guardrail_registry._guardrails.items()
-        }
-
+        guardrail_names = self.guardrail_registry.list_names()
         logger.debug(f"Loaded {len(self.tool_map)} tools: {list(self.tool_map.keys())}")
-        logger.debug(
-            f"Loaded {len(self.guardrail_map)} guardrails: {list(self.guardrail_map.keys())}"
-        )
+        logger.debug(f"Loaded {len(guardrail_names)} guardrails: {guardrail_names}")
 
     def setup_context(self, **context_data: Any) -> AgentContext:
         """Setup context with provided data.
@@ -140,7 +171,10 @@ class BaseAgentRunner:
         agent_tools.extend(hosted)
         for cap in capabilities or agent_def.capabilities:
             agent_tools.extend(cap.tools())
-        agent_guardrails = self._build_guardrails(agent_def.guardrails)
+        agent_guardrails = self.guardrail_registry.resolve(agent_def.guardrails)
+        agent_tools = attach_tool_input_guardrails(
+            agent_tools, agent_guardrails.tool_input_guardrails
+        )
         handoffs = await self._build_handoffs(agent_def.handoffs, context)
         output_type = self._resolve_output_type(agent_def.output_dataclass)
 
@@ -149,6 +183,8 @@ class BaseAgentRunner:
             model_settings = model_settings_override
         else:
             model_settings = self._build_model_settings(agent_def, ctx_wrapper)
+
+        model_settings = apply_model_retry(agent_def.model_retry, model_settings)
 
         effective_model = model_override or agent_def.model
 
@@ -229,11 +265,10 @@ class BaseAgentRunner:
         """
         agent_def = self._get_agent_definition(agent_name)
 
-        # Auto-create error recovery if True was passed
-        if error_recovery is True:
-            error_recovery = ToolErrorRecovery(tool_registry=self.tool_registry)
-        elif error_recovery is False:
-            error_recovery = None
+        # A boolean is a declaration, not a capability — translate it the way the
+        # YAML paths do rather than constructing one here.
+        if isinstance(error_recovery, bool):
+            error_recovery = build_tool_error_recovery(error_recovery, self.tool_registry)
 
         capabilities = self._build_run_capabilities(
             agent_def=agent_def,
@@ -249,7 +284,7 @@ class BaseAgentRunner:
                 sdk_max_turns = cap.absolute_max
                 # Wire the budget so InstructionBuilder.turn_budget_section
                 # and the request_extension tool can locate it.
-                context._turn_budget = cap
+                set_turn_budget(context, cap)
                 break
 
         if streaming:
@@ -301,6 +336,7 @@ class BaseAgentRunner:
     ) -> Any:
         """Run agent via Runner.run() and return final_output."""
         capabilities = capabilities or []
+        agent_def = self._get_agent_definition(agent_name)
         agent = await self.create_agent(
             agent_name=agent_name,
             context=context,
@@ -325,6 +361,14 @@ class BaseAgentRunner:
         if hooks:
             run_kwargs["hooks"] = hooks
 
+        run_config = self._build_run_config(agent_def)
+        if run_config is not None:
+            run_kwargs["run_config"] = run_config
+
+        error_handlers = self._build_error_handlers(agent_def)
+        if error_handlers is not None:
+            run_kwargs["error_handlers"] = error_handlers
+
         result = await Runner.run(**run_kwargs)
 
         self.last_usage = self._aggregate_usage(result)
@@ -345,8 +389,10 @@ class BaseAgentRunner:
     ) -> Any:
         """Run agent with automatic fallback on context overflow.
 
-        If the agent hits max_turns or context_length_exceeded, collects
-        all gathered tool outputs and makes a single condensed LLM call.
+        When the run fails with a kind in ``FALLBACK_RECOVERABLE_KINDS`` --
+        ``MAX_TURNS`` or ``CONTEXT_OVERFLOW`` -- collects all gathered tool
+        outputs and makes a single condensed LLM call. Every other failure,
+        a refusal included, propagates untouched.
         """
         capabilities = capabilities or []
         agent_def = self._get_agent_definition(agent_name)
@@ -373,6 +419,14 @@ class BaseAgentRunner:
         if hooks:
             run_kwargs["hooks"] = hooks
 
+        run_config = self._build_run_config(agent_def)
+        if run_config is not None:
+            run_kwargs["run_config"] = run_config
+
+        error_handlers = self._build_error_handlers(agent_def)
+        if error_handlers is not None:
+            run_kwargs["error_handlers"] = error_handlers
+
         try:
             run_result = await Runner.run(**run_kwargs)
             self.last_usage = self._aggregate_usage(run_result)
@@ -380,50 +434,54 @@ class BaseAgentRunner:
             return run_result.final_output
 
         except Exception as err:
-            err_str = str(err)
-            is_recoverable = "Max turns" in err_str or "context_length_exceeded" in err_str
-            if not is_recoverable:
+            kind = classify_run_error(err)
+            if kind not in FALLBACK_RECOVERABLE_KINDS:
                 raise
 
             logger.warning(
-                f"Agent '{agent_name}' hit limit: {err_str}. "
-                f"Falling back to summarize-and-extract."
+                "Agent '%s' hit %s: %s. Falling back to summarize-and-extract.",
+                agent_name,
+                kind.value,
+                err,
             )
 
             ctx_wrapper = RunContextWrapper(context)
             instructions = self._build_instructions(agent_def, ctx_wrapper)
 
+            # NOTE: a declared tool_output_trim does not reach this prompt. The
+            # SDK applies the filter through RunConfig.call_model_input_filter,
+            # read only inside Runner.run (agents.run_internal.turn_preparation,
+            # openai-agents==0.18.3), which this branch bypasses. The filter also
+            # keys its window off the last N *user* messages, and a rescue prompt
+            # replays a single one — so running it here would trim nothing. The
+            # prompt builder caps each output instead.
             builder = fallback_prompt_builder or self._default_fallback_prompt_builder
             prompt = builder(instructions, collecting.raw_items, agent_def)
 
             for cap in capabilities:
                 cap.on_fallback_start(ctx_wrapper, prompt, collecting.raw_items)
 
-            from agents.models._openai_shared import get_default_openai_client
+            client = resolve_openai_client()
 
-            client = get_default_openai_client()
-            if client is None:
-                from openai import AsyncOpenAI
-
-                client = AsyncOpenAI()
-
-            output_type = self._resolve_output_type(agent_def.output_dataclass)
-            use_json = output_type and output_type is not str
+            # NOTE: retry policies and backoff are runner-managed — the SDK reads
+            # them off the resolved ModelSettings inside Runner.run
+            # (agents.run_internal.model_retry, openai-agents==0.18.3), which this
+            # branch bypasses. Only the declared attempt count carries over, via
+            # the OpenAI client's own retry, so a rescue call is not left on the
+            # client default while every other branch honors the agent's budget.
+            retry_settings = build_model_retry_settings(agent_def.model_retry)
+            if retry_settings is not None and retry_settings.max_retries is not None:
+                client = client.with_options(max_retries=retry_settings.max_retries)
 
             # Reuse or build the SDK's AgentOutputSchema so the fallback
             # LLM sees the identical JSON schema (including the "response"
             # wrapper for dataclass output types) and we can parse correctly.
-            output_schema = None
-            if use_json:
-                from agents.agent_output import AgentOutputSchema, AgentOutputSchemaBase
-
-                if isinstance(output_type, AgentOutputSchemaBase):
-                    output_schema = output_type
-                else:
-                    output_schema = AgentOutputSchema(
-                        output_type,
-                        strict_json_schema=False,
-                    )
+            # Non-strict: the schema is sent to the provider as a
+            # response_format, which rejects strict-mode constructs.
+            output_schema = build_output_schema(
+                self._resolve_output_type(agent_def.output_dataclass),
+                strict_json_schema=False,
+            )
 
             messages: list[dict[str, str]] = []
             messages.append({"role": "user", "content": prompt})
@@ -433,7 +491,7 @@ class BaseAgentRunner:
                 "messages": messages,
                 "temperature": 0.3,
             }
-            if output_schema:
+            if output_schema is not None:
                 kwargs["response_format"] = {
                     "type": "json_schema",
                     "json_schema": {
@@ -441,8 +499,6 @@ class BaseAgentRunner:
                         "schema": output_schema.json_schema(),
                     },
                 }
-            elif use_json:
-                kwargs["response_format"] = {"type": "json_object"}
 
             response = await client.chat.completions.create(**kwargs)
             content = response.choices[0].message.content
@@ -461,16 +517,28 @@ class BaseAgentRunner:
                 self.last_usage = fallback_usage
 
             for cap in capabilities:
-                cap.on_fallback_end(ctx_wrapper, content, fallback_usage)
+                cap.on_fallback_end(ctx_wrapper, content, copy.deepcopy(fallback_usage))
 
-            if not use_json:
+            if output_schema is None:
                 return content
 
-            # Use the SDK's schema to parse — handles "response" unwrapping
-            if output_schema:
-                return output_schema.validate_json(content)
-
-            return json.loads(content)
+            # Use the SDK's schema to parse — handles "response" unwrapping.
+            # This branch bypasses Runner.run, so the SDK's invalid_final_output
+            # handler cannot reach it; apply the same salvage directly.
+            try:
+                return output_schema.validate_json(content or "")
+            except ModelBehaviorError:
+                if not agent_def.invalid_output_recovery:
+                    raise
+                salvaged = salvage_structured_output(content, output_schema)
+                if salvaged is None:
+                    raise
+                logger.info(
+                    "Recovered structured output for agent '%s' from a malformed "
+                    "fallback response",
+                    agent_name,
+                )
+                return salvaged
 
     async def _execute_streamed(
         self,
@@ -488,8 +556,14 @@ class BaseAgentRunner:
 
         Adds user message to session, streams events via on_event callback,
         and returns final_output.
+
+        The ``answer`` event owns its ``usage`` payload: it is a deep copy of the
+        record kept as ``self.last_usage``, so editing it does not rewrite the
+        runner's own record and a later reader of ``last_usage`` does not see
+        whatever a consumer wrote into a delivered event.
         """
         capabilities = capabilities or []
+        agent_def = self._get_agent_definition(agent_name)
         agent = await self.create_agent(
             agent_name=agent_name,
             context=context,
@@ -516,6 +590,14 @@ class BaseAgentRunner:
         hooks = self._build_hooks(capabilities)
         if hooks:
             run_kwargs["hooks"] = hooks
+
+        run_config = self._build_run_config(agent_def)
+        if run_config is not None:
+            run_kwargs["run_config"] = run_config
+
+        error_handlers = self._build_error_handlers(agent_def)
+        if error_handlers is not None:
+            run_kwargs["error_handlers"] = error_handlers
 
         result = Runner.run_streamed(**run_kwargs)
 
@@ -560,7 +642,7 @@ class BaseAgentRunner:
                         on_event(
                             {
                                 "event": "tool_output",
-                                "data": {"output": str(item.output)[:500]},
+                                "data": {"output": tool_output_preview(item.output)},
                             }
                         )
                 elif item.type == "message_output_item":
@@ -599,7 +681,11 @@ class BaseAgentRunner:
             on_event(
                 {
                     "event": "answer",
-                    "data": {"response": response, "tools_called": tools_called, "usage": usage},
+                    "data": {
+                        "response": response,
+                        "tools_called": tools_called,
+                        "usage": copy.deepcopy(usage),
+                    },
                 }
             )
 
@@ -664,6 +750,7 @@ class BaseAgentRunner:
             Dict with ``output`` (agent's structured output) and ``usage``
             (token usage dict).
         """
+        agent_def = self._get_agent_definition(agent_name)
         agent = await self.create_agent(
             agent_name=agent_name,
             context=context,
@@ -671,12 +758,22 @@ class BaseAgentRunner:
 
         logger.info(f"Running agent: {agent_name}")
 
-        result = await Runner.run(
-            starting_agent=agent,
-            input=input_message,
-            session=session,
-            context=context,
-        )
+        run_kwargs: dict[str, Any] = {
+            "starting_agent": agent,
+            "input": input_message,
+            "session": session,
+            "context": context,
+        }
+
+        run_config = self._build_run_config(agent_def)
+        if run_config is not None:
+            run_kwargs["run_config"] = run_config
+
+        error_handlers = self._build_error_handlers(agent_def)
+        if error_handlers is not None:
+            run_kwargs["error_handlers"] = error_handlers
+
+        result = await Runner.run(**run_kwargs)
 
         logger.info(f"Agent '{agent_name}' completed successfully")
 
@@ -739,34 +836,46 @@ class BaseAgentRunner:
         for tool_name in tool_names:
             if tool_name in self.tool_map:
                 agent_tools.append(self.tool_map[tool_name])
-            elif tool_name in self.agent_registry._agents:
-                tool_agent = await self.create_agent(
-                    agent_name=tool_name,
-                    context=context,
-                )
-                agent_def = self.agent_registry._agents[tool_name]
-                as_tool_kwargs: dict[str, Any] = {
-                    "tool_name": tool_name,
-                    "tool_description": agent_def.description,
-                    "failure_error_function": structured_tool_error,
-                }
-                if agent_def.as_tool_parameters is not None:
-                    as_tool_kwargs["parameters"] = agent_def.as_tool_parameters
+                continue
 
-                budget = agent_def.as_tool_turn_budget
-                if budget:
-                    budget.reset()
-                    sub_caps: list[Capability] = [budget]
-                    self._apply_dynamic_instructions(tool_agent, sub_caps)
-                    tool_agent.tools.append(request_extension_tool)
-                    as_tool_kwargs["hooks"] = _CompositeHooks(sub_caps)
-                    as_tool_kwargs["max_turns"] = budget.absolute_max
-                elif agent_def.as_tool_max_turns is not None:
-                    as_tool_kwargs["max_turns"] = agent_def.as_tool_max_turns
-
-                agent_tools.append(tool_agent.as_tool(**as_tool_kwargs))
-            else:
+            agent_def = self.agent_registry.get(tool_name)
+            if agent_def is None:
                 logger.warning(f"Tool '{tool_name}' not found in tool or agent registry")
+                continue
+
+            tool_agent = await self.create_agent(
+                agent_name=tool_name,
+                context=context,
+            )
+            as_tool_kwargs: dict[str, Any] = {
+                "tool_name": tool_name,
+                "tool_description": agent_def.description,
+                "failure_error_function": structured_tool_error,
+            }
+            if agent_def.as_tool_parameters is not None:
+                as_tool_kwargs["parameters"] = agent_def.as_tool_parameters
+
+            sub_run_config = self._build_run_config(agent_def)
+            if sub_run_config is not None:
+                as_tool_kwargs["run_config"] = sub_run_config
+
+            # NOTE: no error_handlers here — Agent.as_tool() accepts
+            # run_config but has no error_handlers parameter, so a
+            # sub-agent's invalid structured output still raises. Wire it
+            # the moment the SDK exposes it.
+
+            budget = agent_def.as_tool_turn_budget
+            if budget:
+                budget.reset()
+                sub_caps: list[Capability] = [budget]
+                self._apply_dynamic_instructions(tool_agent, sub_caps)
+                tool_agent.tools.append(request_extension_tool)
+                as_tool_kwargs["hooks"] = _CompositeHooks(sub_caps)
+                as_tool_kwargs["max_turns"] = budget.absolute_max
+            elif agent_def.as_tool_max_turns is not None:
+                as_tool_kwargs["max_turns"] = agent_def.as_tool_max_turns
+
+            agent_tools.append(tool_agent.as_tool(**as_tool_kwargs))
 
         return agent_tools
 
@@ -799,24 +908,56 @@ class BaseAgentRunner:
 
         return tools
 
-    def _build_guardrails(self, guardrail_names: list[str]) -> list[Any]:
-        """Build agent guardrails list.
+    def _build_run_config(self, agent_def: Any) -> RunConfig | None:
+        """Build the SDK run config for an agent, or None when defaults apply.
+
+        Declaring a tool-input guardrail opts the agent into running those
+        guardrails *before* the SDK emits a pending-approval interruption, so a
+        rejected call never reaches the tool or a human approver.
+
+        Declaring ``tool_output_trim`` installs the SDK's tool-output filter,
+        which shrinks oversized outputs from older turns before each model call.
 
         Args:
-            guardrail_names: List of guardrail names from agent definition
+            agent_def: Agent definition whose guardrails and trim policy decide
+                the config
 
         Returns:
-            List of configured guardrail functions
+            Configured RunConfig, or None when no setting differs from the default
         """
-        agent_guardrails: list[Any] = []
+        config_kwargs: dict[str, Any] = {}
 
-        for guardrail_name in guardrail_names:
-            if guardrail_name in self.guardrail_map:
-                agent_guardrails.append(self.guardrail_map[guardrail_name])
-            else:
-                logger.warning(f"Guardrail '{guardrail_name}' not found in registry")
+        if self.guardrail_registry.has_category(agent_def.guardrails, GuardrailCategory.TOOL_INPUT):
+            config_kwargs["tool_execution"] = tool_input_pre_approval()
 
-        return agent_guardrails
+        trimmer = build_tool_output_trimmer(agent_def.tool_output_trim)
+        if trimmer is not None:
+            config_kwargs["call_model_input_filter"] = trimmer
+
+        if not config_kwargs:
+            return None
+
+        return RunConfig(**config_kwargs)
+
+    def _build_error_handlers(self, agent_def: Any) -> RunErrorHandlers[Any] | None:
+        """Build the SDK run error handlers for an agent, or None when defaults apply.
+
+        Agents keep ``invalid_output_recovery`` on by default: a final message
+        whose payload is valid but wrapped in prose or a code fence is
+        re-parsed instead of failing the run. Recovery only ever returns a
+        payload the agent's own output schema accepts, so an agent that must
+        fail loudly on any malformed output sets the flag to ``False``.
+
+        Args:
+            agent_def: Agent definition whose recovery flag decides the handlers
+
+        Returns:
+            Configured handlers, or None when the agent opts out
+        """
+        if not agent_def.invalid_output_recovery:
+            return None
+
+        return invalid_final_output_handlers()
 
     async def _build_handoffs(self, handoff_names: list[str], context: Any) -> list[Any]:
         """Build agent handoffs list.
@@ -831,14 +972,15 @@ class BaseAgentRunner:
         handoffs: list[Any] = []
 
         for handoff_name in handoff_names:
-            if handoff_name in self.agent_registry._agents:
-                handoff_agent = await self.create_agent(
-                    agent_name=handoff_name,
-                    context=context,
-                )
-                handoffs.append(handoff_agent)
-            else:
+            if self.agent_registry.get(handoff_name) is None:
                 logger.warning(f"Handoff agent '{handoff_name}' not found in registry")
+                continue
+
+            handoff_agent = await self.create_agent(
+                agent_name=handoff_name,
+                context=context,
+            )
+            handoffs.append(handoff_agent)
 
         return handoffs
 
@@ -892,7 +1034,7 @@ class BaseAgentRunner:
         agent_def: Any,
         instructions: str,
         tools: list[Any],
-        guardrails: list[Any],
+        guardrails: ResolvedGuardrails,
         handoffs: list[Any],
         output_type: Any,
         model_settings: Any,
@@ -904,7 +1046,9 @@ class BaseAgentRunner:
             agent_def: Agent definition
             instructions: Processed instructions
             tools: Configured tools list
-            guardrails: Configured guardrails list
+            guardrails: Guardrails bucketed by category. Tool-input guardrails
+                are already attached to *tools*, so only the run-level slots
+                are wired here.
             handoffs: Configured handoffs list
             output_type: Resolved output type
             model_settings: Model settings or None
@@ -917,7 +1061,8 @@ class BaseAgentRunner:
             "name": agent_def.name,
             "instructions": instructions,
             "tools": tools,
-            "output_guardrails": guardrails if guardrails else [],
+            "input_guardrails": guardrails.input_guardrails,
+            "output_guardrails": guardrails.output_guardrails,
             "model": model_override or agent_def.model,
             "output_type": output_type,
         }
@@ -1024,6 +1169,8 @@ class BaseAgentRunner:
         """Default fallback prompt: concatenate instructions + tool outputs.
 
         Used by _execute_with_fallback() when no custom builder is provided.
+        Each output is cut to :data:`FALLBACK_PROMPT_TOOL_OUTPUT_CHARS` so a
+        prompt built from an overflowed run does not overflow in turn.
 
         Args:
             instructions: Agent's resolved instructions string
@@ -1041,7 +1188,7 @@ class BaseAgentRunner:
                 continue
             output = item.get("output", "")
             if output:
-                tool_outputs.append(str(output)[:2000])
+                tool_outputs.append(str(output)[:FALLBACK_PROMPT_TOOL_OUTPUT_CHARS])
 
         context_str = (
             "\n\n---\n\n".join(tool_outputs) if tool_outputs else "(no tool outputs collected)"
@@ -1125,7 +1272,19 @@ class _CompositeHooks(RunHooks):
     """
 
     def __init__(self, capabilities: list[Capability]) -> None:
-        self._capabilities = capabilities
+        """
+        Args:
+            capabilities: Capabilities to dispatch every lifecycle event to, in
+                registration order. The list is copied, so a caller that keeps
+                its own list and edits it after construction cannot change what
+                a live bundle dispatches to, and no two bundles built from one
+                list share a dispatch set. The capabilities inside it are
+                deliberately not copied: a turn budget's remaining turns and a
+                recovery tracker's error state are live per-run state the caller
+                reads back after the run, so the elements stay shared and only
+                the container is detached.
+        """
+        self._capabilities = list(capabilities)
 
     async def on_agent_start(self, context: Any, agent: Any) -> None:
         for cap in self._capabilities:

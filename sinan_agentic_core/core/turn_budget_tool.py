@@ -7,6 +7,7 @@ The agent calls it when running low on turns and needs more time.
 from agents import RunContextWrapper, function_tool
 
 from ..utils.tool_helpers import tool_error, tool_response, unwrap_context
+from ..utils.turn_budget_context import get_turn_budget
 
 
 @function_tool(name_override="request_extension")
@@ -21,7 +22,7 @@ async def request_extension_tool(ctx: RunContextWrapper, reason: str) -> str:
         reason: Why additional turns are needed (e.g., "Need to process 3 more documents").
     """
     context = unwrap_context(ctx)
-    budget = getattr(context, "_turn_budget", None)
+    budget = get_turn_budget(context)
     if budget is None:
         return tool_error("No turn budget is configured for this agent.")
 

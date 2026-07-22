@@ -99,7 +99,6 @@ def test_get_params_schema_search(registry):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
 async def test_invoke_function_tool(adapter):
     result = await adapter.invoke("discover", target="entities")
     data = json.loads(result)
@@ -107,14 +106,12 @@ async def test_invoke_function_tool(adapter):
     assert data["db"] == "fake_db"
 
 
-@pytest.mark.asyncio
 async def test_invoke_with_defaults(adapter):
     result = await adapter.invoke("discover")
     data = json.loads(result)
     assert data["target"] == "overview"
 
 
-@pytest.mark.asyncio
 async def test_invoke_search(adapter):
     result = await adapter.invoke("search", query="hello", limit=5)
     data = json.loads(result)
@@ -122,7 +119,6 @@ async def test_invoke_search(adapter):
     assert data["limit"] == 5
 
 
-@pytest.mark.asyncio
 async def test_invoke_unknown_tool(adapter):
     with pytest.raises(KeyError, match="not_real"):
         await adapter.invoke("not_real")
@@ -159,7 +155,6 @@ def test_build_mcp_handler_search_signature(adapter):
     assert params["limit"].default is not inspect.Parameter.empty
 
 
-@pytest.mark.asyncio
 async def test_build_mcp_handler_callable(adapter):
     handler = adapter.build_mcp_handler("search")
     result = await handler(query="test", limit=3)

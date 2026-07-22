@@ -2,11 +2,14 @@
 
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from sinan_agentic_core.registry.tool_catalog import (
     ToolCatalog,
+    ToolMCPConfig,
     ToolYamlEntry,
     load_tool_catalog,
 )
@@ -37,6 +40,21 @@ class TestToolYamlEntry:
         assert entry.description == "Search papers"
         assert entry.category == "research"
         assert entry.recovery_hint == "Try different terms"
+
+    def test_rejects_an_unknown_key(self):
+        """A typo must fail loudly rather than silently leave the field empty."""
+        with pytest.raises(ValidationError, match="typo"):
+            ToolYamlEntry(typo="Search papers")
+
+    def test_rejects_a_misspelled_field(self):
+        """The near-miss is the realistic case — the hint would never reach the tool."""
+        with pytest.raises(ValidationError, match="recovery_hints"):
+            ToolYamlEntry(recovery_hints="Try different terms")
+
+    def test_rejects_an_unknown_mcp_key(self):
+        """``mcp: {exposed: true}`` would leave the tool unexposed, silently."""
+        with pytest.raises(ValidationError, match="exposed"):
+            ToolYamlEntry(mcp={"exposed": True})
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +91,151 @@ class TestToolCatalog:
         catalog = ToolCatalog(raw_tools={})
         assert catalog.list_tools() == []
 
+    def test_get_rejects_an_unrecognized_tool_key(self):
+        """A key tools.yaml does not define fails on resolve, not silently."""
+        catalog = ToolCatalog(raw_tools={"search": {"description": "d", "categry": "graph"}})
+        with pytest.raises(ValidationError, match="categry"):
+            catalog.get("search")
+
+
+# ---------------------------------------------------------------------------
+# ToolCatalog copies the caller's map
+# ---------------------------------------------------------------------------
+
+
+class TestToolCatalogCopiesTheCallersMap:
+    """The catalog owns its data, so a later edit to the caller's dict cannot reach it."""
+
+    def test_a_new_tool_added_after_construction_is_not_visible(self):
+        raw_tools: dict[str, dict[str, Any]] = {"search": {"description": "Search stuff"}}
+        catalog = ToolCatalog(raw_tools=raw_tools)
+
+        raw_tools["late_tool"] = {"description": "Added late"}
+
+        assert catalog.list_tools() == ["search"]
+
+    def test_an_edit_inside_a_tool_block_is_not_visible(self):
+        raw_tools: dict[str, dict[str, Any]] = {
+            "search": {"description": "Search stuff", "category": "graph"}
+        }
+        catalog = ToolCatalog(raw_tools=raw_tools)
+
+        raw_tools["search"]["category"] = "edited late"
+
+        assert catalog.get("search").category == "graph"
+
+    def test_an_edit_inside_a_nested_mcp_block_is_not_visible(self):
+        """``mcp`` nests inside the tool block, so a shallow copy would not detach it."""
+        raw_tools: dict[str, dict[str, Any]] = {
+            "search": {"description": "Search stuff", "mcp": {"expose": True}}
+        }
+        catalog = ToolCatalog(raw_tools=raw_tools)
+
+        raw_tools["search"]["mcp"]["expose"] = False
+
+        assert catalog.get_mcp_tools() == ["search"]
+
+    def test_a_late_edit_does_not_reach_registry_enrichment(self):
+        raw_tools: dict[str, dict[str, Any]] = {"search": {"description": "Search stuff"}}
+        catalog = ToolCatalog(raw_tools=raw_tools)
+        registry = ToolRegistry()
+        registry.register(ToolDefinition(name="search", function=lambda: None))
+
+        raw_tools["search"]["description"] = "Edited late"
+        catalog.enrich_registry(registry)
+
+        assert registry.get_tool("search").description == "Search stuff"
+
+    def test_two_catalogs_built_from_the_same_data_are_independent_snapshots(self):
+        raw_tools: dict[str, dict[str, Any]] = {"search": {"description": "Search stuff"}}
+
+        first = ToolCatalog(raw_tools=raw_tools)
+        raw_tools["search"]["description"] = "Search things"
+        second = ToolCatalog(raw_tools=raw_tools)
+
+        assert first.get("search").description == "Search stuff"
+        assert second.get("search").description == "Search things"
+
+
+# ---------------------------------------------------------------------------
+# Resolved entries own their values
+# ---------------------------------------------------------------------------
+
+
+class TestResolvedEntriesOwnTheirValues:
+    """A resolved entry is a snapshot too, so editing it cannot reach the catalog.
+
+    Pydantic rebuilds the containers it has a declared type for and stops at
+    ``Any``: ``ToolMCPConfig.annotations`` is ``dict[str, Any]``, so the outer
+    mapping is new on every ``get()`` while an annotation value that is itself a
+    mapping or a list is what the catalog would hand out by reference.
+    """
+
+    @staticmethod
+    def _catalog() -> ToolCatalog:
+        return ToolCatalog(
+            raw_tools={
+                "search": {
+                    "description": "Search stuff",
+                    "mcp": {
+                        "expose": True,
+                        "annotations": {
+                            "audience": ["user"],
+                            "hints": {"readOnlyHint": True},
+                        },
+                    },
+                },
+            }
+        )
+
+    def test_an_edit_inside_a_nested_annotation_mapping_is_not_visible(self):
+        catalog = self._catalog()
+
+        catalog.get("search").mcp.annotations["hints"]["readOnlyHint"] = False
+
+        assert catalog.get("search").mcp.annotations["hints"] == {"readOnlyHint": True}
+
+    def test_an_edit_inside_a_nested_annotation_list_is_not_visible(self):
+        catalog = self._catalog()
+
+        catalog.get("search").mcp.annotations["audience"].append("assistant")
+
+        assert catalog.get("search").mcp.annotations["audience"] == ["user"]
+
+    def test_an_annotation_added_to_a_resolved_entry_is_not_visible(self):
+        catalog = self._catalog()
+
+        catalog.get("search").mcp.annotations["destructiveHint"] = True
+
+        assert list(catalog.get("search").mcp.annotations) == ["audience", "hints"]
+
+    def test_two_entries_do_not_share_a_nested_annotation_mapping(self):
+        catalog = self._catalog()
+        first = catalog.get("search")
+        second = catalog.get("search")
+
+        first.mcp.annotations["hints"]["readOnlyHint"] = False
+
+        assert second.mcp.annotations["hints"] == {"readOnlyHint": True}
+
+    def test_two_entries_do_not_share_a_nested_annotation_list(self):
+        catalog = self._catalog()
+        first = catalog.get("search")
+        second = catalog.get("search")
+
+        first.mcp.annotations["audience"].append("assistant")
+
+        assert second.mcp.annotations["audience"] == ["user"]
+
+    def test_the_declared_values_survive_the_copy(self):
+        entry = self._catalog().get("search")
+
+        assert entry.description == "Search stuff"
+        assert entry.mcp == ToolMCPConfig(
+            expose=True,
+            annotations={"audience": ["user"], "hints": {"readOnlyHint": True}},
+        )
+
 
 # ---------------------------------------------------------------------------
 # enrich_registry
@@ -86,6 +249,14 @@ class TestEnrichRegistry:
         for t in tools:
             reg.register(t)
         return reg
+
+    def test_enrich_rejects_an_unrecognized_tool_key(self):
+        """Enrichment reads every entry, so a typo surfaces at startup."""
+        reg = self._make_registry(ToolDefinition(name="search", function=lambda: None))
+        catalog = ToolCatalog(raw_tools={"search": {"descriptions": "Search the graph"}})
+
+        with pytest.raises(ValidationError, match="descriptions"):
+            catalog.enrich_registry(reg)
 
     def test_yaml_overwrites_empty_decorator_fields(self):
         """YAML fills in metadata that the decorator left empty."""

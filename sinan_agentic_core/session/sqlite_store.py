@@ -31,6 +31,14 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# How much of the first user message becomes the session title. The title is a
+# label a session list shows one line of, not a copy of the message — the stored
+# message itself is always available through ``get_messages``. Longer content is
+# cut here and marked with :data:`SESSION_TITLE_ELLIPSIS`, which is appended on
+# top of this budget rather than spent inside it.
+SESSION_TITLE_CHARS = 100
+SESSION_TITLE_ELLIPSIS = "..."
+
 
 class SQLiteSessionStore:
     """SQLite-backed storage for chat sessions and messages.
@@ -260,7 +268,11 @@ class SQLiteSessionStore:
 
             # Set title from first user message
             if role == "user":
-                title = content[:100] + "..." if len(content) > 100 else content
+                title = (
+                    content[:SESSION_TITLE_CHARS] + SESSION_TITLE_ELLIPSIS
+                    if len(content) > SESSION_TITLE_CHARS
+                    else content
+                )
                 cursor.execute(
                     "UPDATE sessions SET title = ? WHERE id = ? AND title IS NULL",
                     (title, session_id),
