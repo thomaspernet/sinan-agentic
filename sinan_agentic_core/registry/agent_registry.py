@@ -13,7 +13,13 @@ from ..core.tool_output_trim import ToolOutputTrimConfig
 
 @dataclass
 class AgentDefinition:
-    """Schema for an agent."""
+    """Schema for an agent.
+
+    The definition owns its ``tools``, ``guardrails``, ``handoffs``,
+    ``hosted_tools``, and ``capabilities`` lists: it is a fixed record of what
+    was declared, so each is copied on construction rather than aliased to
+    whoever supplied it.
+    """
 
     name: str
     description: str  # Description of agent's purpose
@@ -49,9 +55,29 @@ class AgentDefinition:
     as_tool_turn_budget: Any | None = None  # TurnBudget instance for sub-agent budget management
 
     def __post_init__(self) -> None:
-        """Ensure instructions is provided."""
+        """Validate the declaration, then take ownership of its list fields.
+
+        ``default_factory=list`` only covers the omitted-argument case. A caller
+        that passes its own list keeps it aliased into the definition, and the
+        definition outlives that caller in the process-wide registry:
+        :func:`create_agent_from_registry` re-reads ``tools`` and ``guardrails``
+        on every build, and the runner re-reads ``capabilities`` on every run.
+        Copying here means a later append by the caller cannot change which
+        tools an agent exposes or which capabilities dispatch, and two
+        definitions built from one list do not share it.
+
+        Only the containers are copied. The elements stay shared on purpose —
+        ``capabilities`` holds live per-run objects the runner clones and reads
+        state back off, and ``hosted_tools`` holds SDK tool objects a caller
+        matches against its own.
+        """
         if self.instructions is None:
             raise ValueError(f"Agent {self.name} must have instructions")
+        self.tools = list(self.tools)
+        self.guardrails = list(self.guardrails)
+        self.handoffs = list(self.handoffs)
+        self.hosted_tools = list(self.hosted_tools)
+        self.capabilities = list(self.capabilities)
 
 
 @dataclass
