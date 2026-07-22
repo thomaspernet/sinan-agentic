@@ -55,6 +55,19 @@ from .turn_budget_tool import request_extension_tool
 
 logger = logging.getLogger(__name__)
 
+# How much of each collected tool output the default fallback prompt carries into
+# the condensed rescue call. That call only happens because the run already ran
+# out of context or turns, so replaying every gathered output whole would
+# reproduce the failure it is rescuing — the head of each one is what the model
+# needs to still produce a final answer.
+#
+# Deliberately not ``stream_preview.TOOL_OUTPUT_PREVIEW_CHARS``: that bound
+# shortens what a stream consumer is *shown* and never reaches a model, so it is
+# free to be much smaller. This one shapes a model's input. The two move for
+# different reasons and are named separately so neither drags the other with it.
+# A caller needing a different bound passes its own ``fallback_prompt_builder``.
+FALLBACK_PROMPT_TOOL_OUTPUT_CHARS = 2000
+
 
 class BaseAgentRunner:
     """Agent execution engine with two entry points: execute() and run_agent().
@@ -1140,6 +1153,8 @@ class BaseAgentRunner:
         """Default fallback prompt: concatenate instructions + tool outputs.
 
         Used by _execute_with_fallback() when no custom builder is provided.
+        Each output is cut to :data:`FALLBACK_PROMPT_TOOL_OUTPUT_CHARS` so a
+        prompt built from an overflowed run does not overflow in turn.
 
         Args:
             instructions: Agent's resolved instructions string
@@ -1157,7 +1172,7 @@ class BaseAgentRunner:
                 continue
             output = item.get("output", "")
             if output:
-                tool_outputs.append(str(output)[:2000])
+                tool_outputs.append(str(output)[:FALLBACK_PROMPT_TOOL_OUTPUT_CHARS])
 
         context_str = (
             "\n\n---\n\n".join(tool_outputs) if tool_outputs else "(no tool outputs collected)"

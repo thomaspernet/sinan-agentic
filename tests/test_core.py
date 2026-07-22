@@ -20,9 +20,14 @@ from agents import (
     tool_input_guardrail,
 )
 
-from sinan_agentic_core.core.base_runner import BaseAgentRunner, _CollectingSessionWrapper
+from sinan_agentic_core.core.base_runner import (
+    FALLBACK_PROMPT_TOOL_OUTPUT_CHARS,
+    BaseAgentRunner,
+    _CollectingSessionWrapper,
+)
 from sinan_agentic_core.core.model_retry import ModelRetryConfig
 from sinan_agentic_core.core.output_recovery import recover_invalid_final_output
+from sinan_agentic_core.core.stream_preview import tool_output_preview
 from sinan_agentic_core.core.tool_output_trim import ToolOutputTrimConfig
 from sinan_agentic_core.models.context import AgentContext
 from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
@@ -1008,6 +1013,61 @@ class TestDefaultFallbackPromptBuilder:
         raw_items = ["string_item", 42, None]
         prompt = BaseAgentRunner._default_fallback_prompt_builder("Instructions", raw_items, None)
         assert "no tool outputs collected" in prompt
+
+    def test_carries_a_short_output_whole(self):
+        output = "x" * (FALLBACK_PROMPT_TOOL_OUTPUT_CHARS - 1)
+        raw_items = [{"type": "function_call_output", "output": output}]
+        prompt = BaseAgentRunner._default_fallback_prompt_builder("Instructions", raw_items, None)
+        assert output in prompt
+
+    def test_carries_an_output_at_the_limit_whole(self):
+        output = "x" * FALLBACK_PROMPT_TOOL_OUTPUT_CHARS
+        raw_items = [{"type": "function_call_output", "output": output}]
+        prompt = BaseAgentRunner._default_fallback_prompt_builder("Instructions", raw_items, None)
+        assert output in prompt
+
+    def test_cuts_an_oversized_output_to_the_context_length(self):
+        output = "x" * (FALLBACK_PROMPT_TOOL_OUTPUT_CHARS + 500) + "TAIL"
+        raw_items = [{"type": "function_call_output", "output": output}]
+        prompt = BaseAgentRunner._default_fallback_prompt_builder("Instructions", raw_items, None)
+        assert "x" * FALLBACK_PROMPT_TOOL_OUTPUT_CHARS in prompt
+        assert "TAIL" not in prompt
+
+    def test_cuts_each_output_independently(self):
+        raw_items = [
+            {
+                "type": "function_call_output",
+                "output": "a" * (FALLBACK_PROMPT_TOOL_OUTPUT_CHARS * 2),
+            },
+            {
+                "type": "function_call_output",
+                "output": "b" * (FALLBACK_PROMPT_TOOL_OUTPUT_CHARS * 2),
+            },
+        ]
+        prompt = BaseAgentRunner._default_fallback_prompt_builder("Instructions", raw_items, None)
+        # Each output is cut on its own, not the joined block.
+        assert "a" * FALLBACK_PROMPT_TOOL_OUTPUT_CHARS in prompt
+        assert "a" * (FALLBACK_PROMPT_TOOL_OUTPUT_CHARS + 1) not in prompt
+        assert "b" * FALLBACK_PROMPT_TOOL_OUTPUT_CHARS in prompt
+        assert "b" * (FALLBACK_PROMPT_TOOL_OUTPUT_CHARS + 1) not in prompt
+
+    def test_carries_more_context_than_the_streamed_preview_shows(self):
+        # The rescue prompt feeds a model; the streamed preview only feeds a UI.
+        # Collapsing the two decisions onto one constant would fail here.
+        output = "x" * (FALLBACK_PROMPT_TOOL_OUTPUT_CHARS * 2)
+        raw_items = [{"type": "function_call_output", "output": output}]
+        prompt = BaseAgentRunner._default_fallback_prompt_builder("Instructions", raw_items, None)
+        carried = "x" * FALLBACK_PROMPT_TOOL_OUTPUT_CHARS
+        assert carried in prompt
+        assert len(carried) > len(tool_output_preview(output))
+
+    def test_renders_a_non_string_output_before_cutting_it(self):
+        output = {"rows": ["y"] * FALLBACK_PROMPT_TOOL_OUTPUT_CHARS}
+        raw_items = [{"type": "function_call_output", "output": output}]
+        prompt = BaseAgentRunner._default_fallback_prompt_builder("Instructions", raw_items, None)
+        rendered = str(output)
+        assert rendered[:FALLBACK_PROMPT_TOOL_OUTPUT_CHARS] in prompt
+        assert rendered not in prompt
 
 
 # ------------------------------------------------------------------ #
