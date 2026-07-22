@@ -1,7 +1,8 @@
 """Tests for agent, tool, and guardrail registries."""
 
 import copy
-from unittest.mock import patch
+from dataclasses import fields
+from unittest.mock import Mock, patch
 
 import pytest
 from agents import (
@@ -14,7 +15,9 @@ from agents import (
     tool_input_guardrail,
 )
 
+from sinan_agentic_core.core.capabilities import Capability
 from sinan_agentic_core.core.model_retry import ModelRetryConfig
+from sinan_agentic_core.core.turn_budget import TurnBudget
 from sinan_agentic_core.registry.agent_registry import (
     AgentDefinition,
     AgentRegistry,
@@ -68,6 +71,72 @@ class TestAgentDefinition:
         a = AgentDefinition(name="a", description="d", instructions="i", hosted_tools=[factory])
         assert len(a.hosted_tools) == 1
         assert a.hosted_tools[0]() == "mock_tool"
+
+
+class TestAgentDefinitionOwnsItsListFields:
+    """The definition is a fixed record of what was declared, not a live view of the caller."""
+
+    def test_the_supplied_lists_are_readable(self):
+        a = AgentDefinition(
+            name="a", description="d", instructions="i", tools=["search"], guardrails=["safety"]
+        )
+
+        assert a.tools == ["search"]
+        assert a.guardrails == ["safety"]
+
+    def test_a_tool_added_by_the_caller_later_is_not_visible(self):
+        declared = ["search"]
+        a = AgentDefinition(name="a", description="d", instructions="i", tools=declared)
+
+        declared.append("added_late")
+
+        assert a.tools == ["search"]
+
+    def test_a_capability_added_by_the_caller_later_is_not_visible(self):
+        declared = [Mock(spec=Capability)]
+        a = AgentDefinition(name="a", description="d", instructions="i", capabilities=declared)
+
+        declared.append(Mock(spec=Capability))
+
+        assert len(a.capabilities) == 1
+
+    def test_editing_the_definition_does_not_reach_the_callers_list(self):
+        declared = ["search"]
+        a = AgentDefinition(name="a", description="d", instructions="i", tools=declared)
+
+        a.tools.append("added_by_reader")
+
+        assert declared == ["search"]
+
+    def test_two_definitions_built_from_one_list_do_not_share_it(self):
+        declared = ["search"]
+        first = AgentDefinition(name="a", description="d", instructions="i", tools=declared)
+        second = AgentDefinition(name="b", description="d", instructions="i", tools=declared)
+
+        first.tools.append("added_late")
+
+        assert second.tools == ["search"]
+
+    def test_the_capabilities_themselves_stay_shared_with_the_caller(self):
+        """Only the container is detached — the runner clones these and reads their state back."""
+        budget = TurnBudget()
+
+        a = AgentDefinition(name="a", description="d", instructions="i", capabilities=[budget])
+
+        assert a.capabilities[0] is budget
+
+    def test_every_list_field_is_detached_from_the_caller(self):
+        """A list field added later without a matching copy fails here, rather than drifting."""
+        list_fields = [f.name for f in fields(AgentDefinition) if f.default_factory is list]
+        assert list_fields, "reflection found no list fields to check"
+        declared = {name: ["declared"] for name in list_fields}
+
+        a = AgentDefinition(name="a", description="d", instructions="i", **declared)
+        for supplied in declared.values():
+            supplied.append("added_late")
+
+        for name in list_fields:
+            assert getattr(a, name) == ["declared"], f"{name} is aliased to the caller's list"
 
 
 # -- AgentRegistry -------------------------------------------------------------
