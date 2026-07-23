@@ -99,7 +99,7 @@ devwatch --repo "$REPO" agent-report \
   --file /tmp/devwatch-report-<ISSUE>.json \
   || echo "  agent-report failed (advisory) — continuing"
 ```
-Fall back to `--issue <ISSUE> --branch "$(git branch --show-current)"` if RUN_ID is unavailable.
+Omit `--run-id` if RUN_ID is unavailable — the run is resolved from `DEVWATCH_AGENT_RUN_ID` instead.
 
 3. Submit the PR. The commit message and the summary are both your own prose — pass each through a **quoted heredoc** so it survives verbatim; an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
 

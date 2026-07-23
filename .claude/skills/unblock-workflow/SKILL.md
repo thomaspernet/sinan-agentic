@@ -95,7 +95,9 @@ The three **destructive** primitives — `mark-pr-green` (force a red PR green),
 
 ## Record completion
 
-Record the outcome (use `--run-id` if available, else `--issue`). Always `--status completed` — this agent finished its recovery reasoning; the halted run's own state is separate and advances on its own once unblocked.
+Record the outcome (omit `--run-id` if RUN_ID is unavailable). Always `--status completed` — this agent finished its recovery reasoning; the halted run's own state is separate and advances on its own once unblocked.
+
+`agent-update` records against **your own** run only — `--run-id`, else the `DEVWATCH_AGENT_RUN_ID` your launcher put in this process's environment (#3761). It never resolves a run by issue: a recovery lever above may have just dispatched one, and that run is not yours to close. When neither source resolves — an uncorrelated manual invocation with no `--run 7` — the command refuses. That is the correct terminal, not something to route around: report the recovery in your reply and stop.
 
 The summary is your own prose and names the files and problems you found, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
 

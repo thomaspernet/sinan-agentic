@@ -127,7 +127,7 @@ git commit -m "docs(rules): <operation> rule from #<ISSUE> — <short descriptio
 
 1. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to every title, body, and comment below.
 
-Update the agent-run trace and post a completion comment (use `--run-id` if available, otherwise `--issue`). The summary carries the path you wrote and the comment body names it in backticks, so pass both through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
+Update the agent-run trace and post a completion comment (omit `--run-id` if RUN_ID is unavailable). The summary carries the path you wrote and the comment body names it in backticks, so pass both through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
 
 ```bash
 SUMMARY=$(cat <<'SUMMARY_EOF'

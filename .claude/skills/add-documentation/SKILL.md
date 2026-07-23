@@ -130,9 +130,9 @@ devwatch --repo "$REPO" agent-report \
   --file /tmp/devwatch-report-<ISSUE>.json \
   || echo "  agent-report failed (advisory) — continuing"
 ```
-Fall back to `--issue <ISSUE>` if RUN_ID is unavailable.
+Omit `--run-id` if RUN_ID is unavailable — the run is resolved from `DEVWATCH_AGENT_RUN_ID` instead.
 
-Record completion (use `--run-id` if available, fall back to `--issue`). `DOC_SHA` was set in the Commit and push step above — the `commit-docs` output SHA when docs changed, or the dev branch HEAD when nothing changed.
+Record completion (omit `--run-id` if RUN_ID is unavailable). `DOC_SHA` was set in the Commit and push step above — the `commit-docs` output SHA when docs changed, or the dev branch HEAD when nothing changed.
 
 ```bash
 devwatch --repo "$REPO" agent-update \

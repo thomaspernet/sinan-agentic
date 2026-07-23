@@ -135,14 +135,11 @@ BRANCH=$(devwatch --repo "$REPO" workflow-branch-name --issue <ISSUE> --prefix f
 git fetch origin && git checkout -b "$BRANCH" origin/${WORKFLOW_BASE}
 ```
 
-After creating or checking out the branch, record it (use `--run-id` if available, fall back to `--issue`):
+After creating or checking out the branch, record it:
 ```bash
 devwatch --repo "$REPO" agent-update --run-id <RUN_ID> --branch "<your-branch-name>"
 ```
-If no RUN_ID was provided:
-```bash
-devwatch --repo "$REPO" agent-update --issue <ISSUE> --branch "<your-branch-name>"
-```
+If no RUN_ID was provided, omit `--run-id` entirely — every `agent-update` and `agent-report` call below records against **your own** run, resolved from `--run-id` or the `DEVWATCH_AGENT_RUN_ID` your launcher put in this process's environment (#3761). Never name another run. If neither resolves, the command refuses rather than guessing — that is the correct terminal, not something to work around.
 
 When the run belongs to a workflow step, `agent-update --branch` also updates `workflow_steps.branch` and `workflows.current_branch` — no separate call needed.
 
@@ -202,7 +199,7 @@ skips the rest of this run's actions (quality / docs / PR), marks the
 workflow step done, and advances the chain to the next child. The
 workflow stays ``active``.
 
-If RUN_ID is unavailable, fall back to ``--issue <ISSUE>``. Do not call
+If RUN_ID is unavailable, omit ``--run-id``. Do not call
 ``agent-comment`` for the no-op — the close comment already explains the
 outcome on the issue.
 
@@ -244,9 +241,9 @@ devwatch --repo "$REPO" agent-report \
   --file /tmp/devwatch-report-<ISSUE>.json \
   || echo "  agent-report failed (advisory) — continuing"
 ```
-Fall back to `--issue <ISSUE> --branch "$(git branch --show-current)"` if RUN_ID is unavailable.
+Omit `--run-id` if RUN_ID is unavailable — the run is resolved from `DEVWATCH_AGENT_RUN_ID` instead.
 
-4. Record completion (use `--run-id` if available, fall back to `--issue`). The summary is your own prose, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
+4. Record completion (omit `--run-id` if RUN_ID is unavailable). The summary is your own prose, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
 ```bash
 SUMMARY=$(cat <<'SUMMARY_EOF'
 <one-line summary of what you built>

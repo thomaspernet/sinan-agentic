@@ -24,7 +24,7 @@ The output contains every doc you must read; treat it as if you opened each file
 
 `--head <sha>` is set by the dispatcher when the action fires inside an `epic_integration` chain (#1916). Since #2353 this skill runs **before** `merge-to-base` and `delete-branch`, so the child's feature branch still exists and `origin/<epic>...<HEAD_SHA>` is the child's *own un-merged change*. The flag pins the diff to the implement run's tip so it is the same diff every time, regardless of which branch the dispatcher left checked out. (Pre-#2353 this skill ran after the merge, when `<HEAD_SHA>` was already an ancestor of `origin/<epic>` — the three-dot diff collapsed to empty and the agent was tempted to reconstruct a diff by other means. §3 forbids that; the ordering fix removes the temptation.)
 
-`--auto-approve` is set by the dispatcher when the owning workflow has the per-workflow auto-approve-gates toggle on (#2349). It is the standing "yes" that carries the grow end-to-end (#2674): it bypasses the §8 filing gate, and — because the filed follow-ups auto-attach to the originating workflow (§9.5, #2673) — when the workflow's `auto_execute` is also on the dispatcher then runs the grown members and ships the second wave hands-off. Every other step (skip rules, cap, file-only boundary, the §6 reconcile: fine-key deduplicate-and-close plus coarse-key umbrella-append) is unchanged. Absent the flag, the §8 gate stays in force and the grown members land runnable but idle.
+`--auto-approve` is set by the dispatcher when the owning workflow has the per-workflow auto-approve-gates toggle on (#2349). It is the standing "yes" that carries the grow end-to-end (#2674): it bypasses the §8 filing gate, and — for the follow-ups §9.5 routes *to* the originating workflow (#2673) — when the workflow's `auto_execute` is also on the dispatcher then runs those grown members and ships the second wave hands-off. It is not a standing yes to the *destination*: a finding routed to the backlog (§9.5) lands on an unstarted epic under `--auto-approve` exactly as it does without it. Every other step (skip rules, cap, file-only boundary, the §6 reconcile: fine-key deduplicate-and-close plus coarse-key umbrella-append) is unchanged. Absent the flag, the §8 gate stays in force and the grown members land runnable but idle.
 
 ## Detect repo
 
@@ -83,8 +83,24 @@ For each candidate, note:
 - The **class** — which of the four kinds above.
 - The **helper-or-signal** — the named primitive the change introduces (the function / class / hook / arrow-const for `new_helper`; the signal keyword or regex that names the shape for `new_pattern` / `perf_fix` / `bugfix_shape`). This is the same token you grep for in §5.
 - The **search targets** — glob patterns narrowing where to scan (`**/*.py`, `server/**`, etc.).
+- The **verdict** — `completion` or `pre-existing`, from the revert test below. It decides where the candidate's findings are tracked (§9.5).
 
 If no candidate fits any of the four kinds, emit `status: skipped` with reason `"no propagation-firing patterns in diff"` and stop.
+
+### The verdict — did the scanned diff create this? (#3798)
+
+One question settles it:
+
+> **Would this site still be a defect if the scanned diff were reverted?**
+
+- **No → `completion`.** The diff created the inconsistency: the site was consistent before and is contradictory after. Bounded by the diff, so naturally one or two items, and it genuinely belongs on this branch. Example: the diff introduced the shared bound `FOLDER_SUBTREE_MAX_DEPTH` and left one site still carrying the bare literal — before that diff the literal duplicated nothing.
+- **Yes → `pre-existing`.** The site was already like that and still is; the diff only revealed it. Real work, but not this workflow's work. Example: an edge write that never confirms it landed, broken long before the feature that surfaced it.
+
+**Ambiguity resolves to `pre-existing`.** When you cannot answer the revert question cleanly, the verdict is `pre-existing`. This is not a tie-break for tidiness — it is the cheap direction. A wrong `pre-existing` call costs one line on a backlog list; a wrong `completion` call costs a branch, a pipeline run, and another scan that finds five more things (#3797). The expensive outcome is the one that has to be justified.
+
+**The verdict is a property of the coarse key, not of one site.** What makes the sites inconsistent is the same helper-or-signal for all of them, so they share one answer to the revert question and one destination. Different keys in the same run can — and routinely do — reach different verdicts.
+
+**Record it; never leave it implicit.** The verdict goes on the candidate here, onto every per-site issue filed for the key (§9), and into the summary as a destination (§10). A verdict nobody can read is a decision nobody can review, and a wrong call has to be visible rather than silent.
 
 ### Two keys per candidate — fine and coarse
 
@@ -119,7 +135,7 @@ The step has three passes over two different keys:
 
 - **§6a — fine key `(file, line range)`, scoped to this scan target.** Prevents re-filing a tracked site and closes exact per-site duplicates via `devwatch close-folded-issue` (close as not-planned + step-fold in one operation, #3616). The fine-key dedup logic is unchanged; only the close verb folds the now-orphaned step.
 - **§6b — coarse key `(class, helper-or-signal)`, codebase-wide.** Discovers an **open umbrella** for the pattern and **appends** new sites to it instead of filing fresh per-site issues. This is the cross-run accumulator: state lives on GitHub (the umbrella issue), read via `gh issue list` on the request path — **no devwatch table, no cache column** (Rule 3).
-- **§6c — threshold escalation, coarse key.** For a coarse key with **no** open umbrella yet, count its sites (open per-site issues already filed for the key, plus this run's candidates). When a **mechanical-sweep** key crosses the threshold (>5 sites, or the key recurs across >1 scan run), **create one umbrella from scratch**, move the sites into its checklist, and close the folded per-site issues onto it (#2517). `bugfix_shape` keys never escalate — each stays an individual per-site issue. This is the single place the scanner is allowed to *create* an umbrella; see **Boundary**.
+- **§6c — threshold escalation, coarse key.** For a coarse key with **no** open umbrella yet, count its sites (open per-site issues already filed for the key, plus this run's candidates). When a **mechanical-sweep** key crosses the threshold (>5 sites, or the key recurs across >1 scan run), **create one umbrella from scratch**, move the sites into its checklist, and close the folded per-site issues onto it (#2517). `bugfix_shape` keys never escalate — each stays an individual per-site issue. That is a bar on *collapsing* the key, not on where its findings are tracked: §9.5 routes a `bugfix_shape` key like any other (#3800). This is the single place the scanner is allowed to *create* an umbrella; see **Boundary**.
 
 ### 6a. Fine-key dedup against this scan target's per-site issues
 
@@ -141,7 +157,7 @@ devwatch --repo "$REPO" close-folded-issue <dup> \
   --comment "Duplicate of #<canonical> — same propagation candidate (\`<file>:<line range>\`). Tracked there."
 ```
 
-The server closes `<dup>` as **not planned** with your comment and — only on a successful close — reconciles its workflow step to `CANCELLED` via #2516's fold. A redundant duplicate is itself a filed workflow member (auto-attached by §9.5), so closing it any other way leaves its step `pending`: the run-lifecycle fold fires only for an *active* run (#2514), so only the 10-minute reconcile tick would eventually catch up, and the dashboard shows a phantom `pending` step beside a `Closed` stage for that whole window (#3574). Folding the step into the close closes that window — the close and the fold land together or not at all.
+The server closes `<dup>` as **not planned** with your comment and — only on a successful close — reconciles its workflow step to `CANCELLED` via #2516's fold. A redundant duplicate is itself a filed workflow member (§9.5 routed it to one), so closing it any other way leaves its step `pending`: the run-lifecycle fold fires only for an *active* run (#2514), so only the 10-minute reconcile tick would eventually catch up, and the dashboard shows a phantom `pending` step beside a `Closed` stage for that whole window (#3574). Folding the step into the close closes that window — the close and the fold land together or not at all.
 
 Rules for this step — they are narrow on purpose:
 
@@ -205,6 +221,8 @@ Run §6c **only** over candidates that survived §6a and matched **no** open umb
 **The settled-class exception is human-gated — it is not yours to assert (#3553).** The absolute above binds *this skill*: you never mint a `bugfix_shape` umbrella, whatever the count and however identical the sites look to you. But it constrains §6c's *automatic* minting, not a human's judgment. A human may decide a `bugfix_shape` class has **settled** — its fix is byte-identical at every site, and per-site review across prior waves has stopped surfacing per-site divergence — and hand-mint an umbrella for it. That path is sanctioned, not a violation: #3535, #3552, and #3563 each took it for the quoted-heredoc class after per-site judgment had been exercised and had converged on one fix.
 
 No machinery changes for it. §6b matches an umbrella on its marker line alone, with no class restriction, so a hand-minted `bugfix_shape` umbrella is discovered and appended to like any other — your §6b append is the *correct* behaviour when you meet one, not an exception to it. What stays yours is the per-site default: absent an existing umbrella, every `bugfix_shape` candidate is filed individually. "Settled" is a judgment about a class's history across waves, which a single scan run cannot see — that is why it is the human's call and not a rule you can evaluate.
+
+**The gate stops here — it does not reach §9.5 (#3800).** Everything above is about *collapsing*: folding N sites onto one umbrella checklist and closing them, which asserts the class has settled. §9.5 decides something else entirely — **which workflow or epic tracks the finding**. A routed `bugfix_shape` group arrives at its destination as N open per-site issues, each still reviewed on its own; nothing is folded and nothing is closed. So §9.5 routes it by the same decision as every other class, including minting the destination *epic* when the coarse key has none yet. Minting an epic is not minting an umbrella — the `propagation-epic:` marker names a destination that accumulates *member issues*, `propagation-umbrella:` an accumulator that swallows *checklist sites* (§9.5). Do not carry this section's `never` into that one.
 
 **Count the key's sites.** For each surviving mechanical-sweep coarse key, count its sites:
 
@@ -282,7 +300,7 @@ Truncate to the top `CAP` **distinct coarse keys** (default `5`), ranked by conf
 
 **Over-cap same-key sites append, never drop.** When more sites surface for a coarse key than this run will file individually — because the key crossed §6c's threshold, or because a kept key's sites would otherwise exceed what one issue should hold — the over-cap sites **accrue onto the umbrella's checklist** (§6c created it, or §6b found it), they are **not silently discarded**. Dropping over-cap sites was the pre-#2517 behaviour that lost mechanical-sweep coverage; with the umbrella as accumulator there is now always somewhere for an over-cap same-key site to land. Only **distinct coarse keys** beyond the cap are deferred to a later run — and those re-surface and accrue on the next scan, since the coarse key is stable across runs (§4). If the count of distinct keys exceeds the cap, record the overflow for the summary.
 
-Print the list, one entry per opportunity:
+Print the list, one entry per opportunity. Each entry carries its §4 verdict and the destination that verdict routes it to (§9.5), so the human gate below sees *where* the findings land, not only that they exist:
 
 ```
 ## Propagation opportunities — 4 of 12 (cap: 5)
@@ -292,6 +310,8 @@ Print the list, one entry per opportunity:
    Candidate sites:
      - server/reports/invoice.py:88
      - dashboard/src/components/price-tag.tsx:28
+   Verdict: completion — format_currency did not exist before this diff
+   Destination: this workflow (root #<ISSUE>)
    Proposed action: extract call sites to use format_currency
 
 2. bugfix_shape — None guard on user lookup
@@ -299,6 +319,8 @@ Print the list, one entry per opportunity:
    Candidate sites:
      - server/routers/reports.py:98
      - server/services/user_service.py:211
+   Verdict: pre-existing — both sites were unguarded long before this diff
+   Destination: backlog epic for bugfix_shape:none-guard-on-user-lookup (§9.5)
    Proposed action: apply the same None-guard pattern
 ```
 
@@ -361,7 +383,7 @@ Do **not**:
 - pass the workflow root (or any workflow the scan target is a step in) as a `--parent` — the workflow is execution metadata, not issue-tree parentage,
 - omit `--parent <ISSUE>` — the scan-target link is always present.
 
-The scan target records *why* the issue exists; its epic records *where the work groups*. Those are the only two `child-of` links a propagation issue may carry — and `create-issue` is the single thing that assembles them.
+The scan target records *why* the issue exists; its epic records *where the work groups*. Those are the only two `child-of` links a propagation issue may carry at filing time — and `create-issue` is the single thing that assembles them. §9.5 may then swap the *epic* half for the finding's routed destination; the scan-target half is never touched, so provenance survives the move.
 
 Issue body template:
 
@@ -373,6 +395,7 @@ Surfaced by `/propagation-scan` on #<ISSUE>.
 **Originating change:** `<file:line>` — `<commit SHA>`
 **Candidate site:** `<file:line range>`
 **Class:** `<new_helper | new_pattern | perf_fix | bugfix_shape>`
+**Verdict:** `<completion | pre-existing>` — <why the revert test answered that way>
 **Proposed action:** <one-line summary>
 
 ## Evidence
@@ -392,31 +415,132 @@ After each `create-issue`, note the returned issue number — you need them for 
 
 The `child-of` set is **not** something the skill assembles or self-verifies any more. `create-issue` writes the scan-target edge and — when the scan target has an epic — the epic edge, both in code (#2095). There is no per-run conditional for an agent to skip and no blind re-read for it to rubber-stamp: a missing or wrong `child-of` set is now a `create-issue` bug, caught by that command's own tests, not a propagation-scan responsibility.
 
-## 9.5. The filed follow-ups grow the originating workflow (#2592, #2673)
+## 9.5. Route each finding to its destination (#3798)
 
-The per-site follow-ups filed in §9 used to sit loose — flat `child-of` children of the scan target, each shipping its own branch and its own PR. That scatter is gone: every workflow is born bound to its founding issue as root (#2673), so a follow-up filed as `child-of: <scan-target>` **auto-attaches to the originating workflow as a member** on the next sync — no umbrella epic minted, no re-parent, no grouping gate. "Epic vs standalone" is a member count, not a kind (#2666): the one-member workflow grows into a many-member one **in place**, keeping its identity and behaviour config.
+The follow-ups filed in §9 used to join the originating workflow unconditionally — *where they group is a deterministic property of the root binding*, with nothing asking whether the finding had anything to do with what that workflow was building. So every running epic became the billing address for whatever code health the scan happened to surface while it ran: `wunova-core-app` epic #1473 planned 4 children and carries 29 members, 25 of them unrelated (#3797). The destination is now the §4 verdict's, decided before anything is filed.
 
-This is **automatic**. §9's `create-issue --parent <ISSUE>` already wrote the `child-of` edge, and the server's auto-attach resolves the scan target's workflow root and appends each follow-up as a step. There is no command to run here and no human grouping gate — the §8 filing gate already governed *whether* the follow-ups exist; *where* they group is a deterministic property of the root binding.
+**The default inverts.** A finding lands in the backlog unless it is shown to belong to the running work. Attaching to the running workflow is a real route, not a formality — it is simply the one that has to be earned.
 
-**Running the grown members.** When the owning workflow's `auto_execute` is on **and** this scan ran under `--auto-approve` (#2674), the grow carries hands-off: the dispatcher chains the newly-attached members and autonomously ships the second wave (one PR off the `epic/<root>-<slug>` integration branch) with no manual step. Absent either, the follow-ups land as runnable workflow members you start when ready (the per-issue Run, or the auto-execute toggle). Either way this step only **files** — it never re-parents and never mints an epic. The sole remaining "mint an epic" case is the deliberate dashboard multi-select bundle, not the propagation grow.
+### The routing table
+
+| Verdict (§4) | Class | Destination |
+|---|---|---|
+| `completion` | any | **the scanning workflow** — attaches automatically, exactly as before |
+| `pre-existing` | any, key matches an open backlog epic | **that epic** — the theme is already tracked (#3799) |
+| `pre-existing` | any, no match | **a fresh epic in the backlog**, unstarted |
+
+**Class does not appear in this table (#3800).** Routing is decided by the verdict alone, for every candidate class — `new_helper`, `new_pattern`, `perf_fix` and `bugfix_shape` alike. The class still governs *collapsing* (§6c's escalation, and `/propagation-consolidate`'s fold), which is a different act; see below.
+
+Candidates routed to an umbrella in §6b / §6c never reach here: they were removed from the to-file list before the cap and are tracked on the umbrella, not as per-site follow-ups. This step routes only what §9 filed.
+
+### `completion` — nothing to run
+
+§9's `create-issue --parent <ISSUE>` already wrote the `child-of` edge, and the server's auto-attach resolves the scan target's workflow root and appends the follow-up as a step (Rule 13 — the write is the server's; the skill never touches `workflows` / `issue_links`). "Epic vs standalone" is a member count, not a kind (#2666): the workflow grows in place, keeping its identity and behaviour config. There is no command here.
+
+**Running the grown members.** When the owning workflow's `auto_execute` is on **and** this scan ran under `--auto-approve` (#2674), the grow carries hands-off: the dispatcher chains the newly-attached members and ships the second wave (one PR off the `epic/<root>-<slug>` integration branch) with no manual step. Absent either, they land as runnable members you start when ready.
+
+### `pre-existing` — move the key's findings onto the key's own epic
+
+One call per coarse key, naming every per-site issue §9 filed for that key. The epic is named for **the group's own theme**, not the scan target's — that is the whole point of moving it. Which epic is a lookup, not a judgment: **does an open epic already carry this key's marker?**
+
+**The routing marker.** Every epic this step mints carries a `propagation-epic: <class>:<helper-or-signal>` line in its body — the serialised coarse key from §4. That line is the join key: it is what lets the *next* run find the epic instead of minting a second one for a theme already on file (#3799). It is deliberately **not** §6b's `propagation-umbrella:` marker, because the two accumulate different things: an umbrella issue accumulates *checklist sites* (§6b appends a line to it), a routing epic accumulates *member issues* (this step moves whole findings onto its workflow). One marker for both would leave a candidate ambiguous between "append a line" and "move the issue".
+
+**Discover the key's epic:**
+
+```bash
+gh issue list --repo "$REPO" --state open --limit 200 \
+  --search "propagation-epic: in:body" --json number,title,body
+```
+
+Match an epic to a coarse key when its body contains a line **exactly equal** to `propagation-epic: <class>:<helper-or-signal>` for that key — never a substring or a fuzzy match, and never an issue that carries only the `propagation-umbrella:` marker (that is §6b's accumulator, not a destination). At most one open epic may match a key; if two do, that is a data error — route into the lowest-numbered one and note the collision for the summary.
+
+#### A match — route into the epic that already exists
+
+```bash
+devwatch --repo "$REPO" regroup-onto-existing-epic \
+  --epic <E> \
+  --member <N> \
+  --member <M>
+```
+
+One server-side operation, and it **creates nothing**: the epic and its workflow are already there, so the findings are moved onto them with the same re-home primitive the mint route uses. There is no `--approve` flag because there is no epic to approve — nothing is published, and a wrong destination is undone by re-running with the right one. The destination keeps its own status and autonomy toggles; the moved findings land as pending members with no run opened.
+
+The command refuses **before moving anything** when `--epic` is not an epic, or roots no non-terminal workflow, naming which of the two failed — so a mistyped number cannot deposit a group into an unrelated issue's workflow. A finding already sitting on the destination is reported as left in place, which makes a re-run of the same routing a no-op rather than a duplicate.
+
+#### No match — mint the epic in the backlog
+
+The title and the body are your own prose, so pass each through its own **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
+
+```bash
+TITLE=$(cat <<'TITLE_EOF'
+<the group's own theme>
+TITLE_EOF
+)
+
+BODY=$(cat <<'BODY_EOF'
+propagation-epic: <class>:<helper-or-signal>
+
+<markdown body, including the child checklist>
+BODY_EOF
+)
+
+devwatch --repo "$REPO" regroup-onto-new-epic \
+  --title "$TITLE" \
+  --body "$BODY" \
+  --member <N> \
+  --member <M> \
+  --area <area> \
+  --priority <P2-medium|P3-low> \
+  --approve
+```
+
+The `propagation-epic:` marker line is **mandatory** in the body — without it the epic is invisible to the lookup above and the next run mints a duplicate for the same theme, which is the whole defect #3799 closes.
+
+One server-side operation: it mints the epic, roots a `draft` workflow on it (an epic issue alone is only a label — issues cannot be members of it), and moves each `--member` across with the re-home primitive, so membership and the `child-of` graph never disagree about which integration branch the issues execute on. The new epic lands **unstarted** — `draft`, every autonomy toggle off, nothing queued — so a human sees it before any of it runs.
+
+`--approve` is the routing-table policy asserted at the command, not a human gate you skipped: the §8 gate already governed *whether* these findings exist, and routing to the backlog is the cheap, reversible direction. It carries no class condition — the table has none.
+
+**Both routes keep provenance.** Moved issues keep every other `child-of` they carry, so the link to the scan target survives and the discovery is never dropped, only re-homed. The one edge a move drops is the source workflow's own *root* — the edge that would otherwise keep routing the finding back to the workflow it just left. When the scan target is itself that root (a standalone issue whose own workflow grew), those are the same edge and it goes: the command names it in its output, so record it in §10 rather than treating the issue as unmoved.
+
+**Report what it left behind.** Either command refuses to move an issue that has already executed — one with a branch or a run — and names each with its reason instead of half-moving it. Carry those into §10 verbatim; they stay on the scanning workflow. A group where *nothing* can move is refused outright — the mint route creates no epic, the existing-epic route touches nothing — a clean outcome, not a failure.
+
+**Why the finding is filed first and moved second.** `regroup-onto-new-epic` moves *members*: the issue must exist and be in a workflow before it can be re-homed. So a `pre-existing` finding is created by §9 like any other, then moved in this same step before the run ends. The window is inert — the auto-attach's own chain advance defers while a member is in flight, and this scan *is* that in-flight member, so nothing dispatches on the scanning workflow between the file and the move. The decision is still made before filing; only its last write lands after.
+
+### Routing a `bugfix_shape` group is not collapsing it (#3800)
+
+A `pre-existing` `bugfix_shape` key takes the route above like any other — the match branch when its `propagation-epic:` marker already exists, the mint branch when it does not, `--approve` on the mint exactly as for a mechanical sweep.
+
+The human-minted-marker rule (`.claude/rules/critical.md`) is untouched by that, because it governs a different act:
+
+- **Collapsing** — §6c minting an *umbrella* for the key, folding its sites onto one checklist and closing them. That asserts the class has settled, which is a claim about its history across waves you cannot observe from one run. **Still forbidden to you** (§6c).
+- **Routing** — this step, moving the key's findings onto the epic that tracks them. Every site arrives open and individually reviewable; nothing is folded, nothing is closed, nothing is asserted about the class.
+
+Minting a routing epic is therefore not minting an umbrella, which is why the two carry different markers. Read §6c's `never` as binding only what §6c does.
+
+The rule used to be applied here too, and the cost was concrete: every `bugfix_shape` finding stayed on whatever epic happened to be running, which is the most common class and so the majority of all findings. All 20 of `wunova-core-app` epic #1473's stray members are `bugfix_shape` — the re-homing machinery built for exactly them was forbidden from touching one (#3797).
+
+### What this step still never does
+
+It files nothing, edits no code, and mints no epic outside the `pre-existing` route above. It never re-parents an issue by hand — the `regroup-onto-*-epic` commands own both membership and the `child-of` graph, so the two move together or not at all.
 
 ## 10. Summary comment
 
-Post a single summary comment on the parent `<ISSUE>`. Each per-issue line carries that candidate's own one-line summary — your prose — so pass the body through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
+Post a single summary comment on the parent `<ISSUE>`. **Every filed issue names its verdict and its destination**, not just the count filed — a routing call nobody can read is a routing call nobody can correct. Each per-issue line carries that candidate's own one-line summary — your prose — so pass the body through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
 
 ```bash
 BODY=$(cat <<'BODY_EOF'
 ## Propagation scan — <N> issues filed
 
-- #<N1> — <summary>
-- #<N2> — <summary>
-- #<N3> — <summary>
+- #<N1> — <summary> — completion → this workflow
+- #<N2> — <summary> — pre-existing → new backlog epic #<E>
+- #<N3> — <summary> — pre-existing → existing backlog epic #<E2>
+- #<N4> — <summary> — pre-existing (bugfix_shape) → new backlog epic #<E3>
 
 Cap: <CAP> (distinct patterns). Overflow: <K> distinct key(s) deferred.
 Dedupe (§6a): skipped <S> already-tracked candidate(s); closed <C> duplicate(s) — #<D1>→#<canonical>, ….
 Umbrella (§6b): appended <A> site(s) to #<U1>, #<U2>; <P> already listed.
 Escalation (§6c): promoted <E> mechanical-sweep key(s) to umbrella #<U3> (<G> site(s)); folded #<F1>, #<F2> → #<U3>.
-Grow (§9.5): the follow-ups auto-attach to this workflow as members (root #<ISSUE>); runs hands-off under --auto-approve + auto_execute, else runnable.
+Routing (§9.5): <C1> completion finding(s) attached to this workflow (root #<ISSUE>); <P1> pre-existing finding(s) moved onto new backlog epic #<E> (draft workflow <W>, not started); <P2> moved onto existing backlog epic #<E2> (workflow <W2>) — left in place: #<x> (already has a branch or a run).
 See the propagation-scan rule.
 BODY_EOF
 )
@@ -426,7 +550,7 @@ devwatch --repo "$REPO" agent-comment \
   --body "$BODY"
 ```
 
-When nothing was deduped, drop the Dedupe line rather than printing zeros. Likewise drop the Umbrella line when no candidate matched an open umbrella, and drop the Escalation line when no key crossed §6c's threshold. Drop the Grow line when §9 filed no per-site follow-ups. When the run filed nothing new but still closed duplicates, appended sites, escalated a key to a fresh umbrella, or attached follow-ups to the workflow, the comment is still worth posting — it records the cleanup, the accrual, the consolidation, and the grouping.
+When nothing was deduped, drop the Dedupe line rather than printing zeros. Likewise drop the Umbrella line when no candidate matched an open umbrella, and drop the Escalation line when no key crossed §6c's threshold. Drop the Routing line when §9 filed no per-site follow-ups; keep the clauses of it that fired and drop the ones that did not — a run whose findings were all `completion` names no backlog epic, one whose findings were all `pre-existing` names no attached member, and a run that minted no epic (every key matched one that already existed) names no new epic. When the run filed nothing new but still closed duplicates, appended sites, escalated a key to a fresh umbrella, or routed follow-ups, the comment is still worth posting — it records the cleanup, the accrual, the consolidation, and the routing.
 
 ## 11. Emit the run report and record completion
 
@@ -452,9 +576,9 @@ devwatch --repo "$REPO" agent-report \
   --file /tmp/devwatch-report-<ISSUE>.json \
   || echo "  agent-report failed (advisory) — continuing"
 ```
-Fall back to `--issue <ISSUE> --branch "$(git branch --show-current)"` if RUN_ID is unavailable.
+Omit `--run-id` if RUN_ID is unavailable — the run is resolved from `DEVWATCH_AGENT_RUN_ID` instead.
 
-Then update the agent-run trace (use `--run-id` if available, otherwise `--issue`):
+Then update the agent-run trace (omit `--run-id` if RUN_ID is unavailable):
 
 ```bash
 devwatch --repo "$REPO" agent-update \
@@ -482,8 +606,8 @@ devwatch --repo "$REPO" agent-update \
 - **File-only.** Never edits code, never commits, never opens a PR.
 - **Diff-scoped.** Only patterns derived from the current diff. No full-repo audits.
 - **Capped.** Top `CAP` **distinct coarse keys** (default 5), not raw sites (§7, #2517). Over-cap same-key sites **append to the umbrella** (§6b/§6c), never dropped; only distinct-key overflow is counted and deferred.
-- **Human-gated — once.** The user approves the opportunity list before any issue is created (§8); that single gate is load-bearing and agent-to-agent confirmation is not sufficient. The §9.5 grow needs no second gate — the filed follow-ups auto-attach to the originating workflow by the root binding (#2673); there is no umbrella to mint and no re-parent to approve.
+- **Human-gated — once.** The user approves the opportunity list before any issue is created (§8); that single gate is load-bearing and agent-to-agent confirmation is not sufficient. §9.5's routing needs no second gate: a `completion` finding attaches by the root binding (#2673) with nothing to approve, and a `pre-existing` one lands on an epic that is **not running** — an unstarted fresh one, or an existing backlog epic whose own status and autonomy toggles the route never changes — so the human still sees it before any of it moves.
 - **No cross-skill writes.** Does not write rules, docs, or code. `/issue-to-rule` handles rules; `/add-documentation` handles docs.
-- **Filed follow-ups grow the originating workflow by the root binding (§9.5, #2592, #2673).** Every workflow is born rooted on its founding issue, so the per-site follow-ups §9 files as `child-of: <scan-target>` auto-attach to the originating workflow as members on the next sync — no umbrella minted, no re-parent, no second human gate. The grouping is a deterministic property of the root binding, written server-side by the auto-attach on issue creation (Rule 13) — the skill never writes `workflows` / `issue_links` directly. Whether the grown members then **run** is the workflow's own policy: hands-off under `--auto-approve` + `auto_execute` (the dispatcher chains them and ships the second wave, #2674), else runnable-but-idle until the user starts them. Candidates already grouped onto a propagation umbrella (§6b/§6c) are tracked there and not re-attached.
-- **Never creates an epic except via §9.5 attach or §6c escalation. Both are approval/threshold-gated.** The skill never passes `--epic` to `create-issue`. Two scoped paths create an umbrella: (1) §9.5's human-approved `attach-propagation-followups` mints an umbrella epic that becomes the originating workflow's root, grouping the §9 per-site follow-ups (#2592); and (2) §6c's threshold-escalation path creates **at most one umbrella issue** per coarse key, and **only** for a `new_helper` / `new_pattern` / `perf_fix` (mechanical-sweep) key whose running site count crosses the threshold (>5 sites, or recurs across >1 scan run). **§6c is the single place in this skill that mints an umbrella from a mechanical sweep** — never for a `bugfix_shape` key (those stay individual per-site issues, for individual review). This §6c umbrella is the scoped relaxation of the pre-#2517 absolute "never creates an umbrella" boundary: the relaxation is *owned in §6c* and is exactly the mechanical-sweep-at-threshold case — nothing wider. §9.5's umbrella is the orthogonal #2592 growth path — it groups the originating workflow's follow-ups, it is not a mechanical sweep, and it is human-approved per-attach. Below §6c's threshold and outside §9.5, the skill files **flat** `child-of` per-site children of the scan target and creates nothing. The §6b accumulator still only **appends to an umbrella that already exists**; it does not create one.
-- **Closes its own duplicates, appends to / creates an umbrella for a mechanical sweep, edits nothing else (#2354, #2515, #2517).** The skill may make exactly these mutations to a pre-existing issue: (1) **closing an exact fine-key duplicate** in §6a — a redundant `propagation:` child of the *current* scan target, collapsed onto its lowest-numbered canonical and reconciling its now-orphaned devwatch step in one operation via `devwatch close-folded-issue` (close as not-planned + #2516's fold, #3616); (2) **appending a propagation site** in §6b — an unchecked checklist comment to an **open umbrella** whose body already carries the candidate's `propagation-umbrella: <class>:<helper-or-signal>` marker; and (3) **folding per-site issues into a freshly-created umbrella** in §6c — closing each open per-site `propagation:` issue for a threshold-crossing mechanical-sweep coarse key onto the umbrella §6c just created (generalising §6a's close-duplicate from same-fine-key to same-coarse-key) and reconciling its devwatch step in one operation via `devwatch close-folded-issue` (close as not-planned + #2516's fold, #3574). It never re-titles, re-labels, re-parents, re-links, reopens, or rewrites the body of any issue, never closes the canonical of a fine-key group, and never touches an issue that is neither a propagation child under this scan target nor an umbrella (existing or just-created) for a candidate's coarse key. Apart from those moves, each run owns only the issues it creates.
+- **Every finding carries a recorded verdict, and the verdict picks the destination (§4, §9.5, #3798).** The revert question — *would this site still be a defect if the scanned diff were reverted?* — answers `completion` (the diff created the inconsistency) or `pre-existing` (the site pre-dates it), and **ambiguity resolves to `pre-existing`**. The verdict is written onto every filed issue and named per finding in the §10 summary; it is never implicit. `completion` findings auto-attach to the originating workflow as members by the root binding (#2592, #2673) — server-side on issue creation (Rule 13), the skill never writes `workflows` / `issue_links` directly — and then run under the workflow's own policy: hands-off with `--auto-approve` + `auto_execute` (#2674), else runnable-but-idle. `pre-existing` findings are moved onto the coarse key's own backlog epic — `devwatch regroup-onto-existing-epic` when an open epic already carries the key's `propagation-epic:` marker (#3799), `devwatch regroup-onto-new-epic` minting a fresh **unstarted** one when none does — keeping their `child-of` link to the scan target so provenance survives. **Routing carries no class condition (#3800):** a `bugfix_shape` key routes exactly like a mechanical sweep, because routing moves open issues between workflows rather than collapsing them onto an umbrella — the act the human-minted-marker rule (`.claude/rules/critical.md`) actually governs, and which §6c still refuses. Candidates already grouped onto a propagation umbrella (§6b/§6c) are tracked there and never reach the routing step.
+- **Never creates an epic except via §9.5's backlog route or §6c escalation. Only the second is class-gated (#3800).** The skill never passes `--epic` to `create-issue`. Two scoped paths create one: (1) §9.5's `pre-existing` route calls `devwatch regroup-onto-new-epic` for **any** coarse key **whose epic does not exist yet**, which mints the epic server-side with a `draft` workflow, every autonomy toggle off and nothing queued — and never when the key's `propagation-epic:` marker already matches an open epic, in which case `devwatch regroup-onto-existing-epic` routes into that one and creates nothing at all (#3799); and (2) §6c's threshold-escalation path creates **at most one umbrella issue** per coarse key, and **only** for a `new_helper` / `new_pattern` / `perf_fix` key whose running site count crosses the threshold (>5 sites, or recurs across >1 scan run) — never for a `bugfix_shape` key (those stay individual per-site issues, for individual review). **§6c is the single place in this skill that mints an umbrella from a mechanical sweep**, and it is the scoped relaxation of the pre-#2517 absolute "never creates an umbrella" boundary — owned in §6c, exactly the mechanical-sweep-at-threshold case, nothing wider. §9.5's epic is the orthogonal routing destination: it re-homes findings the scanned diff did not cause, it is not a mechanical-sweep accumulator, and it lands unstarted — so the class gate on (2) does not reach it, and a `bugfix_shape` key mints its routing epic like any other while never getting an umbrella. Outside those two, the skill files **flat** `child-of` per-site children of the scan target and creates nothing. The §6b accumulator still only **appends to an umbrella that already exists**; it does not create one.
+- **Closes its own duplicates, appends to / creates an umbrella for a mechanical sweep, edits nothing else (#2354, #2515, #2517).** The skill may make exactly these mutations to a pre-existing issue: (1) **closing an exact fine-key duplicate** in §6a — a redundant `propagation:` child of the *current* scan target, collapsed onto its lowest-numbered canonical and reconciling its now-orphaned devwatch step in one operation via `devwatch close-folded-issue` (close as not-planned + #2516's fold, #3616); (2) **appending a propagation site** in §6b — an unchecked checklist comment to an **open umbrella** whose body already carries the candidate's `propagation-umbrella: <class>:<helper-or-signal>` marker; and (3) **folding per-site issues into a freshly-created umbrella** in §6c — closing each open per-site `propagation:` issue for a threshold-crossing mechanical-sweep coarse key onto the umbrella §6c just created (generalising §6a's close-duplicate from same-fine-key to same-coarse-key) and reconciling its devwatch step in one operation via `devwatch close-folded-issue` (close as not-planned + #2516's fold, #3574). It never re-titles, re-labels, reopens, or rewrites the body of any issue, never closes the canonical of a fine-key group, and never touches an issue that is neither a propagation child under this scan target nor an umbrella (existing or just-created) for a candidate's coarse key. The one re-parent it may cause is §9.5's `pre-existing` route, and only over issues **this run just filed** — and it never writes that edge by hand: the `regroup-onto-*-epic` commands own the membership row and the `child-of` graph together, so they move as one. Routing into an epic that already exists (#3799) adds members to that epic's workflow; it does not edit the epic issue itself — no re-title, no re-label, no body rewrite. Apart from those moves, each run owns only the issues it creates.
