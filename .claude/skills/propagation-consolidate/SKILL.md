@@ -75,8 +75,10 @@ The class is the issue's recorded `**Class:**` — never inferred from the group
 1. A rule under `.claude/rules/` carries a line **exactly equal** to `propagation-key: <class>:<helper-or-signal>` for the key — same exact-match discipline as the `propagation-umbrella:` marker, never a substring or a fuzzy title match.
 2. That rule section specifies the **per-site treatment** — enough that a reader picks the right fix at a new site without re-deriving it. A rule that only names the hazard has not graduated the key.
 
+Anchor the pattern — unanchored, it also hits a longer key carrying yours as a prefix:
+
 ```bash
-rg -n 'propagation-key: <class>:<helper-or-signal>' .claude/rules/
+rg -n '^propagation-key: <class>:<helper-or-signal>$' .claude/rules/
 ```
 
 Both conditions are a file read, not a judgment about the class's history — which is why this one *is* yours to evaluate. A graduated key takes **Case A or Case B** below exactly as a mechanical sweep does, including minting its umbrella when none exists.
@@ -151,7 +153,7 @@ Once a collapsing group's sites live on the umbrella (appended or seeded), every
 
 ```bash
 devwatch --repo "$REPO" close-folded-issue <folded> \
-  --comment "Folded into propagation umbrella #<umbrella> for the \`<class>:<helper-or-signal>\` mechanical sweep. The site (\`<file>:<line range>\`) is tracked on the umbrella's checklist."
+  --comment "Folded into propagation umbrella #<umbrella> for the \`<class>:<helper-or-signal>\` key. The site (\`<file>:<line range>\`) is tracked on the umbrella's checklist."
 ```
 
 The server closes `<folded>` as **not planned** with your comment and — only on a successful close — reconciles its workflow step to `CANCELLED` via #2516's fold. `CANCELLED`, never `DONE`, is honest: the step never ran its work. Closing a per-site issue any other way leaves its step `pending` — the run-lifecycle fold fires only for an *active* run (the exact #770 divergence), and only the 10-minute reconcile tick would eventually catch up (#3574). Folding it into the close is why the dashboard never shows a phantom `pending` step beside a `Closed` stage. A step whose issue has an active run is left untouched: that run's own drain owns it. Re-running after a successful close-and-fold is a clean no-op.
@@ -168,12 +170,12 @@ Post a single summary comment on the scan target `#<ISSUE>`:
 gh issue comment <ISSUE> --repo "$REPO" --body "## Propagation consolidate — <U> umbrellas, <F> folded
 
 - Umbrella #<N> (\`<class>:<helper-or-signal>\`) — <created|appended>, <K> sites, closed #<a>, #<b>, …
-- Left individual: <J> \`bugfix_shape\` sites (#<x>, #<y>)
+- Left individual: <J> ungraduated \`bugfix_shape\` sites (#<x>, #<y>)
 
 See the propagation-scan rule for the coarse-key + threshold policy."
 ```
 
-Drop a line that would print zeros — when no mechanical sweep crossed into an umbrella but `bugfix_shape` sites were left individual, the comment still records that nothing was folded.
+Drop a line that would print zeros — when no group crossed into an umbrella but ungraduated `bugfix_shape` sites were left individual, the comment still records that nothing was folded.
 
 Then emit the run report (advisory — a failed post must never fail the step), then flip the run status:
 

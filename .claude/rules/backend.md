@@ -152,15 +152,21 @@ Issue #52 closed the test debt the prior paragraph left as a citation rather tha
 propagation-key: bugfix_shape:mutable-collection-boundary-ownership
 
 An object that retains a caller's mutable collection copies it **on the way in**; an
-object that hands a retained collection to a caller copies it **on the way out**. Half
-the rule is not a partial improvement: with only the inbound copy, a reader mutating
-what an accessor returned still rewrites the stored value; with only the outbound copy,
-the caller that seeded the object still does. And the objects holding these collections
-in `sinan_agentic_core/` are process-wide registries, per-run session history, and event
-payloads a consumer keeps — so the write outlives whoever made it, and nothing raises.
+object that hands a retained collection to a caller copies it **on the way out**.
 
-Every site is two decisions, and only two: **where the copy goes** and **how deep it
-goes**. Both are read off the site; neither is a judgment call.
+**Why:** Half the rule is not a partial improvement: with only the inbound copy, a reader
+mutating what an accessor returned still rewrites the stored value; with only the outbound
+copy, the caller that seeded the object still does. And the objects holding these
+collections in `sinan_agentic_core/` are process-wide registries, per-run session history,
+and event payloads a consumer keeps — so the write outlives whoever made it, and nothing
+raises. First found at `ToolErrorRecovery.__init__` (#103); every confirmed instance since
+is a row in the site index at the end of this entry, which is where a new one is recorded —
+this line stays the statement of the hazard and does not grow per instance.
+
+**How to apply:** Every site is two decisions, and only two: **where the copy goes** and
+**how deep it goes**. Both are read off the site; neither is a judgment call. The two tables
+below settle them; the sections after them cover what deliberately stays shared, the tests
+that pin both halves, and the grep to run before shipping.
 
 ### Where the copy goes
 
