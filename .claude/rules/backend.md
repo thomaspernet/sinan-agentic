@@ -257,7 +257,14 @@ non-`None`.
 grep -rn 'self\.[a-zA-Z_]* = [a-zA-Z_]* or {}\|self\.[a-zA-Z_]* = [a-zA-Z_]* or \[\]\|self\._\?[a-zA-Z_]* = [a-zA-Z_]*$' sinan_agentic_core/
 ```
 
-Every hit must store a copy, not the bare parameter or its bare `or {}` / `or []` fallback.
+The third alternative matches any bare `self.x = y`, so the output is a candidate list, not
+a violation list — across the tree most of it is scalars and live handles. Confirm no site
+your change added or touched retains a **mutable collection** as the bare parameter or its
+bare `or {}` / `or []` fallback. Read each hit off the parameter's declared type: a scalar,
+and a live handle the caller reads or writes through, both stay bare — see "What stays
+shared". So does a field whose copy the placement table puts elsewhere: `last_usage` is
+assigned bare and copied at each hand-out (`core/base_runner.py:522`, `:686`).
+
 Then check the same class for accumulators and hand-out points, per the placement table.
 
 ### Site index
