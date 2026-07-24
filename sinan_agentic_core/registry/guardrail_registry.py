@@ -74,6 +74,17 @@ class GuardrailRegistry:
 
     _guardrails: dict[str, GuardrailDefinition] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        """Own the mapping the registry accumulates into.
+
+        ``_guardrails`` is a dataclass constructor parameter, so
+        ``GuardrailRegistry(_guardrails=existing)`` would alias the caller's dict
+        and every later :meth:`register` would land in it. The shallow copy
+        detaches the container while leaving the ``GuardrailDefinition`` values
+        shared, so a caller still resolves the very object it registered.
+        """
+        self._guardrails = dict(self._guardrails)
+
     def register(self, guardrail_def: GuardrailDefinition) -> None:
         """Register a new guardrail."""
         self._guardrails[guardrail_def.name] = guardrail_def

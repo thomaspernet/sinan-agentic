@@ -186,6 +186,38 @@ class TestAgentRegistry:
         assert get_agent_registry().get("_global_helper_agent") is a
 
 
+class TestAgentRegistryOwnsItsMap:
+    """The registry owns the mapping it accumulates into, not the caller's dict."""
+
+    @staticmethod
+    def _agent(name):
+        return AgentDefinition(name=name, description="d", instructions="i")
+
+    def test_an_agent_added_to_the_callers_dict_later_is_not_visible(self):
+        seed = {"a": self._agent("a")}
+        reg = AgentRegistry(_agents=seed)
+
+        seed["late"] = self._agent("late")
+
+        assert reg.get("late") is None
+
+    def test_two_registries_built_from_one_dict_do_not_share(self):
+        seed = {"a": self._agent("a")}
+        first = AgentRegistry(_agents=seed)
+        second = AgentRegistry(_agents=seed)
+
+        first.register(self._agent("b"))
+
+        assert second.get("b") is None
+
+    def test_the_seeded_definitions_themselves_stay_shared(self):
+        """Only the container is copied — a seeded definition is the same object."""
+        defn = self._agent("a")
+        reg = AgentRegistry(_agents={"a": defn})
+
+        assert reg.get("a") is defn
+
+
 # -- resolve_agent_definition --------------------------------------------------
 
 
@@ -323,6 +355,38 @@ class TestToolRegistry:
         assert "tool_beta" not in text
 
 
+class TestToolRegistryOwnsItsMap:
+    """The registry owns the mapping it accumulates into, not the caller's dict."""
+
+    @staticmethod
+    def _tool(name):
+        return ToolDefinition(name=name, function=lambda: None)
+
+    def test_a_tool_added_to_the_callers_dict_later_is_not_visible(self):
+        seed = {"a": self._tool("a")}
+        reg = ToolRegistry(_tools=seed)
+
+        seed["late"] = self._tool("late")
+
+        assert reg.get_tool("late") is None
+
+    def test_two_registries_built_from_one_dict_do_not_share(self):
+        seed = {"a": self._tool("a")}
+        first = ToolRegistry(_tools=seed)
+        second = ToolRegistry(_tools=seed)
+
+        first.register(self._tool("b"))
+
+        assert second.get_tool("b") is None
+
+    def test_the_seeded_definitions_themselves_stay_shared(self):
+        """Only the container is copied — the catalog enriches these in place."""
+        tool = self._tool("a")
+        reg = ToolRegistry(_tools={"a": tool})
+
+        assert reg.get_tool("a") is tool
+
+
 # -- register_tool decorator ---------------------------------------------------
 
 
@@ -408,6 +472,40 @@ class TestGuardrailRegistry:
         reg.register(GuardrailDefinition("a", "d", lambda: None, "input"))
         reg.register(GuardrailDefinition("b", "d", lambda: None, "output"))
         assert reg.list_names() == ["a", "b"]
+
+
+class TestGuardrailRegistryOwnsItsMap:
+    """The registry owns the mapping it accumulates into, not the caller's dict."""
+
+    @staticmethod
+    def _guard(name):
+        return GuardrailDefinition(
+            name=name, description="d", function=lambda: None, category="input"
+        )
+
+    def test_a_guardrail_added_to_the_callers_dict_later_is_not_visible(self):
+        seed = {"a": self._guard("a")}
+        reg = GuardrailRegistry(_guardrails=seed)
+
+        seed["late"] = self._guard("late")
+
+        assert reg.get_guardrail("late") is None
+
+    def test_two_registries_built_from_one_dict_do_not_share(self):
+        seed = {"a": self._guard("a")}
+        first = GuardrailRegistry(_guardrails=seed)
+        second = GuardrailRegistry(_guardrails=seed)
+
+        first.register(self._guard("b"))
+
+        assert second.get_guardrail("b") is None
+
+    def test_the_seeded_definitions_themselves_stay_shared(self):
+        """Only the container is copied — the definition values are not cloned."""
+        guard = self._guard("a")
+        reg = GuardrailRegistry(_guardrails={"a": guard})
+
+        assert reg.get_guardrail("a") is guard
 
 
 # -- Guardrail categories ------------------------------------------------------
