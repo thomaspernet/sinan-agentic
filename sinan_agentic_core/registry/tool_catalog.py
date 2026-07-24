@@ -157,13 +157,17 @@ class ToolCatalog:
         """Patch registry ToolDefinitions with YAML metadata.
 
         For each tool in the catalog that exists in the registry, overwrites
-        any non-empty YAML field onto the ToolDefinition. Tools in the catalog
-        with no registered function are logged as warnings.
+        any non-empty YAML field onto a copy of the ToolDefinition and writes
+        the patched record back through :meth:`ToolRegistry.register`. Tools in
+        the catalog with no registered function are logged as warnings.
 
         YAML values always win over decorator values (YAML is the source of truth).
         Empty YAML fields do not overwrite existing decorator values.
         """
         for name, raw in self._raw_tools.items():
+            # ``get_tool`` hands out a copy, so patching it and re-registering
+            # the patched record is what makes enrichment stick — mutating the
+            # returned copy alone would not reach the registry.
             tool_def = registry.get_tool(name)
             if tool_def is None:
                 logger.warning(
@@ -172,8 +176,9 @@ class ToolCatalog:
                 )
                 continue
 
-            # Not copied the way ``get()`` copies: this entry never leaves the
-            # method, and only its ``str`` fields are read off it below.
+            # ``raw`` is not deep-copied the way ``get()`` copies it: this entry
+            # never leaves the method, and only its ``str`` fields are read off
+            # it below.
             entry = ToolYamlEntry(**raw)
             if entry.description:
                 tool_def.description = entry.description
@@ -185,6 +190,7 @@ class ToolCatalog:
                 tool_def.returns_description = entry.returns_description
             if entry.recovery_hint:
                 tool_def.recovery_hint = entry.recovery_hint
+            registry.register(tool_def)
 
         logger.info(
             "Enriched tool registry from tools.yaml (%d tool definitions)",

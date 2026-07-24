@@ -3,7 +3,7 @@
 import copy
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
@@ -58,11 +58,27 @@ class GuardrailDefinition:
 
 @dataclass(frozen=True)
 class ResolvedGuardrails:
-    """Guardrails split into the SDK slots their categories map to."""
+    """Guardrails split into the SDK slots their categories map to.
+
+    A fixed record of one resolution: each of the three lists is copied on
+    construction, so a caller that keeps and mutates the list it passed in
+    cannot reach back into the bundle, and two bundles built from one list do
+    not share it. Only the outer list is detached — the elements are SDK
+    guardrail objects a caller matches by identity, the same split
+    :class:`AgentDefinition` draws for ``hosted_tools``.
+    """
 
     input_guardrails: list[InputGuardrail[Any]] = field(default_factory=list)
     output_guardrails: list[OutputGuardrail[Any]] = field(default_factory=list)
     tool_input_guardrails: list[ToolInputGuardrail[Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # frozen=True forbids ``self.x = ...``, so the copies go in via
+        # ``object.__setattr__``. ``default_factory`` only covers the omitted
+        # argument; a supplied list is aliased without this.
+        object.__setattr__(self, "input_guardrails", list(self.input_guardrails))
+        object.__setattr__(self, "output_guardrails", list(self.output_guardrails))
+        object.__setattr__(self, "tool_input_guardrails", list(self.tool_input_guardrails))
 
 
 @dataclass
@@ -90,12 +106,24 @@ class GuardrailRegistry:
         self._guardrails[guardrail_def.name] = guardrail_def
 
     def get_guardrail(self, name: str) -> GuardrailDefinition | None:
-        """Get a specific guardrail by name."""
-        return self._guardrails.get(name)
+        """Get a snapshot of the guardrail registered under *name*.
+
+        Returns a copy, not the stored record. ``GuardrailDefinition`` carries
+        no nested container — the exposure is field reassignment
+        (``description``, ``category``) on a process-wide object, not a nested
+        edit — but the registry answers the read-boundary question the same way
+        its two siblings do: hand out a record, never the live definition.
+        Unlike :class:`ToolRegistry`, no enrichment path patches these records,
+        so nothing depends on them being live.
+        """
+        definition = self._guardrails.get(name)
+        if definition is None:
+            return None
+        return replace(definition)
 
     def get_guardrails_by_category(self, category: GuardrailCategory) -> list[GuardrailDefinition]:
-        """Get all guardrails in a category."""
-        return [g for g in self._guardrails.values() if g.category == category]
+        """Get a snapshot of every guardrail in *category*."""
+        return [replace(g) for g in self._guardrails.values() if g.category == category]
 
     def get_guardrail_functions(self, guardrail_names: list[str]) -> list[Callable[..., Any]]:
         """Get actual function objects for given guardrail names."""
