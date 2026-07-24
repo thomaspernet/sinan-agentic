@@ -41,6 +41,18 @@ class ToolRegistry:
     # Store tools by category
     _tools: dict[str, ToolDefinition] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        """Own the mapping the registry accumulates into.
+
+        ``_tools`` is a dataclass constructor parameter, so
+        ``ToolRegistry(_tools=existing)`` would alias the caller's dict and every
+        later :meth:`register` would land in it. The shallow copy detaches the
+        container while leaving the ``ToolDefinition`` values shared —
+        :meth:`ToolCatalog.enrich_registry` patches those records in place, and
+        readers must resolve the same object it enriched.
+        """
+        self._tools = dict(self._tools)
+
     def register(self, tool_def: ToolDefinition) -> None:
         """Register a new tool."""
         self._tools[tool_def.name] = tool_def

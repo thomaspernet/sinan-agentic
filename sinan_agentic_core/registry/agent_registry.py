@@ -86,6 +86,17 @@ class AgentRegistry:
 
     _agents: dict[str, AgentDefinition] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        """Own the mapping the registry accumulates into.
+
+        ``_agents`` is a dataclass constructor parameter, so
+        ``AgentRegistry(_agents=existing)`` would alias the caller's dict and
+        every later :meth:`register` would land in it. The shallow copy detaches
+        the container while leaving the ``AgentDefinition`` values shared, so a
+        caller still resolves the very object it registered.
+        """
+        self._agents = dict(self._agents)
+
     def register(self, agent_def: AgentDefinition) -> None:
         """Register an agent."""
         self._agents[agent_def.name] = agent_def
