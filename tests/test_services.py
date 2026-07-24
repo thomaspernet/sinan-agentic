@@ -1257,3 +1257,71 @@ class TestChatStreamed:
         assert errors == [
             {"event": "error", "data": {"error": str(error), "error_kind": expected.value}}
         ]
+
+
+class TestChatStreamedAnswerOwnsItsToolList:
+    """The answer payload is a fixed record, so it and the stream never share a list."""
+
+    @staticmethod
+    def _tool_call_event(tool_name="search"):
+        event = Mock()
+        event.type = "run_item_stream_event"
+        event.item = Mock()
+        event.item.type = "tool_call_item"
+        event.item.name = tool_name
+        return event
+
+    @classmethod
+    async def _answer_and_accumulator(cls):
+        """Stream one turn that calls a tool.
+
+        Returns the answer payload and the list the stream accumulated tool
+        names into.  That accumulator is a local of the generator, so the frame
+        it is suspended in is the only handle on the object the payload must
+        not be — the counterpart of ``hooks.tools_called`` for the hooks path.
+        """
+        import sys
+
+        chat_mod = sys.modules["sinan_agentic_core.services.chat"]
+
+        result = _run_result("Streamed answer")
+
+        async def stream_events():
+            yield cls._tool_call_event()
+
+        result.stream_events = stream_events
+        session = AgentSession(session_id="test")
+        payload, accumulator = None, None
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run_streamed.return_value = result
+
+                stream = chat_mod.chat_streamed("Hi", agent_name="a", session=session)
+                async for event in stream:
+                    if event["event"] == "answer":
+                        payload = event["data"]
+                        accumulator = stream.ag_frame.f_locals["tools_called"]
+                        break
+                await stream.aclose()
+
+        return payload, accumulator
+
+    async def test_the_payload_reports_the_tools_the_stream_recorded(self):
+        payload, accumulator = await self._answer_and_accumulator()
+
+        assert payload["tools_called"] == ["search"]
+        assert accumulator == ["search"]
+
+    async def test_the_payload_does_not_share_the_streams_accumulator(self):
+        payload, accumulator = await self._answer_and_accumulator()
+
+        assert payload["tools_called"] is not accumulator
+
+    async def test_a_consumer_editing_the_payload_does_not_reach_the_stream(self):
+        payload, accumulator = await self._answer_and_accumulator()
+
+        payload["tools_called"].append("added_by_consumer")
+
+        assert accumulator == ["search"]
