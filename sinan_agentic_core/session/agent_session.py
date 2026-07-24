@@ -33,8 +33,17 @@ class ConversationHistory:
         self.messages: list[dict[str, Any]] = []
 
     def to_list_dict(self) -> list[dict[str, Any]]:
-        """Convert to list of message dictionaries."""
-        return self.messages.copy()
+        """Return a snapshot of the messages as plain dictionaries.
+
+        The copy goes all the way down: a message is a dict nesting further
+        mutable values — a structured-output ``content`` is itself a list of
+        dicts — so copying only the outer list would hand back the history's
+        own messages and let a reader rewrite what it replays.
+
+        Returns:
+            A detached list of message dicts.
+        """
+        return copy.deepcopy(self.messages)
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to history.
@@ -59,9 +68,12 @@ class AgentSession(SessionABC):
     Manages conversation history for multi-agent workflows with automatic
     summarization when history becomes too long.
 
-    A session owns its history: the one it is seeded with is copied on the way
-    in, so the messages the session accumulates never reach the caller's
-    object.
+    A session owns its history and its metadata, in both directions: what it
+    is given is copied on the way in, and what it hands back is copied on the
+    way out. Neither a caller that keeps its seed nor a consumer that edits a
+    reading can change what the session replays on the next turn. To change a
+    session, call its own methods (``add_items``, ``clear_session``,
+    ``set_metadata``) rather than editing what a read handed back.
 
     Usage:
         session = AgentSession(session_id="unique-id")
@@ -102,10 +114,15 @@ class AgentSession(SessionABC):
             ConversationHistory() if initial_history is None else copy.deepcopy(initial_history)
         )
         self.max_items = max_items
-        self.metadata: dict[str, Any] = {}  # Store arbitrary session metadata
+        # Arbitrary session metadata. Values are snapshots: set_metadata copies
+        # on the way in and get_metadata copies on the way out.
+        self.metadata: dict[str, Any] = {}
 
     async def get_items(self, limit: int | None = None) -> list[TResponseInputItem]:
         """Retrieve conversation history as list of dicts.
+
+        The items are a snapshot taken by ``ConversationHistory.to_list_dict``,
+        so editing one does not reach the session.
 
         Args:
             limit: Optional limit on number of items to return (from end)
@@ -159,6 +176,9 @@ class AgentSession(SessionABC):
     async def pop_item(self) -> TResponseInputItem | None:
         """Remove and return the most recent message.
 
+        The message is handed over rather than shared — it leaves the history
+        in the same call, so there is nothing left for a copy to detach.
+
         Returns:
             Last message as dict, or None if empty
         """
@@ -171,12 +191,17 @@ class AgentSession(SessionABC):
         self.history.messages.clear()
 
     def get_history(self) -> ConversationHistory:
-        """Get full ConversationHistory object.
+        """Get a snapshot of the full ConversationHistory object.
+
+        The copy is taken on the object itself, not on its message list, for
+        the same two reasons the constructor deep-copies its seed: a caller's
+        ``ConversationHistory`` subclass survives the round trip, and the
+        values nested inside a message are detached along with the list.
 
         Returns:
-            ConversationHistory for debugging/persistence
+            A detached ConversationHistory for debugging/persistence
         """
-        return self.history
+        return copy.deepcopy(self.history)
 
     def needs_summarization(self) -> bool:
         """Check if session has exceeded max items threshold.
@@ -195,25 +220,38 @@ class AgentSession(SessionABC):
         return len(self.history.messages)
 
     def set_metadata(self, key: str, value: Any) -> None:
-        """Store metadata in session.
+        """Store a snapshot of *value* under *key*.
+
+        Metadata is a record of what was stored, not a live view of the
+        caller's object, so the value is copied on the way in. The store is
+        declared ``dict[str, Any]``, so a value can nest containers of its own
+        and the copy goes all the way down; a stored value must therefore be
+        deep-copyable, which makes this the wrong place for a live handle.
 
         Args:
             key: Metadata key
-            value: Metadata value
+            value: Metadata value, taken as a snapshot
         """
-        self.metadata[key] = value
+        self.metadata[key] = copy.deepcopy(value)
 
     def get_metadata(self, key: str, default: Any = None) -> Any:
-        """Retrieve session metadata.
+        """Retrieve a snapshot of session metadata.
+
+        A stored value is copied on the way out, so two readers of one key do
+        not share an object and neither can write back into the session.
+        *default* is the caller's own value handed straight back — the session
+        never retained it, so there is nothing to detach.
 
         Args:
             key: Metadata key
             default: Default value if key not found
 
         Returns:
-            Metadata value or default
+            A copy of the stored value, or *default* when the key is unset
         """
-        return self.metadata.get(key, default)
+        if key not in self.metadata:
+            return default
+        return copy.deepcopy(self.metadata[key])
 
     # -----------------------------------------------------------------
     # Capability snapshot/rehydrate
