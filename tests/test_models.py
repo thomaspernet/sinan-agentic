@@ -461,3 +461,126 @@ class TestAgentContextCopiesTheCallersCollections:
             assert (
                 getattr(ctx, name) == as_supplied
             ), f"{name} is aliased to the caller's collection"
+
+
+class TestAgentContextOwnsWhatItCollects:
+    """The accumulators copy on the way in, so ownership covers a whole run, not just its seed."""
+
+    def test_the_collected_rows_are_readable(self, context):
+        context.add_query_result({"data": [{"name": "Alice"}, {"name": "Bob"}]})
+
+        assert context.query_results == [{"name": "Alice"}, {"name": "Bob"}]
+
+    def test_a_later_edit_to_the_callers_payload_does_not_reach_the_context(self, context):
+        rows = [{"id": 1, "tags": ["python"]}]
+
+        context.add_query_result({"data": rows})
+        edit_every_level(rows)
+
+        assert context.query_results == [{"id": 1, "tags": ["python"]}]
+
+    def test_an_edit_inside_a_collected_row_does_not_reach_the_context(self, context):
+        """A row nests further values, so copying only the list would leave them aliased."""
+        row = {"id": 1, "tags": ["python"]}
+
+        context.add_query_result({"data": [row]})
+        row["tags"].append("async")
+
+        assert context.query_results[0]["tags"] == ["python"]
+
+    def test_one_payload_collected_by_two_contexts_is_not_shared(self):
+        rows = [{"id": 1}]
+        first = AgentContext(database_connector=Mock())
+        second = AgentContext(database_connector=Mock())
+
+        first.add_query_result({"data": rows})
+        second.add_query_result({"data": rows})
+        first.query_results[0]["id"] = 99
+
+        assert second.query_results == [{"id": 1}]
+
+    def test_the_collected_discovery_is_readable(self, context):
+        context.add_discovered_item("tags", {"name": "python"})
+
+        assert context.discovered_data == {"tags": [{"name": "python"}]}
+
+    def test_a_later_edit_to_the_discovered_value_does_not_reach_the_context(self, context):
+        discovered = {"name": "python"}
+
+        context.add_discovered_item("tags", discovered)
+        discovered["name"] = "async"
+
+        assert context.discovered_data["tags"] == [{"name": "python"}]
+
+    def test_an_edit_inside_a_nested_discovered_value_does_not_reach_the_context(self, context):
+        """``value`` is declared Any, so the copy has to reach whatever the run put there."""
+        discovered = {"versions": ["3.10"]}
+
+        context.add_discovered_item("tags", discovered)
+        discovered["versions"].append("3.13")
+
+        assert context.discovered_data["tags"] == [{"versions": ["3.10"]}]
+
+    def test_one_object_discovered_twice_records_two_independent_entries(self, context):
+        discovered = {"name": "python"}
+
+        context.add_discovered_item("tags", discovered)
+        context.add_discovered_item("tags", discovered)
+        context.discovered_data["tags"][0]["name"] = "async"
+
+        assert context.discovered_data["tags"][1] == {"name": "python"}
+
+    def test_a_discovery_that_overwrites_a_non_list_is_copied_too(self, context):
+        """The overwrite branch stores the value directly, so it needs the same copy."""
+        context.discovered_data["key"] = "scalar"
+        discovered = {"name": "python"}
+
+        context.add_discovered_item("key", discovered)
+        discovered["name"] = "async"
+
+        assert context.discovered_data["key"] == {"name": "python"}
+
+
+class TestAgentContextHandsOutSnapshots:
+    """The read boundary copies out, so a consumer of a reading cannot write back into the run."""
+
+    def test_the_collected_discoveries_are_readable(self, context):
+        context.add_discovered_item("tags", "python")
+        context.add_discovered_item("tags", "async")
+
+        assert context.get_discovered_items("tags") == ["python", "async"]
+
+    def test_a_consumer_appending_to_the_returned_list_does_not_reach_the_context(self, context):
+        context.add_discovered_item("tags", "python")
+
+        context.get_discovered_items("tags").append("async")
+
+        assert context.get_discovered_items("tags") == ["python"]
+
+    def test_a_consumer_edit_inside_a_returned_discovery_does_not_reach_the_context(self, context):
+        """The list nests the discovered values, so a shallow copy would leave them reachable."""
+        context.add_discovered_item("tags", {"name": "python"})
+
+        context.get_discovered_items("tags")[0]["name"] = "async"
+
+        assert context.get_discovered_items("tags") == [{"name": "python"}]
+
+    def test_two_reads_of_one_key_do_not_share_a_list(self, context):
+        context.add_discovered_item("tags", {"name": "python"})
+
+        first = context.get_discovered_items("tags")
+        second = context.get_discovered_items("tags")
+        first[0]["name"] = "async"
+
+        assert second == [{"name": "python"}]
+
+    def test_a_non_list_value_is_handed_out_detached_too(self, context):
+        """A value stored under a key that is not a list goes out through the same boundary."""
+        context.discovered_data["schema"] = {"tables": ["users"]}
+
+        context.get_discovered_items("schema")["tables"].append("orders")
+
+        assert context.discovered_data["schema"] == {"tables": ["users"]}
+
+    def test_a_key_that_was_never_collected_still_reads_as_none(self, context):
+        assert context.get_discovered_items("nonexistent") is None

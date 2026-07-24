@@ -393,6 +393,11 @@ class BaseAgentRunner:
         ``MAX_TURNS`` or ``CONTEXT_OVERFLOW`` -- collects all gathered tool
         outputs and makes a single condensed LLM call. Every other failure,
         a refusal included, propagates untouched.
+
+        The prompt builder and each capability's ``on_fallback_start`` own the
+        collected items they receive, the same way ``on_fallback_end`` owns its
+        usage record: every hand-out is a deep copy of the collector's list, so
+        an edit through one cannot reach the collector or another hand-out.
         """
         capabilities = capabilities or []
         agent_def = self._get_agent_definition(agent_name)
@@ -456,10 +461,10 @@ class BaseAgentRunner:
             # replays a single one — so running it here would trim nothing. The
             # prompt builder caps each output instead.
             builder = fallback_prompt_builder or self._default_fallback_prompt_builder
-            prompt = builder(instructions, collecting.raw_items, agent_def)
+            prompt = builder(instructions, copy.deepcopy(collecting.raw_items), agent_def)
 
             for cap in capabilities:
-                cap.on_fallback_start(ctx_wrapper, prompt, collecting.raw_items)
+                cap.on_fallback_start(ctx_wrapper, prompt, copy.deepcopy(collecting.raw_items))
 
             client = resolve_openai_client()
 
@@ -560,7 +565,10 @@ class BaseAgentRunner:
         The ``answer`` event owns its ``usage`` payload: it is a deep copy of the
         record kept as ``self.last_usage``, so editing it does not rewrite the
         runner's own record and a later reader of ``last_usage`` does not see
-        whatever a consumer wrote into a delivered event.
+        whatever a consumer wrote into a delivered event. It owns its
+        ``tools_called`` list the same way — copied out of the accumulator this
+        run appends to, so the event stays a fixed record of what ran. Only the
+        container is copied; the entries are plain tool names.
         """
         capabilities = capabilities or []
         agent_def = self._get_agent_definition(agent_name)
@@ -683,7 +691,7 @@ class BaseAgentRunner:
                     "event": "answer",
                     "data": {
                         "response": response,
-                        "tools_called": tools_called,
+                        "tools_called": list(tools_called),
                         "usage": copy.deepcopy(usage),
                     },
                 }
@@ -1210,6 +1218,13 @@ class _CollectingSessionWrapper:
 
     def __init__(self, real_session: AgentSession) -> None:
         self._real = real_session
+
+        # The collector's own record of everything the failed loop gathered. It
+        # outlives each read, so it is never handed to a caller as-is: each
+        # hand-out on the recovery branch (the fallback prompt builder, a
+        # capability's on_fallback_start) gets its own deep copy. A shallow copy
+        # would leave the item dicts — and the values nested inside them —
+        # shared.
         self.raw_items: list[dict[str, Any]] = []
 
     @property

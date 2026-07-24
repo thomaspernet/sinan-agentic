@@ -1,7 +1,7 @@
 """Agent Registry - Centralized definition of all agents."""
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from agents import Agent
@@ -86,13 +86,37 @@ class AgentRegistry:
 
     _agents: dict[str, AgentDefinition] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        """Own the mapping the registry accumulates into.
+
+        ``_agents`` is a dataclass constructor parameter, so
+        ``AgentRegistry(_agents=existing)`` would alias the caller's dict and
+        every later :meth:`register` would land in it. The shallow copy detaches
+        the container while leaving the ``AgentDefinition`` values shared, so a
+        caller still resolves the very object it registered.
+        """
+        self._agents = dict(self._agents)
+
     def register(self, agent_def: AgentDefinition) -> None:
         """Register an agent."""
         self._agents[agent_def.name] = agent_def
 
     def get(self, name: str) -> AgentDefinition | None:
-        """Get agent definition by name."""
-        return self._agents.get(name)
+        """Get a snapshot of the agent definition registered under *name*.
+
+        Returns a copy, not the stored record. ``AgentDefinition`` carries five
+        mutable list fields and the registry is process-wide, so a reader that
+        appended to ``definition.tools`` would rewrite what every later lookup
+        resolves — :func:`create_agent_from_registry` re-reads ``tools`` and
+        ``guardrails`` on every build. :func:`dataclasses.replace` re-runs
+        ``__post_init__``, which copies the containers, so the caller owns its
+        lists while the elements stay shared (the same split ``__post_init__``
+        draws on the inbound side).
+        """
+        definition = self._agents.get(name)
+        if definition is None:
+            return None
+        return replace(definition)
 
     def list_all(self) -> list[str]:
         """List all registered agent names."""

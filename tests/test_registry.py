@@ -27,6 +27,7 @@ from sinan_agentic_core.registry.guardrail_registry import (
     GuardrailCategory,
     GuardrailDefinition,
     GuardrailRegistry,
+    ResolvedGuardrails,
     attach_tool_input_guardrails,
 )
 from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
@@ -157,7 +158,9 @@ class TestAgentRegistry:
         reg = AgentRegistry()
         a = AgentDefinition(name="agent1", description="d", instructions="i")
         reg.register(a)
-        assert reg.get("agent1") is a
+        got = reg.get("agent1")
+        assert got.name == "agent1"
+        assert got.description == "d"
 
     def test_get_missing_returns_none(self):
         reg = AgentRegistry()
@@ -183,7 +186,105 @@ class TestAgentRegistry:
 
         a = AgentDefinition(name="_global_helper_agent", description="d", instructions="i")
         register_agent(a)
-        assert get_agent_registry().get("_global_helper_agent") is a
+        got = get_agent_registry().get("_global_helper_agent")
+        assert got is not None
+        assert got.name == "_global_helper_agent"
+
+
+class TestAgentRegistryOwnsItsMap:
+    """The registry owns the mapping it accumulates into, not the caller's dict."""
+
+    @staticmethod
+    def _agent(name):
+        return AgentDefinition(name=name, description="d", instructions="i")
+
+    def test_an_agent_added_to_the_callers_dict_later_is_not_visible(self):
+        seed = {"a": self._agent("a")}
+        reg = AgentRegistry(_agents=seed)
+
+        seed["late"] = self._agent("late")
+
+        assert reg.get("late") is None
+
+    def test_two_registries_built_from_one_dict_do_not_share(self):
+        seed = {"a": self._agent("a")}
+        first = AgentRegistry(_agents=seed)
+        second = AgentRegistry(_agents=seed)
+
+        first.register(self._agent("b"))
+
+        assert second.get("b") is None
+
+
+class TestAgentRegistryHandsOutSnapshots:
+    """``get`` returns a record, not the registry's live definition.
+
+    ``AgentDefinition`` carries five mutable list fields and the registry is
+    process-wide, so a reader that mutated the object ``get`` returned would
+    rewrite what every later lookup resolves. ``get`` re-runs ``__post_init__``
+    via ``dataclasses.replace``, so the read boundary inherits the same
+    container copy the inbound side already makes.
+    """
+
+    @staticmethod
+    def _agent(name="a"):
+        return AgentDefinition(name=name, description="d", instructions="i", tools=["search"])
+
+    def test_two_gets_return_distinct_objects(self):
+        reg = AgentRegistry()
+        reg.register(self._agent())
+
+        assert reg.get("a") is not reg.get("a")
+
+    def test_appending_to_a_returned_list_does_not_reach_the_registry(self):
+        reg = AgentRegistry()
+        reg.register(self._agent())
+
+        reg.get("a").tools.append("added_by_reader")
+
+        assert reg.get("a").tools == ["search"]
+
+    def test_the_returned_record_carries_the_registered_values(self):
+        reg = AgentRegistry()
+        reg.register(self._agent())
+
+        got = reg.get("a")
+
+        assert got.name == "a"
+        assert got.tools == ["search"]
+
+    def test_the_capabilities_themselves_stay_shared(self):
+        """Only the containers are detached — capabilities stay the live objects."""
+        budget = TurnBudget()
+        reg = AgentRegistry()
+        reg.register(
+            AgentDefinition(name="a", description="d", instructions="i", capabilities=[budget])
+        )
+
+        assert reg.get("a").capabilities[0] is budget
+
+    def test_every_collection_field_is_detached_from_the_registry(self):
+        """A list field added later without the read-boundary copy fails here."""
+        seeds: dict[str, Any] = {
+            "tools": ["search"],
+            "guardrails": ["safety"],
+            "handoffs": ["specialist"],
+            "hosted_tools": ["web_search"],
+            "capabilities": ["budget"],
+        }
+        assert set(collection_field_names(AgentDefinition)) == set(seeds)
+        reg = AgentRegistry()
+        reg.register(
+            AgentDefinition(name="a", description="d", instructions="i", **copy.deepcopy(seeds))
+        )
+
+        got = reg.get("a")
+        for name in seeds:
+            edit_every_level(getattr(got, name))
+
+        fresh = reg.get("a")
+        for name, original in seeds.items():
+            assert getattr(fresh, name) == original, f"{name} leaked from the read boundary"
 
 
 # -- resolve_agent_definition --------------------------------------------------
@@ -213,7 +314,8 @@ class TestResolveAgentDefinition:
     def test_resolves_the_definition_registered_under_the_agent_name(self, registry):
         agent_def = resolve_agent_definition(Agent(name="registered_agent"))
 
-        assert agent_def is registry.get("registered_agent")
+        assert agent_def is not None
+        assert agent_def.name == "registered_agent"
 
     def test_an_unregistered_name_resolves_to_none(self, registry):
         """A hand-assembled agent under an unknown name has no declaration."""
@@ -234,7 +336,9 @@ class TestResolveAgentDefinition:
         )
         register_agent(agent_def)
 
-        assert resolve_agent_definition(Agent(name="_global_resolved_agent")) is agent_def
+        resolved = resolve_agent_definition(Agent(name="_global_resolved_agent"))
+        assert resolved is not None
+        assert resolved.name == "_global_resolved_agent"
 
 
 # -- ToolRegistry --------------------------------------------------------------
@@ -256,7 +360,9 @@ class TestToolRegistry:
         reg = ToolRegistry()
         t = self._make_tool()
         reg.register(t)
-        assert reg.get_tool("t1") is t
+        got = reg.get_tool("t1")
+        assert got.name == "t1"
+        assert got.category == "utility"
 
     def test_get_tool_missing(self):
         reg = ToolRegistry()
@@ -323,6 +429,76 @@ class TestToolRegistry:
         assert "tool_beta" not in text
 
 
+class TestToolRegistryOwnsItsMap:
+    """The registry owns the mapping it accumulates into, not the caller's dict."""
+
+    @staticmethod
+    def _tool(name):
+        return ToolDefinition(name=name, function=lambda: None)
+
+    def test_a_tool_added_to_the_callers_dict_later_is_not_visible(self):
+        seed = {"a": self._tool("a")}
+        reg = ToolRegistry(_tools=seed)
+
+        seed["late"] = self._tool("late")
+
+        assert reg.get_tool("late") is None
+
+    def test_two_registries_built_from_one_dict_do_not_share(self):
+        seed = {"a": self._tool("a")}
+        first = ToolRegistry(_tools=seed)
+        second = ToolRegistry(_tools=seed)
+
+        first.register(self._tool("b"))
+
+        assert second.get_tool("b") is None
+
+
+class TestToolRegistryHandsOutSnapshots:
+    """``get_tool`` returns a record, not the registry's live definition.
+
+    ``ToolDefinition`` has no nested container, so the exposure is field
+    reassignment on the process-wide record: a reader that rewrote a field
+    would change what every later lookup resolves and what
+    ``to_instruction_text`` renders into the next prompt.
+    """
+
+    @staticmethod
+    def _tool(name="t1"):
+        return ToolDefinition(name=name, function=lambda: None, description="orig", category="c")
+
+    def test_two_gets_return_distinct_objects(self):
+        reg = ToolRegistry()
+        reg.register(self._tool())
+
+        assert reg.get_tool("t1") is not reg.get_tool("t1")
+
+    def test_editing_a_returned_record_does_not_reach_the_registry(self):
+        reg = ToolRegistry()
+        reg.register(self._tool())
+
+        reg.get_tool("t1").description = "rewritten"
+
+        assert reg.get_tool("t1").description == "orig"
+
+    def test_the_function_reference_stays_shared(self):
+        """The record is copied, but the function it points at is the same object."""
+        fn = lambda: None  # noqa: E731
+        reg = ToolRegistry()
+        reg.register(ToolDefinition(name="t1", function=fn, description="orig"))
+
+        assert reg.get_tool("t1").function is fn
+
+    def test_get_tools_by_category_hands_out_records(self):
+        reg = ToolRegistry()
+        reg.register(self._tool("a"))
+
+        [tool] = reg.get_tools_by_category("c")
+        tool.description = "rewritten"
+
+        assert reg.get_tool("a").description == "orig"
+
+
 # -- register_tool decorator ---------------------------------------------------
 
 
@@ -365,7 +541,9 @@ class TestGuardrailRegistry:
         reg = GuardrailRegistry()
         g = self._make_guardrail()
         reg.register(g)
-        assert reg.get_guardrail("g1") is g
+        got = reg.get_guardrail("g1")
+        assert got.name == "g1"
+        assert got.category is GuardrailCategory.INPUT
 
     def test_get_missing(self):
         reg = GuardrailRegistry()
@@ -408,6 +586,82 @@ class TestGuardrailRegistry:
         reg.register(GuardrailDefinition("a", "d", lambda: None, "input"))
         reg.register(GuardrailDefinition("b", "d", lambda: None, "output"))
         assert reg.list_names() == ["a", "b"]
+
+
+class TestGuardrailRegistryOwnsItsMap:
+    """The registry owns the mapping it accumulates into, not the caller's dict."""
+
+    @staticmethod
+    def _guard(name):
+        return GuardrailDefinition(
+            name=name, description="d", function=lambda: None, category="input"
+        )
+
+    def test_a_guardrail_added_to_the_callers_dict_later_is_not_visible(self):
+        seed = {"a": self._guard("a")}
+        reg = GuardrailRegistry(_guardrails=seed)
+
+        seed["late"] = self._guard("late")
+
+        assert reg.get_guardrail("late") is None
+
+    def test_two_registries_built_from_one_dict_do_not_share(self):
+        seed = {"a": self._guard("a")}
+        first = GuardrailRegistry(_guardrails=seed)
+        second = GuardrailRegistry(_guardrails=seed)
+
+        first.register(self._guard("b"))
+
+        assert second.get_guardrail("b") is None
+
+
+class TestGuardrailRegistryHandsOutSnapshots:
+    """``get_guardrail`` returns a record, not the registry's live definition.
+
+    ``GuardrailDefinition`` carries no nested container — the exposure is field
+    reassignment on a process-wide object — but the registry answers the
+    read-boundary question the same way its two siblings do. No enrichment path
+    patches these records, so nothing depends on them being live.
+    """
+
+    @staticmethod
+    def _guard(name="g1"):
+        return GuardrailDefinition(
+            name=name, description="orig", function=lambda: None, category="input"
+        )
+
+    def test_two_gets_return_distinct_objects(self):
+        reg = GuardrailRegistry()
+        reg.register(self._guard())
+
+        assert reg.get_guardrail("g1") is not reg.get_guardrail("g1")
+
+    def test_editing_a_returned_record_does_not_reach_the_registry(self):
+        reg = GuardrailRegistry()
+        reg.register(self._guard())
+
+        reg.get_guardrail("g1").description = "rewritten"
+
+        assert reg.get_guardrail("g1").description == "orig"
+
+    def test_the_function_reference_stays_shared(self):
+        """The record is copied, but the function it points at is the same object."""
+        fn = lambda: None  # noqa: E731
+        reg = GuardrailRegistry()
+        reg.register(GuardrailDefinition("g1", "orig", fn, "input"))
+
+        got = reg.get_guardrail("g1")
+        assert got.function is fn
+        assert got.category is GuardrailCategory.INPUT
+
+    def test_get_guardrails_by_category_hands_out_records(self):
+        reg = GuardrailRegistry()
+        reg.register(self._guard("a"))
+
+        [guard] = reg.get_guardrails_by_category(GuardrailCategory.INPUT)
+        guard.description = "rewritten"
+
+        assert reg.get_guardrail("a").description == "orig"
 
 
 # -- Guardrail categories ------------------------------------------------------
@@ -461,6 +715,62 @@ class TestResolveGuardrails:
 
     def test_has_category_ignores_unknown_names(self):
         assert self._registry().has_category(["missing"], GuardrailCategory.INPUT) is False
+
+
+class TestResolvedGuardrailsOwnsItsLists:
+    """A resolved bundle is a fixed record of one resolution, not a live view.
+
+    ``resolve`` passes fresh buckets, but the type is exported from the package
+    root, so a caller can build one directly with lists it keeps.
+    """
+
+    def test_a_guardrail_added_by_the_caller_later_is_not_visible(self):
+        declared = ["g"]
+        bundle = ResolvedGuardrails(input_guardrails=declared)
+
+        declared.append("added_late")
+
+        assert bundle.input_guardrails == ["g"]
+
+    def test_editing_the_bundle_does_not_reach_the_callers_list(self):
+        declared = ["g"]
+        bundle = ResolvedGuardrails(input_guardrails=declared)
+
+        bundle.input_guardrails.append("added_by_reader")
+
+        assert declared == ["g"]
+
+    def test_two_bundles_built_from_one_list_do_not_share_it(self):
+        declared = ["g"]
+        first = ResolvedGuardrails(output_guardrails=declared)
+        second = ResolvedGuardrails(output_guardrails=declared)
+
+        first.output_guardrails.append("added_late")
+
+        assert second.output_guardrails == ["g"]
+
+    def test_the_elements_stay_shared(self):
+        """Only the outer list is detached — SDK guardrail objects match by identity."""
+        sentinel = object()
+        bundle = ResolvedGuardrails(tool_input_guardrails=[sentinel])
+
+        assert bundle.tool_input_guardrails[0] is sentinel
+
+    def test_all_three_lists_are_detached(self):
+        inputs, outputs, tool_inputs = ["i"], ["o"], ["t"]
+        bundle = ResolvedGuardrails(
+            input_guardrails=inputs,
+            output_guardrails=outputs,
+            tool_input_guardrails=tool_inputs,
+        )
+
+        inputs.append("x")
+        outputs.append("x")
+        tool_inputs.append("x")
+
+        assert bundle.input_guardrails == ["i"]
+        assert bundle.output_guardrails == ["o"]
+        assert bundle.tool_input_guardrails == ["t"]
 
 
 # -- attach_tool_input_guardrails ----------------------------------------------

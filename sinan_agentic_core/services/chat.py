@@ -318,6 +318,12 @@ async def chat_streamed(
             {"event": "error",           "data": {"error": "...", "error_kind": "..."}}
 
         ``error_kind`` is a ``RunErrorKind`` value naming why the run failed.
+
+        The ``answer`` payload owns its ``tools_called`` list: it is copied out
+        of the accumulator this run appends to rather than aliased to it, so the
+        payload is a fixed record of this run — the same guarantee
+        ``chat_with_hooks()`` gives.  Only the container is copied; the entries
+        are plain tool names.
     """
     if session is None:
         raise ValueError("'session' is required")
@@ -390,7 +396,7 @@ async def chat_streamed(
             "event": "answer",
             "data": {
                 "response": response,
-                "tools_called": tools_called,
+                "tools_called": list(tools_called),
                 "usage": _usage_to_dict(result),
             },
         }

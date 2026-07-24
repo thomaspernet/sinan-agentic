@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 from unittest.mock import Mock
 
@@ -46,6 +47,33 @@ class StatefulCapability(Capability):
         self.counter = 0
         self.tool_starts.clear()
         self.tool_ends.clear()
+
+
+class Collector:
+    """Plain object whose bound method a caller hands over as a sink."""
+
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+
+    def write(self, line: str) -> None:
+        self.lines.append(line)
+
+
+class SinkCapability(Capability):
+    """Capability holding a caller-supplied sink, cloned by the default deep copy."""
+
+    def __init__(self, sink: Callable[[str], None]) -> None:
+        self.sink = sink
+
+    def emit(self, line: str) -> None:
+        self.sink(line)
+
+
+class SharedSinkCapability(SinkCapability):
+    """Same handle, forwarded by identity — the override the base docstring asks for."""
+
+    def clone(self) -> SharedSinkCapability:
+        return SharedSinkCapability(sink=self.sink)
 
 
 def _ctx() -> RunContextWrapper[Any]:
@@ -109,6 +137,42 @@ class TestClone:
         clone = original.clone()
         assert isinstance(clone, StatefulCapability)
         assert clone.tool_ends is not original.tool_ends
+
+    def test_clone_drops_the_event_callback(self) -> None:
+        """The one handle the base detaches: the runtime installs a fresh one per run."""
+        original = DummyCapability()
+        original.on_event = lambda event: None
+
+        assert original.clone().on_event is None
+
+
+class TestCloneAndLiveHandles:
+    """The default deep copy replaces a caller's live handle; an override keeps it shared.
+
+    This is the inverse of the rest of the copy rule, and the reason the base
+    ``clone()`` documents an escape hatch: a handle copies cleanly, so nothing
+    raises when the clone silently stops reaching the caller's object. A sink
+    bound to a caller's own object is the case that bites — a deep copy carries
+    the object behind the method with it.
+    """
+
+    def test_the_default_clone_replaces_a_caller_supplied_sink(self) -> None:
+        collector = Collector()
+        original = SinkCapability(sink=collector.write)
+
+        original.clone().emit("from the clone")
+
+        assert collector.lines == []
+
+    def test_an_override_keeps_a_caller_supplied_sink_shared(self) -> None:
+        collector = Collector()
+        original = SharedSinkCapability(sink=collector.write)
+
+        clone = original.clone()
+
+        assert clone.sink is original.sink
+        clone.emit("from the clone")
+        assert collector.lines == ["from the clone"]
 
 
 class TestSnapshotDefaults:

@@ -229,6 +229,52 @@ def test_agent_catalog_get_mcp_server_ignores_a_late_edit_to_the_callers_block()
     assert config.description == "My knowledge graph"
 
 
+def _catalog_with_nested_server_block() -> AgentCatalog:
+    """A catalog whose one server block nests a mutable value under every model field."""
+    return AgentCatalog(
+        tool_groups={},
+        raw_agents={},
+        raw_mcp_servers={
+            "knowledge_graph": {
+                "description": "My knowledge graph",
+                "tools": ["discover"],
+                "resources": [{"uri": "test://project", "description": "Project"}],
+                "prompts": [{"name": "research", "arguments": ["topic"]}],
+            },
+        },
+    )
+
+
+def test_agent_catalog_get_mcp_server_ignores_an_edit_inside_a_resolved_config():
+    """The block is copied on the way out, so editing a resolved config cannot reach the catalog."""
+    catalog = _catalog_with_nested_server_block()
+
+    catalog.get_mcp_server("knowledge_graph").prompts[0].arguments.append("late")
+
+    assert catalog.get_mcp_server("knowledge_graph").prompts[0].arguments == ["topic"]
+
+
+def test_agent_catalog_get_mcp_server_two_configs_do_not_share_a_nested_value():
+    """Each call resolves off its own copy, so one config's edit is invisible to the other."""
+    catalog = _catalog_with_nested_server_block()
+    first = catalog.get_mcp_server("knowledge_graph")
+    second = catalog.get_mcp_server("knowledge_graph")
+
+    first.prompts[0].arguments.append("late")
+
+    assert second.prompts[0].arguments == ["topic"]
+
+
+def test_agent_catalog_get_mcp_server_declared_values_survive_the_copy():
+    """The copy detaches the block without dropping anything declared in it."""
+    config = _catalog_with_nested_server_block().get_mcp_server("knowledge_graph")
+
+    assert config.description == "My knowledge graph"
+    assert config.tools == ["discover"]
+    assert config.resources[0].uri == "test://project"
+    assert config.prompts[0].arguments == ["topic"]
+
+
 def test_agent_catalog_get_mcp_server_not_found():
     """get_mcp_server() raises KeyError for unknown server."""
     catalog = AgentCatalog(

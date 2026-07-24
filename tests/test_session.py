@@ -1,5 +1,7 @@
 """Tests for session management (in-memory and SQLite)."""
 
+from typing import Any
+
 import pytest
 
 from sinan_agentic_core.core.capabilities import Capability
@@ -11,6 +13,17 @@ from sinan_agentic_core.session.sqlite_store import (
     SESSION_TITLE_ELLIPSIS,
     SQLiteSessionStore,
 )
+from tests.conftest import edit_every_level
+
+
+class _PersistedHistory(ConversationHistory):
+    """History subclass — the class docstring documents subclassing for persistence."""
+
+
+def _metadata_value() -> dict[str, Any]:
+    """A metadata value nesting a further mutable container at every level."""
+    return {"tags": ["research"], "limits": {"max_rows": 10}}
+
 
 # -- ConversationHistory -------------------------------------------------------
 
@@ -34,11 +47,50 @@ class TestConversationHistory:
         copy.append({"role": "system", "content": "injected"})
         assert len(h.messages) == 1  # original unchanged
 
+    def test_to_list_dict_carries_the_stored_messages(self):
+        h = ConversationHistory()
+        h.add_message("user", "Hi", name="asker")
+        assert h.to_list_dict() == [{"role": "user", "content": "Hi", "name": "asker"}]
+
     def test_clear(self):
         h = ConversationHistory()
         h.add_message("user", "Hi")
         h.clear()
         assert h.messages == []
+
+
+# -- ConversationHistory hands out snapshots -----------------------------------
+
+
+class TestConversationHistoryHandsOutSnapshots:
+    """``to_list_dict`` detaches the messages, not only the list around them."""
+
+    def test_an_edit_to_a_returned_message_does_not_reach_the_history(self):
+        h = ConversationHistory()
+        h.add_message("user", "Hi")
+
+        h.to_list_dict()[0]["content"] = "Edited by the reader"
+
+        assert h.messages[0]["content"] == "Hi"
+
+    def test_an_edit_inside_a_returned_content_list_does_not_reach_the_history(self):
+        """Structured-output content is a list of dicts, one level deeper again."""
+        h = ConversationHistory()
+        h.messages.append({"role": "assistant", "content": [{"text": "original"}]})
+
+        h.to_list_dict()[0]["content"][0]["text"] = "edited by the reader"
+
+        assert h.messages[0]["content"][0]["text"] == "original"
+
+    def test_two_readings_do_not_share_a_message(self):
+        h = ConversationHistory()
+        h.add_message("user", "Hi")
+
+        first = h.to_list_dict()
+        second = h.to_list_dict()
+        first[0]["content"] = "Edited by the first reader"
+
+        assert second[0]["content"] == "Hi"
 
 
 # -- AgentSession --------------------------------------------------------------
@@ -257,6 +309,141 @@ class TestAgentSessionCopiesTheCallersHistory:
 
         assert first.get_message_count() == 2
         assert second.get_message_count() == 1
+
+
+# -- AgentSession hands out history snapshots ----------------------------------
+
+
+class TestAgentSessionHandsOutHistorySnapshots:
+    """The outbound half of the ownership the constructor claims."""
+
+    async def test_an_edit_to_a_returned_item_does_not_reach_the_session(self, session):
+        await session.add_items([{"role": "user", "content": "Hello"}])
+
+        (await session.get_items())[0]["content"] = "Edited by the reader"
+
+        assert (await session.get_items())[0]["content"] == "Hello"
+
+    async def test_an_edit_inside_a_returned_items_content_does_not_reach_the_session(self):
+        history = ConversationHistory()
+        history.messages.append({"role": "assistant", "content": [{"text": "original"}]})
+        session = AgentSession(session_id="nested", initial_history=history)
+
+        (await session.get_items())[0]["content"][0]["text"] = "edited by the reader"
+
+        assert (await session.get_items())[0]["content"][0]["text"] == "original"
+
+    async def test_an_edit_to_a_limited_reading_does_not_reach_the_session(self, session):
+        """``limit`` slices the snapshot, so the slice is detached with it."""
+        await session.add_items(
+            [{"role": "user", "content": "first"}, {"role": "user", "content": "second"}]
+        )
+
+        (await session.get_items(limit=1))[0]["content"] = "Edited by the reader"
+
+        assert [item["content"] for item in await session.get_items()] == ["first", "second"]
+
+    async def test_two_readings_do_not_share_an_item(self, session):
+        await session.add_items([{"role": "user", "content": "Hello"}])
+
+        first = await session.get_items()
+        second = await session.get_items()
+        first[0]["content"] = "Edited by the first reader"
+
+        assert second[0]["content"] == "Hello"
+
+    def test_get_history_does_not_hand_out_the_live_history(self, session):
+        assert session.get_history() is not session.history
+
+    def test_a_message_added_to_a_returned_history_does_not_reach_the_session(self, session):
+        session.get_history().add_message("system", "injected")
+
+        assert session.get_message_count() == 0
+
+    def test_an_edit_inside_a_returned_history_does_not_reach_the_session(self, session):
+        session.history.add_message("user", "Hello")
+
+        session.get_history().messages[0]["content"] = "Edited by the reader"
+
+        assert session.history.messages[0]["content"] == "Hello"
+
+    def test_two_readings_do_not_share_a_history(self, session):
+        session.history.add_message("user", "Hello")
+
+        first = session.get_history()
+        second = session.get_history()
+        first.messages[0]["content"] = "Edited by the first reader"
+
+        assert second.messages[0]["content"] == "Hello"
+
+    def test_the_returned_history_carries_the_stored_messages(self, session):
+        session.history.add_message("user", "Hello")
+
+        assert session.get_history().messages == [{"role": "user", "content": "Hello"}]
+
+    def test_a_callers_history_subclass_survives_the_round_trip(self):
+        """Copying the object keeps a caller's subclass; rebuilding the base type would not."""
+        session = AgentSession(session_id="subclassed", initial_history=_PersistedHistory())
+
+        assert isinstance(session.get_history(), _PersistedHistory)
+
+
+# -- AgentSession owns its metadata --------------------------------------------
+
+
+class TestAgentSessionOwnsItsMetadata:
+    """Metadata is a record of what was stored, not a live view of it."""
+
+    def test_the_stored_value_is_readable(self, session):
+        session.set_metadata("filters", _metadata_value())
+
+        assert session.get_metadata("filters") == _metadata_value()
+
+    def test_a_later_edit_by_the_caller_does_not_reach_the_session(self, session):
+        value = _metadata_value()
+        session.set_metadata("filters", value)
+
+        edit_every_level(value)
+
+        assert session.get_metadata("filters") == _metadata_value()
+
+    def test_two_sessions_given_one_value_do_not_share_it(self):
+        value = _metadata_value()
+        first = AgentSession(session_id="first")
+        second = AgentSession(session_id="second")
+        first.set_metadata("filters", value)
+        second.set_metadata("filters", value)
+
+        edit_every_level(first.metadata["filters"])
+
+        assert second.get_metadata("filters") == _metadata_value()
+
+    def test_an_edit_to_what_a_reader_got_back_does_not_reach_the_session(self, session):
+        session.set_metadata("filters", _metadata_value())
+
+        edit_every_level(session.get_metadata("filters"))
+
+        assert session.get_metadata("filters") == _metadata_value()
+
+    def test_two_readers_of_one_key_do_not_share_a_value(self, session):
+        session.set_metadata("filters", _metadata_value())
+
+        first = session.get_metadata("filters")
+        second = session.get_metadata("filters")
+        edit_every_level(first)
+
+        assert second == _metadata_value()
+
+    def test_a_missing_key_returns_the_callers_own_default(self, session):
+        """The default was never retained, so it is handed back rather than copied."""
+        default: dict[str, Any] = {}
+
+        assert session.get_metadata("missing", default) is default
+
+    def test_a_stored_none_is_returned_rather_than_the_default(self, session):
+        session.set_metadata("filters", None)
+
+        assert session.get_metadata("filters", "fallback") is None
 
 
 # -- SQLiteSessionStore --------------------------------------------------------
