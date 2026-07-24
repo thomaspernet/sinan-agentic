@@ -9,7 +9,7 @@ Tools are registered via the @register_tool decorator. Metadata can come from:
 """
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 
@@ -47,9 +47,10 @@ class ToolRegistry:
         ``_tools`` is a dataclass constructor parameter, so
         ``ToolRegistry(_tools=existing)`` would alias the caller's dict and every
         later :meth:`register` would land in it. The shallow copy detaches the
-        container while leaving the ``ToolDefinition`` values shared —
-        :meth:`ToolCatalog.enrich_registry` patches those records in place, and
-        readers must resolve the same object it enriched.
+        container. The ``ToolDefinition`` values it holds stay shared with the
+        seed, which is safe: :meth:`get_tool` hands out a copy so no reader
+        mutates them, and :meth:`ToolCatalog.enrich_registry` re-registers a
+        patched copy rather than editing them in place.
         """
         self._tools = dict(self._tools)
 
@@ -58,12 +59,23 @@ class ToolRegistry:
         self._tools[tool_def.name] = tool_def
 
     def get_tool(self, name: str) -> ToolDefinition | None:
-        """Get a specific tool by name."""
-        return self._tools.get(name)
+        """Get a snapshot of the tool registered under *name*.
+
+        Returns a copy, not the stored record. A reader that rewrote a field on
+        the live definition would change what every later lookup resolves and
+        what :meth:`to_instruction_text` renders into the next prompt, because
+        both read the same process-wide mapping. Enrichment is a
+        registry-internal write that goes back through :meth:`register`, so
+        nothing depends on this handing out the live object.
+        """
+        tool_def = self._tools.get(name)
+        if tool_def is None:
+            return None
+        return replace(tool_def)
 
     def get_tools_by_category(self, category: str) -> list[ToolDefinition]:
-        """Get all tools in a category."""
-        return [t for t in self._tools.values() if t.category == category]
+        """Get a snapshot of every tool in *category*."""
+        return [replace(t) for t in self._tools.values() if t.category == category]
 
     def get_tool_functions(self, tool_names: list[str]) -> list[Callable[..., Any]]:
         """Get actual function objects for given tool names."""

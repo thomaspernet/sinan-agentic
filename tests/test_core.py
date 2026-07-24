@@ -1924,10 +1924,17 @@ class TestModelRetryWiring:
 
     async def test_retry_merges_with_computed_model_settings(self, retry_runner, context):
         """A dynamic model_settings_fn keeps its values and gains the retry policy."""
-        agent_def = retry_runner._get_agent_definition("retrying_agent")
-        agent_def.model_settings_fn = lambda ctx: ModelSettings(temperature=0.2)
+        retry_runner.agent_registry.register(
+            AgentDefinition(
+                name="retrying_computed_agent",
+                description="retries",
+                instructions="answer",
+                model_retry=ModelRetryConfig(max_retries=4),
+                model_settings_fn=lambda ctx: ModelSettings(temperature=0.2),
+            )
+        )
 
-        agent = await retry_runner.create_agent("retrying_agent", context)
+        agent = await retry_runner.create_agent("retrying_computed_agent", context)
 
         assert agent.model_settings.temperature == 0.2
         assert agent.model_settings.retry.max_retries == 4
