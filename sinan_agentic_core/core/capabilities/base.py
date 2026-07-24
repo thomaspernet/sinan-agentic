@@ -131,10 +131,15 @@ class Capability:
         other failure never reaches this hook — it propagates instead.
 
         ``prompt`` is the fully-rendered recovery prompt; ``collected_items``
-        is the list of raw session items gathered during the failed agent
-        loop (the same list passed to the fallback-prompt builder). Tool-event
-        hooks (``on_tool_start`` / ``on_tool_end``) are intentionally **not**
-        fired on this path — no tools are invoked.
+        is the raw session items gathered during the failed agent loop — the
+        same items the fallback-prompt builder is given. Tool-event hooks
+        (``on_tool_start`` / ``on_tool_end``) are intentionally **not** fired
+        on this path — no tools are invoked.
+
+        The capability owns its ``collected_items``: each one receives a deep
+        copy, so it is free to keep or edit the list — and anything nested in
+        it — without reaching the runner's collector, the builder's copy, or
+        another capability's copy.
         """
         return None
 
