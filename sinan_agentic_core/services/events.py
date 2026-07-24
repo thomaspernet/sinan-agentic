@@ -143,8 +143,8 @@ class AnswerEvent(BaseEvent):
     """Emitted when the final answer is ready.
 
     The event owns its ``sources`` list: it is a fixed record of the moment the
-    answer was produced, so it is copied on construction rather than aliased to
-    whoever supplied it.
+    answer was produced, so the list is copied on the way in and copied again on
+    the way out of ``to_dict()`` rather than aliased to whoever supplied it.
     """
 
     event_type: str = field(default="answer", init=False)
@@ -170,10 +170,17 @@ class AnswerEvent(BaseEvent):
         self.sources = list(self.sources)
 
     def to_dict(self) -> dict[str, Any]:
+        """Render the event as a payload, with its own copy of the sources.
+
+        A consumer that edits ``payload["sources"]`` must not reach back into the
+        event it read. Only the container is copied, the same call
+        ``__post_init__`` makes: the sources themselves stay shared so a consumer
+        can still match them against its own objects by identity.
+        """
         return {
             "event_type": self.event_type,
             "answer": self.answer,
-            "sources": self.sources,
+            "sources": list(self.sources),
             "followup_question": self.followup_question,
             "confidence": self.confidence,
         }

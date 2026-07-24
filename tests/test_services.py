@@ -90,7 +90,7 @@ class TestEvents:
 
 
 class TestAnswerEventOwnsItsSources:
-    """The event is a fixed record, so it and the caller never share a sources list."""
+    """The event is a fixed record, at both ends: nobody else holds its sources list."""
 
     def test_the_supplied_sources_are_readable(self):
         e = AnswerEvent(answer="42", sources=["data.csv"])
@@ -129,6 +129,29 @@ class TestAnswerEventOwnsItsSources:
         e = AnswerEvent(answer="42", sources=[source])
 
         assert e.sources[0] is source
+
+    def test_a_consumer_editing_the_payload_does_not_reach_the_event(self):
+        e = AnswerEvent(answer="42", sources=["data.csv"])
+
+        e.to_dict()["sources"].append("added_by_consumer.csv")
+
+        assert e.sources == ["data.csv"]
+
+    def test_two_payloads_from_one_event_do_not_share_sources(self):
+        e = AnswerEvent(answer="42", sources=["data.csv"])
+
+        first = e.to_dict()
+        second = e.to_dict()
+        first["sources"].append("added_by_consumer.csv")
+
+        assert second["sources"] == ["data.csv"]
+
+    def test_the_sources_in_the_payload_stay_shared_with_the_event(self):
+        """Only the container is copied — a consumer matches sources by identity."""
+        source = {"file": "data.csv"}
+        e = AnswerEvent(answer="42", sources=[source])
+
+        assert e.to_dict()["sources"][0] is e.sources[0]
 
     def test_an_emitted_event_is_detached_from_the_callers_list(self):
         events = []
