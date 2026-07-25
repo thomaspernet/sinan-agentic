@@ -73,16 +73,53 @@ Pass `--repo "$REPO"` to every `devwatch` command to ensure the correct repo is 
    - You find yourself writing a *"Suggested child breakdown"* section because the work is too large to implement in one branch.
    - Dependency notes like *"prerequisite for #N"* or *"blocks #N"* where the downstream work is itself multi-part.
    Narrow single-area features are **not** epics, even when the body is long. When in doubt, surface the candidate once: *"This scoping looks like an epic (N workstreams). Mark as epic?"* Set `IS_EPIC=true` only on confirmation or explicit request. If `IS_EPIC=true`, add a `## Suggested child breakdown` section to the body listing the workstreams as a numbered list — these become the child issues downstream.
+5. **Record a model hint.** Assess the issue's difficulty and append the managed `model-hint:` line — see **Model hint (record once)** below — as the final line of the body.
+
+## Model hint (record once)
+
+Assess the issue's difficulty and record one managed `model-hint:` line for the three reasoning actions the pipeline launches — `implement`, `quality`, `propagation-scan`. It seeds the per-workflow **Model** tab downstream (epic #3139); the GitHub→DB sync later mirrors the line into `issues.model_hint`. You write it once, here, at creation — never edit it afterward (no `gh issue edit --body`).
+
+Format — one flush-left line, all three actions, always in this order:
+
+    model-hint: implement=<model>:<effort>, quality=<model>:<effort>, propagation-scan=<model>:<effort>
+
+Bounded catalog — use **only** these values, never anything outside them:
+
+- `<model>` is one of `haiku`, `sonnet`, `opus` (reasoning strength, weakest→strongest)
+- `<effort>` is one of `low`, `medium`, `high`, `xhigh`, `max` (thinking effort, least→most)
+
+Pick by difficulty. `implement` does the work, so it never scores below `quality` or `propagation-scan`:
+
+- **Simple** — a one-line change, a copy/enum/config tweak, a doc-only edit, or a localized single-file change with no subtle invariants:
+  `model-hint: implement=sonnet:high, quality=sonnet:medium, propagation-scan=sonnet:medium`
+- **Moderate** — a self-contained change over a few files with a clear contract (the common case):
+  `model-hint: implement=opus:high, quality=opus:high, propagation-scan=opus:high`
+- **Hard** — cross-layer work, subtle invariants or concurrency, dispatcher or state-machine changes, or a wide blast radius:
+  `model-hint: implement=opus:max, quality=opus:xhigh, propagation-scan=opus:xhigh`
+
+When unsure, fall back to the built-in default `opus:xhigh` for all three actions. End the composed body with this line; the CLI appends the `Links:` block below it.
 
 ## Execution
 
 1. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to every title, body, and comment below.
 
+2. Build the `devwatch create-issue` invocation. The title and the body are both your own prose and name files and symbols in backticks by convention, so pass each through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
+
 ```bash
+TITLE=$(cat <<'TITLE_EOF'
+<title>
+TITLE_EOF
+)
+
+BODY=$(cat <<'BODY_EOF'
+<structured body>
+BODY_EOF
+)
+
 devwatch --repo "$REPO" create-issue \
   --type feature \
-  --title "<title>" \
-  --body "<structured body>" \
+  --title "$TITLE" \
+  --body "$BODY" \
   --area <backend|frontend|agents|infrastructure> \
   --priority <P0-critical|P1-high|P2-medium|P3-low> \
   --parent <N> \

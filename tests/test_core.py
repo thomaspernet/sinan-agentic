@@ -1,6 +1,7 @@
 """Tests for BaseAgentRunner (core/base_runner.py)."""
 
 import json
+import logging
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -608,6 +609,70 @@ class TestStreamedAnswerOwnsItsUsageRecord:
         assert usage["output_tokens_details"]["reasoning_tokens"] == 0
 
 
+class TestStreamedAnswerOwnsItsToolList:
+    """The answer event is a fixed record, so it never shares the run's accumulator."""
+
+    @staticmethod
+    async def _stream_one_tool_call(runner, on_answer=None):
+        """Stream one turn that calls a tool; return the answer event's payload.
+
+        *on_answer* runs inside the ``on_event`` callback, while the runner is
+        still mid-call — the window in which a consumer could reach a shared
+        accumulator.
+        """
+        ctx = AgentContext(database_connector=Mock())
+        session = AgentSession(session_id="test")
+        events = []
+
+        tool_event = Mock()
+        tool_event.type = "run_item_stream_event"
+        tool_event.item = Mock()
+        tool_event.item.type = "tool_call_item"
+        tool_event.item.name = "search"
+
+        mock_result = Mock()
+        mock_result.final_output = "Streamed answer"
+        mock_result.raw_responses = []
+
+        async def mock_stream_events():
+            yield tool_event
+
+        mock_result.stream_events = mock_stream_events
+
+        def _on_event(event):
+            events.append(event)
+            if on_answer is not None and event["event"] == "answer":
+                on_answer(event["data"])
+
+        with (
+            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
+        ):
+            mock_runner_cls.run_streamed = Mock(return_value=mock_result)
+            await runner._execute_streamed("basic_agent", ctx, session, _on_event, 10, "hello")
+
+        return next(e for e in events if e["event"] == "answer")["data"]
+
+    async def test_the_event_reports_the_tools_the_run_called(self, runner):
+        data = await self._stream_one_tool_call(runner)
+
+        assert data["tools_called"] == ["search"]
+
+    async def test_a_consumer_editing_the_event_does_not_change_what_the_run_counted(
+        self, runner, caplog
+    ):
+        """The runner reads its accumulator again after delivering the event."""
+
+        def _edit(data):
+            data["tools_called"].append("added_by_consumer")
+
+        with caplog.at_level(logging.INFO):
+            data = await self._stream_one_tool_call(runner, on_answer=_edit)
+
+        assert data["tools_called"] == ["search", "added_by_consumer"]
+        assert "completed, 1 tool calls" in caplog.text
+
+
 # ------------------------------------------------------------------ #
 # execute() — fallback mode
 # ------------------------------------------------------------------ #
@@ -1145,6 +1210,125 @@ class TestFallbackCapabilitiesOwnTheirUsageRecord:
 
         assert recorder.usages == [None]
         assert runner.last_usage is None
+
+
+class TestFallbackReadersOwnTheCollectedItems:
+    """The prompt builder and every capability get their own copy of the collected items."""
+
+    @staticmethod
+    def _collected_item():
+        """One raw session item that nests a further mutable value."""
+        return {
+            "type": "function_call_output",
+            "output": "gathered",
+            "content": [{"text": "nested"}],
+        }
+
+    @staticmethod
+    def _recorder():
+        from sinan_agentic_core.core.capabilities import Capability
+
+        class _Recorder(Capability):
+            def __init__(self):
+                self.collected: list[list] = []
+
+            def on_fallback_start(self, ctx, prompt, collected_items):
+                self.collected.append(collected_items)
+
+        return _Recorder()
+
+    @classmethod
+    async def _rescue(cls, runner, capabilities, fallback_prompt_builder=None):
+        """Drive the recovery branch after one item was collected.
+
+        Returns the ``_CollectingSessionWrapper`` the run gathered into.
+        """
+        ctx = AgentContext(database_connector=Mock())
+        session = AgentSession(session_id="test")
+        collectors = []
+
+        async def _fake_run(**kwargs):
+            collector = kwargs["session"]
+            collectors.append(collector)
+            await collector.add_items([cls._collected_item()])
+            raise MaxTurnsExceeded("Max turns (10) exceeded")
+
+        mock_completion = Mock()
+        mock_completion.choices = [Mock()]
+        mock_completion.choices[0].message.content = "Rescued output"
+        mock_completion.usage = Mock(prompt_tokens=100, completion_tokens=20, total_tokens=120)
+
+        with (
+            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("sinan_agentic_core.core.base_runner.resolve_openai_client") as mock_resolve,
+        ):
+            mock_runner_cls.run = AsyncMock(side_effect=_fake_run)
+            mock_client = AsyncMock()
+            mock_client.chat.completions.create = AsyncMock(return_value=mock_completion)
+            mock_resolve.return_value = mock_client
+
+            await runner._execute_with_fallback(
+                "basic_agent",
+                ctx,
+                session,
+                10,
+                "hello",
+                fallback_prompt_builder,
+                capabilities=capabilities,
+            )
+
+        return collectors[0]
+
+    async def _rescue_one(self, runner):
+        """Rescue with a single capability; return the items it was handed and the collector."""
+        recorder = self._recorder()
+        collector = await self._rescue(runner, [recorder])
+        return recorder.collected[0], collector
+
+    async def test_the_capability_receives_what_the_run_collected(self, runner):
+        collected, collector = await self._rescue_one(runner)
+
+        assert collected == collector.raw_items == [self._collected_item()]
+
+    async def test_the_capability_does_not_share_the_collectors_list(self, runner):
+        collected, collector = await self._rescue_one(runner)
+
+        assert collected is not collector.raw_items
+
+    async def test_a_capability_editing_a_nested_value_does_not_reach_the_collector(self, runner):
+        """A shallow copy would leave the item dicts — and their content — shared."""
+        collected, collector = await self._rescue_one(runner)
+
+        collected[0]["content"][0]["text"] = "edited"
+        collected.append({"type": "function_call_output", "output": "added"})
+
+        assert collector.raw_items == [self._collected_item()]
+
+    async def test_two_capabilities_do_not_share_one_list(self, runner):
+        first, second = self._recorder(), self._recorder()
+
+        await self._rescue(runner, [first, second])
+
+        assert first.collected[0] is not second.collected[0]
+        first.collected[0][0]["content"][0]["text"] = "edited"
+        assert second.collected[0][0]["content"][0]["text"] == "nested"
+
+    async def test_the_prompt_builder_does_not_share_the_collectors_list(self, runner):
+        """A caller-supplied builder is a hand-out point too, not an internal read."""
+        built_with: list[list] = []
+
+        def _builder(instructions, raw_items, agent_def):
+            built_with.append(raw_items)
+            raw_items[0]["content"][0]["text"] = "edited"
+            return "rescue prompt"
+
+        recorder = self._recorder()
+        collector = await self._rescue(runner, [recorder], fallback_prompt_builder=_builder)
+
+        assert built_with[0] is not collector.raw_items
+        assert collector.raw_items == [self._collected_item()]
+        assert recorder.collected[0] == [self._collected_item()]
 
 
 # ------------------------------------------------------------------ #
@@ -1924,10 +2108,17 @@ class TestModelRetryWiring:
 
     async def test_retry_merges_with_computed_model_settings(self, retry_runner, context):
         """A dynamic model_settings_fn keeps its values and gains the retry policy."""
-        agent_def = retry_runner._get_agent_definition("retrying_agent")
-        agent_def.model_settings_fn = lambda ctx: ModelSettings(temperature=0.2)
+        retry_runner.agent_registry.register(
+            AgentDefinition(
+                name="retrying_computed_agent",
+                description="retries",
+                instructions="answer",
+                model_retry=ModelRetryConfig(max_retries=4),
+                model_settings_fn=lambda ctx: ModelSettings(temperature=0.2),
+            )
+        )
 
-        agent = await retry_runner.create_agent("retrying_agent", context)
+        agent = await retry_runner.create_agent("retrying_computed_agent", context)
 
         assert agent.model_settings.temperature == 0.2
         assert agent.model_settings.retry.max_retries == 4

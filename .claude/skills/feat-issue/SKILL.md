@@ -135,14 +135,11 @@ BRANCH=$(devwatch --repo "$REPO" workflow-branch-name --issue <ISSUE> --prefix f
 git fetch origin && git checkout -b "$BRANCH" origin/${WORKFLOW_BASE}
 ```
 
-After creating or checking out the branch, record it (use `--run-id` if available, fall back to `--issue`):
+After creating or checking out the branch, record it:
 ```bash
 devwatch --repo "$REPO" agent-update --run-id <RUN_ID> --branch "<your-branch-name>"
 ```
-If no RUN_ID was provided:
-```bash
-devwatch --repo "$REPO" agent-update --issue <ISSUE> --branch "<your-branch-name>"
-```
+If no RUN_ID was provided, omit `--run-id` entirely — every `agent-update` and `agent-report` call below records against **your own** run, resolved from `--run-id` or the `DEVWATCH_AGENT_RUN_ID` your launcher put in this process's environment (#3761). Never name another run. If neither resolves, the command refuses rather than guessing — that is the correct terminal, not something to work around.
 
 When the run belongs to a workflow step, `agent-update --branch` also updates `workflow_steps.branch` and `workflows.current_branch` — no separate call needed.
 
@@ -172,27 +169,37 @@ Take the no-op terminal path instead:
 
 **Confirmation gate.** Closing an issue is consequential and outward-facing, so by default present your no-op conclusion — the reason plus the evidence (the shipping PR / duplicate issue / the commit that already satisfies the acceptance criteria) — to the human and wait for approval before running the close below. **If `AUTO_APPROVE` is true** (the `--auto-approve` flag was on `$ARGUMENTS`): skip the confirmation entirely — close and report the no-op immediately, with no prompt and no pause. The owning workflow opted into auto-approval (#2349), which is a standing "yes, close it" for this run. The default stays gated.
 
-1. Close the GitHub issue with a comment explaining why:
+1. Close the GitHub issue with a comment explaining why. The reason is your own prose, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
 
-   ```bash
-   gh issue close <ISSUE> --repo "$REPO" --comment "Closing as <reason>: <one-line explanation, link to the duplicate/shipping PR/commit>."
-   ```
+```bash
+COMMENT=$(cat <<'COMMENT_EOF'
+Closing as <reason>: <one-line explanation, link to the duplicate/shipping PR/commit>.
+COMMENT_EOF
+)
 
-2. Report completion as a no-op (no branch, no commits, no files):
+gh issue close <ISSUE> --repo "$REPO" --comment "$COMMENT"
+```
 
-   ```bash
-   devwatch --repo "$REPO" agent-update \
-     --run-id <RUN_ID> \
-     --status completed \
-     --summary "no-op: <one-line reason — already shipped by #N / duplicate of #N / acceptance criteria already met by <commit> / invalid because <reason>>"
-   ```
+2. Report completion as a no-op (no branch, no commits, no files). The reason is your own prose, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
+
+```bash
+SUMMARY=$(cat <<'SUMMARY_EOF'
+no-op: <one-line reason — already shipped by #N / duplicate of #N / acceptance criteria already met by <commit> / invalid because <reason>>
+SUMMARY_EOF
+)
+
+devwatch --repo "$REPO" agent-update \
+  --run-id <RUN_ID> \
+  --status completed \
+  --summary "$SUMMARY"
+```
 
 The dispatcher detects the closed GitHub issue at IMPLEMENT-SUCCESS time,
 skips the rest of this run's actions (quality / docs / PR), marks the
 workflow step done, and advances the chain to the next child. The
 workflow stays ``active``.
 
-If RUN_ID is unavailable, fall back to ``--issue <ISSUE>``. Do not call
+If RUN_ID is unavailable, omit ``--run-id``. Do not call
 ``agent-comment`` for the no-op — the close comment already explains the
 outcome on the issue.
 
@@ -234,23 +241,40 @@ devwatch --repo "$REPO" agent-report \
   --file /tmp/devwatch-report-<ISSUE>.json \
   || echo "  agent-report failed (advisory) — continuing"
 ```
-Fall back to `--issue <ISSUE> --branch "$(git branch --show-current)"` if RUN_ID is unavailable.
+Omit `--run-id` if RUN_ID is unavailable — the run is resolved from `DEVWATCH_AGENT_RUN_ID` instead.
 
-4. Record completion (use `--run-id` if available, fall back to `--issue`):
+4. Record completion (omit `--run-id` if RUN_ID is unavailable). The summary is your own prose, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
 ```bash
+SUMMARY=$(cat <<'SUMMARY_EOF'
+<one-line summary of what you built>
+SUMMARY_EOF
+)
+
 devwatch --repo "$REPO" agent-update \
   --run-id <RUN_ID> \
   --status ready_for_review \
-  --summary "<one-line summary of what you built>" \
+  --summary "$SUMMARY" \
   --files "<comma-separated changed files>" \
   --commits "$(git rev-parse HEAD)"
 ```
 
-5. Post completion comment to GitHub issue:
+5. Post completion comment to GitHub issue. The body is your own prose, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
+
 ```bash
+BODY=$(cat <<'BODY_EOF'
+## Feature Complete
+
+**Summary**: <what you built and why>
+**Branch**: <branch-name>
+**Files**: <changed files>
+
+Ready for review.
+BODY_EOF
+)
+
 devwatch --repo "$REPO" agent-comment \
   --issue <ISSUE> \
-  --body "## Feature Complete\n\n**Summary**: <what you built and why>\n**Branch**: <branch-name>\n**Files**: <changed files>\n\nReady for review."
+  --body "$BODY"
 ```
 
 ## Boundary

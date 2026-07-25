@@ -127,28 +127,49 @@ git commit -m "docs(rules): <operation> rule from #<ISSUE> — <short descriptio
 
 1. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to every title, body, and comment below.
 
-Update the agent-run trace and post a completion comment (use `--run-id` if available, otherwise `--issue`):
+Update the agent-run trace and post a completion comment (omit `--run-id` if RUN_ID is unavailable). The summary carries the path you wrote and the comment body names it in backticks, so pass both through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
 
 ```bash
+SUMMARY=$(cat <<'SUMMARY_EOF'
+<operation> rule from #<ISSUE> at <path>
+SUMMARY_EOF
+)
+
 devwatch --repo "$REPO" agent-update \
   --run-id <RUN_ID> \
   --status completed \
-  --summary "<operation> rule from #<ISSUE> at <path>" \
+  --summary "$SUMMARY" \
   --files "<changed rule file>" \
   --commits "$(git rev-parse HEAD)"
 
+BODY=$(cat <<'BODY_EOF'
+## Rule extracted
+
+**Operation**: <add|update|supersede|flag-stale>
+**Target**: `<path>`
+**Summary**: <one line>
+
+See the commit for the full entry.
+BODY_EOF
+)
+
 devwatch --repo "$REPO" agent-comment \
   --issue <ISSUE> \
-  --body "## Rule extracted\n\n**Operation**: <add|update|supersede|flag-stale>\n**Target**: \`<path>\`\n**Summary**: <one line>\n\nSee the commit for the full entry."
+  --body "$BODY"
 ```
 
-For skipped runs (iteration-only, insufficient instances, or flag-stale with no file write), still call `agent-update` with `--status completed` and prefix the summary with `Skipped —` so the dashboard can distinguish:
+For skipped runs (iteration-only, insufficient instances, or flag-stale with no file write), still call `agent-update` with `--status completed` and prefix the summary with `Skipped —` so the dashboard can distinguish. The reason is your own prose, so it goes through the same **quoted heredoc**:
 
 ```bash
+SUMMARY=$(cat <<'SUMMARY_EOF'
+Skipped — <reason, e.g. iteration-only / insufficient instances / flag-stale surfaced without file change>
+SUMMARY_EOF
+)
+
 devwatch --repo "$REPO" agent-update \
   --run-id <RUN_ID> \
   --status completed \
-  --summary "Skipped — <reason, e.g. iteration-only / insufficient instances / flag-stale surfaced without file change>"
+  --summary "$SUMMARY"
 ```
 
 ## Boundary

@@ -25,10 +25,20 @@ class AgentContext:
     - discovered_data: Data discovered during workflow execution
 
     The context owns its ``schema_data``, ``query_results``, ``filters``, and
-    ``discovered_data`` collections: a run writes into them from start to end,
-    so each is copied on construction rather than aliased to whoever seeded it.
-    ``database_connector`` is the one caller-supplied value left shared — it is
-    a live handle the run uses, not data the context accumulates into.
+    ``discovered_data`` collections in every direction: what seeds them is
+    copied on construction, what :meth:`add_query_result` and
+    :meth:`add_discovered_item` collect into them is copied on the way in, and
+    what :meth:`get_discovered_items` hands back is copied on the way out. No
+    caller keeps a handle on what a run reads, and no consumer of a reading can
+    write back into it. ``database_connector`` is the one caller-supplied value
+    left shared — it is a live handle the run uses, not data the context
+    accumulates into.
+
+    The accessors are the read boundary; the fields themselves stay live. A
+    holder of the context reads ``query_results`` or writes ``discovered_data``
+    directly and sees exactly what the run sees, the same split
+    :class:`~sinan_agentic_core.session.agent_session.AgentSession` draws
+    between its ``history`` attribute and ``get_history()``.
 
     Extend this class for your specific use case by adding domain-specific fields.
     A subclass that defines its own ``__post_init__`` must call
@@ -87,15 +97,26 @@ class AgentContext:
         return len(self.query_results) > 0
 
     def add_query_result(self, result: dict[str, Any]) -> None:
-        """Add a database query result to the context.
+        """Collect the rows of a database query result into the context.
+
+        The rows are copied on the way in, for the reason the constructor
+        copies the seeded list: the context accumulates them for the rest of
+        the run, so a caller that keeps its payload and edits a row would
+        rewrite what every later reader sees. The copy is deep — a row is a
+        dict that nests further mutable values, and a shallow copy would
+        detach only the list of rows.
 
         Args:
-            result: Dictionary containing query results
+            result: Dictionary containing query results under a ``data`` key
         """
-        if isinstance(result, dict) and "data" in result:
-            data = result["data"]
-            if isinstance(data, list):
-                self.query_results.extend(data)
+        if not isinstance(result, dict) or "data" not in result:
+            return
+
+        data = result["data"]
+        if not isinstance(data, list):
+            return
+
+        self.query_results.extend(copy.deepcopy(data))
 
     def clear_results(self) -> None:
         """Clear all accumulated results."""
@@ -103,27 +124,44 @@ class AgentContext:
         self.discovered_data = {}
 
     def add_discovered_item(self, key: str, value: Any) -> None:
-        """Add discovered data during workflow execution.
+        """Collect a discovery under *key*, as a snapshot of *value*.
+
+        The value is copied on the way in, so what the run discovered stays
+        what it discovered even if the caller edits its object afterwards, and
+        adding one object twice records two independent entries. ``value`` is
+        declared ``Any`` — the case a container-level copy cannot reach — so
+        the copy goes all the way down, which makes deep-copyability the
+        contract for a discovery and this the wrong place for a live handle.
+        Those belong in ``database_connector``.
 
         Args:
             key: Category/type of discovered data
-            value: The discovered data
+            value: The discovered data, taken as a snapshot
         """
+        stored = copy.deepcopy(value)
+
         if key not in self.discovered_data:
             self.discovered_data[key] = []
 
         if isinstance(self.discovered_data[key], list):
-            self.discovered_data[key].append(value)
+            self.discovered_data[key].append(stored)
         else:
-            self.discovered_data[key] = value
+            self.discovered_data[key] = stored
 
     def get_discovered_items(self, key: str) -> Any:
-        """Get discovered data by key.
+        """Get a snapshot of the discoveries collected under *key*.
+
+        The value is copied on the way out: without it a consumer appending to
+        the returned list would write straight into the context, and two
+        readers of one key would share an object. The copy is deep for the
+        same reason :meth:`add_discovered_item` copies deeply — the value is
+        declared ``Any`` and nests whatever the run put there. A key that was
+        never collected copies to ``None``, so the miss needs no branch.
 
         Args:
             key: Category/type of discovered data
 
         Returns:
-            Discovered data or None if not found
+            A detached copy of the discovered data, or None if not found
         """
-        return self.discovered_data.get(key)
+        return copy.deepcopy(self.discovered_data.get(key))

@@ -117,7 +117,11 @@ with the upstream primitive).
 ## 5. File each recommendation into the Inbox
 
 For each kept finding, write the body to a temp file (so multi-line markdown
-survives the shell) and file it:
+survives the shell) and assign the title through a **quoted heredoc** — it is
+your own prose too, and an apostrophe or a `$` in a hand-quoted string is eaten
+by the shell while a backtick is executed as a command. There is no
+`--title-file` sibling to the `--body-file` flag below, so the heredoc variable
+is how a title survives verbatim:
 
 ```bash
 cat > /tmp/devwatch-upstream-rec.md <<'BODY'
@@ -129,9 +133,14 @@ cat > /tmp/devwatch-upstream-rec.md <<'BODY'
 - `path/to/file.py:NN` — <what changes>
 BODY
 
+TITLE=$(cat <<'TITLE_EOF'
+<concise recommendation title>
+TITLE_EOF
+)
+
 devwatch --repo "$REPO" watched-libraries add-rec \
   --repo "<upstream repo>" \
-  --title "<concise recommendation title>" \
+  --title "$TITLE" \
   --type feature \
   --external-id "<upstream repo>@<to tag>#<short-slug>" \
   --body-file /tmp/devwatch-upstream-rec.md

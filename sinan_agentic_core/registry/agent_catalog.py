@@ -395,6 +395,10 @@ class AgentCatalog:
         Tool groups are expanded and conditional tools evaluated, same as
         agent tool resolution.
 
+        The returned config owns everything it carries: editing it — including a
+        value nested inside ``resources`` or ``prompts`` — cannot change the
+        catalog or another config resolved from it.
+
         Raises:
             KeyError: If the MCP server is not defined in agents.yaml.
             ValidationError: If the block declares a key the model does not
@@ -408,18 +412,23 @@ class AgentCatalog:
                 f"MCP server '{name}' not found in agents.yaml. " f"Available: {available}"
             )
 
-        raw = self._raw_mcp_servers[name]
+        # Copied on the way out for the same reason ``get()`` copies, and the same
+        # whole-block treatment: every field on ``MCPServerConfig`` is concretely
+        # typed today, so Pydantic rebuilds the tree and nothing aliases without
+        # this — but that holds only until a field typed ``Any`` is added, and the
+        # copy is what keeps the boundary correct then instead of making each new
+        # field re-derive the analysis.
+        resolved = copy.deepcopy(self._raw_mcp_servers[name])
 
         # The whole raw block is forwarded so an unrecognized key reaches the
         # model's extra="forbid" gate instead of being dropped here. Only the two
         # tool lists need resolving first (groups expanded, conditions evaluated);
         # ``resources`` and ``prompts`` are validated by the model's own fields,
         # and ``name`` comes from the mapping key rather than the block.
-        resolved = dict(raw)
         resolved.update(
             name=name,
-            tools=_resolve_tools(raw.get("tools", []), self._tool_groups, config),
-            write_tools=_resolve_tools(raw.get("write_tools", []), self._tool_groups, config),
+            tools=_resolve_tools(resolved.get("tools", []), self._tool_groups, config),
+            write_tools=_resolve_tools(resolved.get("write_tools", []), self._tool_groups, config),
         )
         return MCPServerConfig(**resolved)
 

@@ -169,7 +169,7 @@ devwatch --repo "$REPO" agent-report \
   --file /tmp/devwatch-report-<ISSUE>.json \
   || echo "  agent-report failed (advisory) — continuing"
 ```
-Fall back to `--issue <ISSUE> --branch "$(git branch --show-current)"` if RUN_ID is unavailable.
+Omit `--run-id` if RUN_ID is unavailable — the run is resolved from `DEVWATCH_AGENT_RUN_ID` instead.
 
 Then post the quality trace:
 

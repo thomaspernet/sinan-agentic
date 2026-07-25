@@ -131,10 +131,15 @@ class Capability:
         other failure never reaches this hook — it propagates instead.
 
         ``prompt`` is the fully-rendered recovery prompt; ``collected_items``
-        is the list of raw session items gathered during the failed agent
-        loop (the same list passed to the fallback-prompt builder). Tool-event
-        hooks (``on_tool_start`` / ``on_tool_end``) are intentionally **not**
-        fired on this path — no tools are invoked.
+        is the raw session items gathered during the failed agent loop — the
+        same items the fallback-prompt builder is given. Tool-event hooks
+        (``on_tool_start`` / ``on_tool_end``) are intentionally **not** fired
+        on this path — no tools are invoked.
+
+        The capability owns its ``collected_items``: each one receives a deep
+        copy, so it is free to keep or edit the list — and anything nested in
+        it — without reaching the runner's collector, the builder's copy, or
+        another capability's copy.
         """
         return None
 
@@ -167,8 +172,22 @@ class Capability:
 
         The default implementation does a deep copy, which is correct for
         capabilities whose state is plain Python data. Override when the
-        capability holds non-copyable references (open connections, locks)
-        and needs custom copy semantics.
+        capability holds a reference the copy must not replace:
+
+        - **Non-copyable references** — an open connection, a lock. A deep
+          copy raises on these, so the failure is loud.
+        - **Live handles the caller reads or writes through** — a sink bound to
+          a caller's object (``sink=collector.write``, ``sink=logger.info``), a
+          tool registry, anything whose point is that the caller sees what the
+          capability does with it. These copy cleanly, so nothing raises: a deep
+          copy carries the object behind the method with it, and the clone spends
+          the whole run writing somewhere the caller never reads. Forward them by
+          identity instead, as :meth:`ToolTracer.clone` does for ``sink`` and
+          :meth:`ToolErrorRecovery.clone` does for its tool registry.
+
+        ``on_event`` is the one handle the base deliberately drops: it belongs
+        to whichever run installed it, and the runtime assigns a fresh one on
+        the clone it just made.
         """
         clone = copy.deepcopy(self)
         clone.on_event = None
