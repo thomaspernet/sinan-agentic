@@ -83,9 +83,21 @@ Do **not** proceed past this gate without an explicit approval in the conversati
 
 ## 4. Create the umbrella (only after approval)
 
-Once — and only once — the human approves, create the epic via the approval-gated CLI command. `--approve` is the machine-level assertion that the human signed off; the command refuses to create anything without it.
+Once — and only once — the human approves, the approved name and body go to **exactly one** `devwatch` command. Which one depends on whether the umbrella has members to bind:
 
-The approved name and the approved body are both drafted prose that name issues and symbols in backticks, so pass each through its own **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command. Mangling either one between the approval gate and the create defeats what the gate guarantees: the epic that lands must be the epic the human signed off on.
+| Input shape | Command | What lands |
+|---|---|---|
+| **Assemble** — a set of selected issues | `regroup-onto-new-epic` (§5) | the epic, a `draft` workflow rooted on it, and the seed member moved onto that workflow |
+| **Propagation / growth** — an originating issue plus its follow-ups | `attach-propagation-followups` (§5) | the epic, the originating issue's workflow re-parented onto it, and the follow-ups adopted as members |
+| **Neither** — a theme placeholder with no members to bind | `mint-umbrella-epic` (below) | the epic, and nothing else |
+
+Every row creates the same epic through the same primitive — the `epic` label, **no branch** (#1116) — and every row prints the new epic number. What differs is whether a workflow ends up rooted on it, and only that decides whether issues can ever be its members.
+
+**Pick the row before running anything: a bare create is a one-way door.** An issue is a member of a *workflow*, never of an epic, and every membership command refuses a destination that does not already root a non-terminal workflow. No `devwatch` command roots a workflow on an epic that already exists, so from a terminal a label-only epic can never be filled in later: a `child-of` edge pointing at it writes the link and stops there, leaving issues that read as children on GitHub and are members of nothing. If the umbrella has members, take one of the first two rows — do not mint bare first and look for a way to attach them afterwards.
+
+`--approve` is the machine-level assertion that the human signed off in §3. Every row refuses without it, so the approval gate holds whichever command carries the draft.
+
+The approved name and the approved body are both drafted prose that name issues and symbols in backticks, so pass each through its own **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command. Mangling either one between the approval gate and the create defeats what the gate guarantees: the epic that lands must be the epic the human signed off on. Build them once — every row uses `"$TITLE"` and `"$BODY"`:
 
 ```bash
 TITLE=$(cat <<'TITLE_EOF'
@@ -97,7 +109,11 @@ BODY=$(cat <<'BODY_EOF'
 <approved body>
 BODY_EOF
 )
+```
 
+For the third row only — an umbrella with no members to bind:
+
+```bash
 devwatch --repo "$REPO" mint-umbrella-epic \
   --title "$TITLE" \
   --body "$BODY" \
@@ -106,8 +122,50 @@ devwatch --repo "$REPO" mint-umbrella-epic \
   --approve
 ```
 
-This applies the `epic` label and creates **no branch** (#1116). The command prints the new epic number.
+## 5. Bind the members — finish it from this terminal
 
-## 5. Hand off — do NOT re-parent here
+**There is no dashboard flow to hand off to.** The browser client ships the mint call with no screen that invokes it, and even invoked it would only mint — nothing there binds membership. Do not report the epic and wait for a UI to finish the job — there is no UI, and the commands below are the whole job.
 
-This skill mints the epic and stops. Re-parenting the members onto it (turning the selection/originating issue + follow-ups into children of the new epic) and binding it as a workflow's root is the consumer flow's job — assemble (#2593), propagation attach (#2592), or growth re-parent (#2591) — not this primitive's. Report the new epic number and the members that should become its children, then stop.
+Run the command the §4 row selected, reusing the `"$TITLE"` and `"$BODY"` already built.
+
+### Assemble — a set of selected issues
+
+Seed the umbrella with **exactly one** member. That call mints the epic, roots a `draft` workflow on it, and moves the seed onto that workflow:
+
+```bash
+devwatch --repo "$REPO" regroup-onto-new-epic \
+  --title "$TITLE" \
+  --body "$BODY" \
+  --member <seed-issue> \
+  --area <backend|frontend|agents|infrastructure> \
+  --priority <P0-critical|P1-high|P2-medium|P3-low> \
+  --approve
+```
+
+Then move each remaining member onto the epic number that command printed, one call per member:
+
+```bash
+devwatch --repo "$REPO" rehome-member <issue> --to <epic-number>
+```
+
+**One seed, not the whole set.** `--member` is repeatable, but the command refuses a member set drawn from more than one source workflow: the new epic inherits that source's base branch and action set, and a mixed set answers no question it needs. Every freshly filed issue is born into its own single-member workflow, so any two separately filed issues always trip that guard. Seed-then-re-home is not a style preference — it is the form that converges for a set of separately filed issues. Seed with the member whose workflow carries the base branch and action set the whole group should ship with, because the new workflow inherits them from that one.
+
+### Propagation / growth — an originating issue plus its follow-ups
+
+One call. It mints the epic, re-parents the originating issue's workflow onto it, and adopts each follow-up as a member:
+
+```bash
+devwatch --repo "$REPO" attach-propagation-followups \
+  --origin-issue <originating-issue> \
+  --followup <follow-up> \
+  --followup <follow-up> \
+  --title "$TITLE" \
+  --body "$BODY" \
+  --area <backend|frontend|agents|infrastructure> \
+  --priority <P0-critical|P1-high|P2-medium|P3-low> \
+  --approve
+```
+
+### Then report
+
+Members land as **pending** steps and nothing auto-runs — no run is opened and the dispatcher is never fired, even where auto-execute is on. Report the new epic number, the members that landed as steps, and — verbatim — anything the command named as left in place or not linked, together with the retry command it printed for each. An unmoved member is the one part of the job left undone, and naming it is what lets the human finish it.
