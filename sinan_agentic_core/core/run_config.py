@@ -74,7 +74,7 @@ def tool_input_pre_approval() -> ToolExecutionConfig:
     guardrail returns its message as the tool output — so a call the guardrail
     would refuse never reaches an approver. Without it, those guardrails run only
     once the approval is resolved, just before the tool executes
-    (``openai-agents`` 0.18.3, ``agents.run_internal.tool_execution``).
+    (``openai-agents`` 0.20.0, ``agents.run_internal.tool_execution``).
 
     Returns:
         A fresh ToolExecutionConfig with pre-approval enabled. The SDK dataclass

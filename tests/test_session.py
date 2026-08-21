@@ -7,7 +7,11 @@ import pytest
 from sinan_agentic_core.core.capabilities import Capability
 from sinan_agentic_core.core.tool_error_recovery import ToolErrorRecovery
 from sinan_agentic_core.core.turn_budget import TurnBudget
-from sinan_agentic_core.session.agent_session import AgentSession, ConversationHistory
+from sinan_agentic_core.session.agent_session import (
+    _STRUCTURED_OUTPUT_WRAPPER_KEY,
+    AgentSession,
+    ConversationHistory,
+)
 from sinan_agentic_core.session.sqlite_store import (
     SESSION_TITLE_CHARS,
     SESSION_TITLE_ELLIPSIS,
@@ -239,6 +243,18 @@ class TestAgentSession:
         await session.add_items([{"role": "user", "content": '{"response": "verbatim"}'}])
         items = await session.get_items()
         assert items[0]["content"] == '{"response": "verbatim"}'
+
+    def test_the_wrapper_key_still_matches_the_one_the_sdk_wraps_under(self):
+        """Unwrapping is keyed off an SDK-private constant, so drift must fail loudly.
+
+        ``AgentOutputSchema`` nests a non-dict output type under a key the SDK
+        keeps private, so this package mirrors the literal rather than importing
+        it into production code. A rename upstream would otherwise leave every
+        structured-output message stored as its envelope, with nothing raising.
+        """
+        from agents.agent_output import _WRAPPER_DICT_KEY
+
+        assert _STRUCTURED_OUTPUT_WRAPPER_KEY == _WRAPPER_DICT_KEY
 
 
 # -- AgentSession copies the caller's history ----------------------------------
