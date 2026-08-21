@@ -65,7 +65,7 @@ class ToolOutputTrimConfig(BaseModel):
     """
 
     # These four are the whole of the SDK filter (``ToolOutputTrimmer``,
-    # openai-agents 0.18.3), so an unknown key is a typo — and because every
+    # openai-agents 0.20.0), so an unknown key is a typo — and because every
     # field is optional, an accepted typo would leave the policy at SDK defaults
     # while reading as honored. Reject it rather than drop it silently.
     model_config = ConfigDict(extra="forbid")

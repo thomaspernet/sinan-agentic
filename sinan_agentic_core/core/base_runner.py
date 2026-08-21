@@ -456,7 +456,7 @@ class BaseAgentRunner:
             # NOTE: a declared tool_output_trim does not reach this prompt. The
             # SDK applies the filter through RunConfig.call_model_input_filter,
             # read only inside Runner.run (agents.run_internal.turn_preparation,
-            # openai-agents==0.18.3), which this branch bypasses. The filter also
+            # openai-agents==0.20.0), which this branch bypasses. The filter also
             # keys its window off the last N *user* messages, and a rescue prompt
             # replays a single one — so running it here would trim nothing. The
             # prompt builder caps each output instead.
@@ -470,7 +470,7 @@ class BaseAgentRunner:
 
             # NOTE: retry policies and backoff are runner-managed — the SDK reads
             # them off the resolved ModelSettings inside Runner.run
-            # (agents.run_internal.model_retry, openai-agents==0.18.3), which this
+            # (agents.run_internal.model_retry, openai-agents==0.20.0), which this
             # branch bypasses. Only the declared attempt count carries over, via
             # the OpenAI client's own retry, so a rescue call is not left on the
             # client default while every other branch honors the agent's budget.
