@@ -17,7 +17,7 @@ from agents import (
     set_tracing_disabled,
 )
 
-# NOTE: openai-agents==0.18.3 exports `set_default_openai_client` from the
+# NOTE: openai-agents==0.22.0 exports `set_default_openai_client` from the
 # `agents` package root but no matching getter, so reading the configured
 # client back requires the private module. This is the one place in the
 # codebase that imports it — every caller goes through
