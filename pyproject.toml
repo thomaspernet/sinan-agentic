@@ -44,8 +44,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The SDK admits ``mcp>=1.19.0,<3``, but ``mcp/server_builder.py`` builds on
+# ``FastMCP`` from ``mcp.server.fastmcp``, which MCP SDK v2 removed in favour of
+# ``mcp.server.mcpserver``. Until the builder targets that API the extra
+# declares the major it actually supports, so a consumer resolving today gets a
+# working server instead of an ImportError.
 mcp = [
-    "mcp>=1.19.0",
+    "mcp>=1.19.0,<2",
 ]
 dev = [
     "pytest>=7.0",
@@ -54,7 +59,7 @@ dev = [
     "black>=23.0",
     "ruff>=0.1.0",
     "mypy>=1.0",
-    "mcp>=1.19.0",
+    "mcp>=1.19.0,<2",
     "types-PyYAML>=6.0",
 ]
 

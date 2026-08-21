@@ -1558,8 +1558,8 @@ mcp = [
 [package.metadata]
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0" },
-    { name = "mcp", marker = "extra == 'dev'", specifier = ">=1.19.0" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.19.0" },
+    { name = "mcp", marker = "extra == 'dev'", specifier = ">=1.19.0,<2" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.19.0,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "openai", specifier = ">=3.0.0" },
     { name = "openai-agents", specifier = ">=0.21.1" },
