@@ -33,7 +33,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..core.capabilities import Capability
 from ..core.model_retry import ModelRetryConfig
@@ -84,6 +84,10 @@ class AgentYamlEntry(BaseModel):
     error_recovery: bool = True
     invalid_output_recovery: bool = True
     model_retry: ModelRetryConfig | None = None
+    # Seconds one model-call attempt may take. The SDK rejects a non-positive or
+    # infinite value too, but only once the agent is built — constraining it here
+    # fails the load that declared it instead.
+    model_timeout: float | None = Field(default=None, gt=0)
     tool_output_trim: ToolOutputTrimConfig | None = None
     capabilities: list[CapabilityRef] = []
     effort: str | None = None
@@ -358,6 +362,7 @@ class AgentCatalog:
             error_recovery=raw.get("error_recovery", True),
             invalid_output_recovery=raw.get("invalid_output_recovery", True),
             model_retry=retry_cfg,
+            model_timeout=raw.get("model_timeout"),
             tool_output_trim=trim_cfg,
             capabilities=capabilities,
             tool_rules=raw.get("tool_rules", {}),

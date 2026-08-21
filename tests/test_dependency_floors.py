@@ -11,14 +11,19 @@ import re
 from importlib.metadata import version
 from pathlib import Path
 
-# openai-agents 0.18.1 closes Chat Completions streams on early exit
-# (openai/openai-agents-python#3689). ``chat_streamed()`` and
-# ``BaseAgentRunner._execute_streamed()`` relay SDK stream events to a caller
-# that may break out of the loop early — a cancel, a first-token-only read, or a
-# timeout — which is exactly the case that leaked the HTTP connection before the
-# fix. The Azure provider defaults to ``api_mode="chat_completions"``, putting
-# the default Azure deployment on the affected code path.
-MIN_OPENAI_AGENTS = (0, 18, 1)
+# openai-agents 0.21.1 added ``ModelSettings.timeout``
+# (openai/openai-agents-python#4428), the per-attempt bound the declarative
+# ``model_timeout:`` key translates into. Below this floor the field does not
+# exist, so ``apply_declared_model_settings`` raises while building the agent
+# and every declaring agent fails outright — the one dependency here whose
+# absence is a hard failure rather than a silently reintroduced bug.
+#
+# This floor subsumes the earlier 0.18.1 one, which closes Chat Completions
+# streams on early exit (#3689) — the case ``chat_streamed()`` and
+# ``BaseAgentRunner._execute_streamed()`` hit whenever a caller breaks out of
+# the event loop, and the one the Azure provider's ``api_mode="chat_completions"``
+# default puts every Azure deployment on.
+MIN_OPENAI_AGENTS = (0, 21, 1)
 
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
@@ -40,11 +45,11 @@ def _declared_floor(package: str) -> tuple[int, ...]:
     return _parse_version(match.group(1))
 
 
-def test_declared_openai_agents_floor_guarantees_stream_close_fix() -> None:
-    """The manifest floor must not resolve consumers onto a leaking SDK."""
+def test_declared_openai_agents_floor_guarantees_model_timeout_field() -> None:
+    """The manifest floor must not resolve consumers onto an SDK without the field."""
     assert _declared_floor("openai-agents") >= MIN_OPENAI_AGENTS
 
 
-def test_resolved_openai_agents_has_stream_close_fix() -> None:
-    """The SDK this suite runs against must carry the fix, not just allow it."""
+def test_resolved_openai_agents_has_model_timeout_field() -> None:
+    """The SDK this suite runs against must carry the field, not just allow it."""
     assert _parse_version(version("openai-agents")) >= MIN_OPENAI_AGENTS

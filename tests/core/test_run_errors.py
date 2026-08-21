@@ -4,7 +4,7 @@ import json
 
 import httpx
 import pytest
-from agents import MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError
+from agents import MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError, ModelTimeoutError
 from openai import BadRequestError, RateLimitError
 
 from sinan_agentic_core.core.run_errors import (
@@ -30,6 +30,11 @@ class TestClassifyRunError:
     def test_model_behavior_is_typed(self):
         error = ModelBehaviorError("Invalid JSON in final output")
         assert classify_run_error(error) is RunErrorKind.MODEL_BEHAVIOR
+
+    def test_model_timeout_is_typed(self):
+        """A declared model_timeout firing is the caller's own bound, not a crash."""
+        error = ModelTimeoutError(30.0)
+        assert classify_run_error(error) is RunErrorKind.MODEL_TIMEOUT
 
     def test_context_overflow_reads_the_provider_error_code(self):
         assert classify_run_error(make_context_overflow_error()) is RunErrorKind.CONTEXT_OVERFLOW
@@ -80,7 +85,12 @@ class TestFallbackRecoverableKinds:
 
     @pytest.mark.parametrize(
         "kind",
-        [RunErrorKind.MODEL_REFUSAL, RunErrorKind.MODEL_BEHAVIOR, RunErrorKind.UNKNOWN],
+        [
+            RunErrorKind.MODEL_REFUSAL,
+            RunErrorKind.MODEL_BEHAVIOR,
+            RunErrorKind.MODEL_TIMEOUT,
+            RunErrorKind.UNKNOWN,
+        ],
     )
     def test_excludes_everything_else(self, kind):
         assert kind not in FALLBACK_RECOVERABLE_KINDS
@@ -100,6 +110,7 @@ class TestRunErrorPayload:
         [
             (ModelRefusalError("I can't help with that."), RunErrorKind.MODEL_REFUSAL),
             (ModelBehaviorError("Invalid JSON in final output"), RunErrorKind.MODEL_BEHAVIOR),
+            (ModelTimeoutError(30.0), RunErrorKind.MODEL_TIMEOUT),
             (RuntimeError("Something else broke"), RunErrorKind.UNKNOWN),
         ],
     )
