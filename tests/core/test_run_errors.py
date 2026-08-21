@@ -2,9 +2,8 @@
 
 import json
 
-import httpx
 import pytest
-from agents import MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError
+from agents import MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError, ModelTimeoutError
 from openai import BadRequestError, RateLimitError
 
 from sinan_agentic_core.core.run_errors import (
@@ -13,7 +12,7 @@ from sinan_agentic_core.core.run_errors import (
     classify_run_error,
     run_error_payload,
 )
-from tests.conftest import make_context_overflow_error
+from tests.conftest import make_context_overflow_error, make_provider_status_error
 
 
 class TestClassifyRunError:
@@ -31,26 +30,26 @@ class TestClassifyRunError:
         error = ModelBehaviorError("Invalid JSON in final output")
         assert classify_run_error(error) is RunErrorKind.MODEL_BEHAVIOR
 
+    def test_model_timeout_is_typed(self):
+        """A declared model_timeout firing is the caller's own bound, not a crash."""
+        error = ModelTimeoutError(30.0)
+        assert classify_run_error(error) is RunErrorKind.MODEL_TIMEOUT
+
     def test_context_overflow_reads_the_provider_error_code(self):
         assert classify_run_error(make_context_overflow_error()) is RunErrorKind.CONTEXT_OVERFLOW
 
     def test_other_provider_error_is_unknown(self):
         """A 429 is a provider error too -- only the overflow code counts."""
-        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
-        error = RateLimitError(
+        error = make_provider_status_error(
+            RateLimitError,
             "Rate limit reached",
-            response=httpx.Response(429, request=request),
-            body={"code": "rate_limit_exceeded", "type": "requests"},
+            429,
+            {"code": "rate_limit_exceeded", "type": "requests"},
         )
         assert classify_run_error(error) is RunErrorKind.UNKNOWN
 
     def test_provider_error_without_a_code_is_unknown(self):
-        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
-        error = BadRequestError(
-            "Bad request",
-            response=httpx.Response(400, request=request),
-            body=None,
-        )
+        error = make_provider_status_error(BadRequestError, "Bad request", 400, None)
         assert classify_run_error(error) is RunErrorKind.UNKNOWN
 
     def test_plain_exception_is_unknown(self):
@@ -80,7 +79,12 @@ class TestFallbackRecoverableKinds:
 
     @pytest.mark.parametrize(
         "kind",
-        [RunErrorKind.MODEL_REFUSAL, RunErrorKind.MODEL_BEHAVIOR, RunErrorKind.UNKNOWN],
+        [
+            RunErrorKind.MODEL_REFUSAL,
+            RunErrorKind.MODEL_BEHAVIOR,
+            RunErrorKind.MODEL_TIMEOUT,
+            RunErrorKind.UNKNOWN,
+        ],
     )
     def test_excludes_everything_else(self, kind):
         assert kind not in FALLBACK_RECOVERABLE_KINDS
@@ -100,6 +104,7 @@ class TestRunErrorPayload:
         [
             (ModelRefusalError("I can't help with that."), RunErrorKind.MODEL_REFUSAL),
             (ModelBehaviorError("Invalid JSON in final output"), RunErrorKind.MODEL_BEHAVIOR),
+            (ModelTimeoutError(30.0), RunErrorKind.MODEL_TIMEOUT),
             (RuntimeError("Something else broke"), RunErrorKind.UNKNOWN),
         ],
     )

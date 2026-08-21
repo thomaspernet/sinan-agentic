@@ -9,7 +9,8 @@ owned by whoever last worded the upstream message, and one that also fired on an
 unrelated error whose text happened to quote those words.
 
 The SDK raises a distinct exception class per failure (``MaxTurnsExceeded``,
-``ModelRefusalError``, ``ModelBehaviorError``), so those are decided by type.
+``ModelRefusalError``, ``ModelBehaviorError``, ``ModelTimeoutError``), so those
+are decided by type.
 Context overflow has no exception class in the SDK: it reaches the runner as the
 provider's HTTP 400, whose machine-readable ``code`` field carries
 ``context_length_exceeded``. This module reads that field off the typed
@@ -25,7 +26,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from agents import MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError
+from agents import MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError, ModelTimeoutError
 from openai import APIStatusError
 
 # The provider's machine-readable code for "this request exceeds the model's
@@ -46,6 +47,11 @@ class RunErrorKind(str, Enum):
     - ``MODEL_BEHAVIOR`` -> the SDK's ``ModelBehaviorError``: the model did
       something the run cannot use — malformed structured output, a call to a
       tool that does not exist.
+    - ``MODEL_TIMEOUT`` -> the SDK's ``ModelTimeoutError``: one model-call
+      attempt outran the agent's declared ``model_timeout``. The bound is the
+      caller's own policy, so this is a limit they chose, not a failure of the
+      run — and telling it apart from ``UNKNOWN`` is what lets them raise the
+      bound rather than hunt a bug.
     - ``UNKNOWN`` -> anything else, including the framework's own ``ValueError``
       from a tool. Callers treat it as unrecoverable.
     """
@@ -54,6 +60,7 @@ class RunErrorKind(str, Enum):
     CONTEXT_OVERFLOW = "context_overflow"
     MODEL_REFUSAL = "model_refusal"
     MODEL_BEHAVIOR = "model_behavior"
+    MODEL_TIMEOUT = "model_timeout"
     UNKNOWN = "unknown"
 
 
@@ -61,7 +68,9 @@ class RunErrorKind(str, Enum):
 # not out of willingness. A refusal is deliberately absent — re-asking the same
 # model through a code path that bypasses the run would be routing around its
 # answer, not recovering from a limit. A malformed output is absent too; that one
-# is already handled in-run by the SDK's ``invalid_final_output`` handler.
+# is already handled in-run by the SDK's ``invalid_final_output`` handler. So is
+# a timeout: the rescue is another model call, bounded by the same declared
+# number of seconds, so a provider slow enough to trip the bound trips it again.
 FALLBACK_RECOVERABLE_KINDS = frozenset({RunErrorKind.MAX_TURNS, RunErrorKind.CONTEXT_OVERFLOW})
 
 
@@ -81,6 +90,8 @@ def classify_run_error(error: BaseException) -> RunErrorKind:
         return RunErrorKind.MODEL_REFUSAL
     if isinstance(error, ModelBehaviorError):
         return RunErrorKind.MODEL_BEHAVIOR
+    if isinstance(error, ModelTimeoutError):
+        return RunErrorKind.MODEL_TIMEOUT
     if isinstance(error, APIStatusError) and error.code == CONTEXT_OVERFLOW_ERROR_CODE:
         return RunErrorKind.CONTEXT_OVERFLOW
     return RunErrorKind.UNKNOWN
