@@ -1,11 +1,13 @@
 """Tests for MCPToolAdapter — tool invocation and handler building."""
 
+import copy
+import dataclasses
 import inspect
 import json
 from typing import Any
 
 import pytest
-from agents import function_tool
+from agents import FunctionTool, RunContextWrapper, ToolInputGuardrail, function_tool
 from agents.tool_context import ToolContext
 
 from sinan_agentic_core.mcp.context_protocol import MCPContextFactory
@@ -14,7 +16,9 @@ from sinan_agentic_core.mcp.tool_adapter import (
     _get_params_schema,
     _resolve_annotation,
     _resolve_schema,
+    _takes_context,
 )
+from sinan_agentic_core.registry.guardrail_registry import attach_tool_input_guardrails
 from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
 
 # ---------------------------------------------------------------------------
@@ -604,3 +608,187 @@ async def test_an_optional_container_accepts_a_list(adapter, tool_name):
 
     assert data["tags"] == ["x", "y"]
     assert data["grid"] == [["n"]]
+
+
+# ---------------------------------------------------------------------------
+# Tests: which invocation path a tool takes
+#
+# The paths are told apart by what the SDK's function-tool pipeline does and a
+# direct call does not: ``on_invoke_tool`` parses the arguments through the
+# tool's Pydantic model, which coerces ``"3"`` to ``3``, while a direct call
+# hands the callable exactly what the MCP client sent. Every tool below reports
+# the type it received, so the assertion names the path without reaching into
+# the adapter's internals.
+# ---------------------------------------------------------------------------
+
+
+@function_tool
+async def typed_tool(ctx: ToolContext, count: int) -> str:
+    """Report the type of the argument as received."""
+    return json.dumps({"count": count, "type": type(count).__name__, "ctx": ctx is not None})
+
+
+@function_tool
+async def contextless_tool(count: int) -> str:
+    """Take tool arguments and no context."""
+    return json.dumps({"count": count, "type": type(count).__name__})
+
+
+@function_tool
+def sync_tool(count: int) -> str:
+    """Return without awaiting."""
+    return json.dumps({"count": count, "type": type(count).__name__})
+
+
+async def reject_everything(data: Any) -> Any:
+    """A tool-input guardrail that would refuse the call."""
+    raise AssertionError("the guardrail must not need to run for the routing to hold")
+
+
+def _guarded(tool: Any) -> Any:
+    """A copy of *tool* carrying a tool-input guardrail, as an agent build produces."""
+    return attach_tool_input_guardrails(
+        [tool], [ToolInputGuardrail(guardrail_function=reject_everything)]
+    )[0]
+
+
+def _adapter_for(name: str, function: Any) -> MCPToolAdapter:
+    registry = ToolRegistry()
+    registry.register(ToolDefinition(name=name, function=function, description="Report a type"))
+    return MCPToolAdapter(registry, FakeContextFactory())
+
+
+async def test_a_decorated_tool_is_called_through_its_wrapped_callable():
+    adapter = _adapter_for("typed", typed_tool)
+
+    data = json.loads(await adapter.invoke("typed", count="3"))
+
+    assert data["type"] == "str", "the SDK's argument parsing ran, so the direct call did not"
+    assert data["ctx"] is True
+
+
+async def test_a_guarded_tool_stays_on_the_sdk_invoker():
+    adapter = _adapter_for("typed", _guarded(typed_tool))
+
+    data = json.loads(await adapter.invoke("typed", count="3"))
+
+    assert data["type"] == "int", "a guarded tool must not take the direct-call path"
+
+
+async def test_a_guarded_tool_does_not_reach_its_app_attached_impl():
+    reached: list[str] = []
+
+    async def impl(ctx, count):
+        reached.append("impl")
+        return "from impl"
+
+    guarded = _guarded(typed_tool)
+    guarded._impl = impl
+    adapter = _adapter_for("typed", guarded)
+
+    data = json.loads(await adapter.invoke("typed", count="3"))
+
+    assert reached == []
+    assert data["type"] == "int"
+
+
+async def test_an_app_attached_impl_still_wins_over_the_wrapped_callable():
+    async def impl(ctx, count):
+        return json.dumps({"source": "impl", "db": ctx.db_connector})
+
+    unguarded = copy.copy(typed_tool)
+    unguarded._impl = impl
+    adapter = _adapter_for("typed", unguarded)
+
+    data = json.loads(await adapter.invoke("typed", count=3))
+
+    assert data["source"] == "impl"
+    assert data["db"] == "fake_db", "an _impl receives the app context unwrapped"
+
+
+async def test_a_wrapped_callable_that_takes_no_context_is_called_with_arguments_only():
+    adapter = _adapter_for("contextless", contextless_tool)
+
+    data = json.loads(await adapter.invoke("contextless", count="3"))
+
+    assert data == {"count": "3", "type": "str"}
+
+
+async def test_a_wrapped_callable_that_is_not_async_is_returned_without_awaiting():
+    adapter = _adapter_for("sync", sync_tool)
+
+    data = json.loads(await adapter.invoke("sync", count="3"))
+
+    assert data == {"count": "3", "type": "str"}
+
+
+async def test_a_hand_built_function_tool_exposes_no_callable_and_uses_the_sdk_invoker():
+    async def on_invoke(ctx: ToolContext, input_json: str) -> str:
+        return json.dumps({"args": json.loads(input_json), "tool": ctx.tool_name})
+
+    hand_built = FunctionTool(
+        name="hand_built",
+        description="Built without the decorator",
+        params_json_schema={
+            "type": "object",
+            "properties": {"count": {"type": "integer"}},
+            "required": ["count"],
+            "additionalProperties": False,
+        },
+        on_invoke_tool=on_invoke,
+    )
+    assert getattr(hand_built, "__wrapped__", None) is None
+    adapter = _adapter_for("hand_built", hand_built)
+
+    data = json.loads(await adapter.invoke("hand_built", count=3))
+
+    assert data == {"args": {"count": 3}, "tool": "hand_built"}
+
+
+def test_a_replaced_tool_record_still_exposes_its_wrapped_callable():
+    """The registries hand records out through ``dataclasses.replace``."""
+    assert dataclasses.replace(typed_tool).__wrapped__ is typed_tool.__wrapped__
+    assert copy.deepcopy(typed_tool).__wrapped__ is typed_tool.__wrapped__
+
+
+async def test_a_tool_with_no_invocation_route_is_reported():
+    adapter = _adapter_for("unusable", object())
+
+    with pytest.raises(RuntimeError, match="no supported invocation method"):
+        await adapter.invoke("unusable")
+
+
+# ---------------------------------------------------------------------------
+# Tests: _takes_context
+# ---------------------------------------------------------------------------
+
+
+def _no_params() -> str:
+    return "no arguments at all"
+
+
+def _unannotated(ctx, count) -> str:
+    return "the first parameter asserts nothing"
+
+
+def _unresolvable(ctx: "NeverImported", count: int) -> str:  # noqa: F821
+    return "the annotation names a type nothing can import"
+
+
+def _run_context(ctx: RunContextWrapper, count: int) -> str:
+    return "the other spelling of the context parameter"
+
+
+@pytest.mark.parametrize(
+    "fn,expected",
+    [
+        (_no_params, False),
+        (_unannotated, False),
+        (_unresolvable, False),
+        (_run_context, True),
+        (typed_tool.__wrapped__, True),
+        (contextless_tool.__wrapped__, False),
+    ],
+)
+def test_takes_context(fn, expected):
+    assert _takes_context(fn) is expected

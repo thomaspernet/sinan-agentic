@@ -195,6 +195,25 @@ class GuardrailRegistry:
         return False
 
 
+def has_tool_input_guardrails(tool: Any) -> bool:
+    """Whether *tool* is a local function tool carrying a tool-input guardrail.
+
+    The counterpart to :func:`attach_tool_input_guardrails`: one function writes
+    the guardrails onto a tool, this one reads them back. Every caller that has
+    to know whether a tool is guarded — the run config that turns pre-approval
+    on, the MCP adapter that keeps a guarded tool off its direct-call fast path —
+    asks here, so the definition of "guarded" cannot drift between them.
+
+    Args:
+        tool: Any resolved tool. A hosted tool is never guarded — the SDK runs
+            tool-input guardrails for local function tools only.
+
+    Returns:
+        True when the tool is a FunctionTool with at least one tool-input guardrail.
+    """
+    return isinstance(tool, FunctionTool) and bool(tool.tool_input_guardrails)
+
+
 def attach_tool_input_guardrails(
     tools: list[Any], guardrails: list[ToolInputGuardrail[Any]]
 ) -> list[Any]:
