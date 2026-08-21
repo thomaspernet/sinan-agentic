@@ -19,6 +19,17 @@ from pathlib import Path
 # turn. ``BaseAgentRunner`` wires ``output_guardrails`` onto every agent it
 # builds and passes a session into every run path, so both paths are live here.
 #
+# 0.19.3 carries a second, unrelated fix this package depends on: before it,
+# ``ToolOutputTrimmer`` walked the name-keyed maps of a replayed tool schema
+# (``$defs``, ``definitions``, ``patternProperties``, ``dependentSchemas``) as if
+# their keys were schema keywords, so a definition or parameter named
+# ``description``/``title``/``examples`` was deleted while the ``$ref`` pointing
+# at it survived (#4110; #4036 fixed the same bug for ``properties`` in 0.19.2).
+# Pydantic keys ``$defs`` by class name, so the collision is reachable through the
+# SDK's own schema generation. ``ToolOutputTrimConfig`` makes that filter
+# declarable from ``agents.yaml``, and the corruption is silent — the model just
+# stops being able to call the tool.
+#
 # This floor subsumes the earlier 0.18.1 one, which closes Chat Completions
 # streams on early exit (#3689) — the case ``chat_streamed()`` and
 # ``BaseAgentRunner._execute_streamed()`` hit whenever a caller breaks out of
