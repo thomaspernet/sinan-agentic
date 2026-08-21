@@ -39,6 +39,15 @@ from pathlib import Path
 # would describe the same rejection differently depending on the entry point the
 # caller picked.
 #
+# 0.19.2 carries a fourth fix (#4038): ``FunctionTool`` exposes the callable
+# ``@function_tool`` decorated through a read-only ``__wrapped__`` descriptor,
+# retained on the generated invoker so it survives ``copy``, ``deepcopy``, and
+# the ``dataclasses.replace`` the registries hand records out through. The MCP
+# tool adapter probes it to call a decorated tool directly, which is what lets
+# an unguarded tool skip the argument round-trip ``on_invoke_tool`` needs. Below
+# this floor the probe finds nothing and every MCP call falls back to the SDK
+# invoker — slower, but not wrong, so nothing raises to signal the drop.
+#
 # This floor subsumes the earlier 0.18.1 one, which closes Chat Completions
 # streams on early exit (#3689) — the case ``chat_streamed()`` and
 # ``BaseAgentRunner._execute_streamed()`` hit whenever a caller breaks out of
