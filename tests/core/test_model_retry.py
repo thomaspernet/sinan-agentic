@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from agents import ModelRetryBackoffSettings, ModelRetrySettings, ModelSettings
+from agents import ModelRetryBackoffSettings, ModelRetrySettings
 from agents.retry import ModelRetryAdvice, ModelRetryNormalizedError, RetryPolicyContext
 from openai import APIConnectionError
 from pydantic import ValidationError
@@ -14,7 +14,6 @@ from sinan_agentic_core.core.model_retry import (
     ModelRetryConfig,
     RetryBackoffConfig,
     RetryTrigger,
-    apply_model_retry,
     build_model_retry_settings,
 )
 
@@ -192,38 +191,3 @@ class TestBuildModelRetrySettings:
         config = ModelRetryConfig(max_retries=4)
 
         assert build_model_retry_settings(config) is not build_model_retry_settings(config)
-
-
-class TestApplyModelRetry:
-    """The overlay both agent-building paths call to attach the translated policy."""
-
-    def test_no_policy_and_no_settings_stays_none(self) -> None:
-        """None lets the caller omit the kwarg so the SDK default applies."""
-        assert apply_model_retry(None) is None
-
-    def test_no_policy_returns_the_settings_untouched(self) -> None:
-        settings = ModelSettings(temperature=0.2)
-
-        assert apply_model_retry(None, settings) is settings
-
-    def test_declared_policy_lands_on_fresh_settings(self) -> None:
-        settings = apply_model_retry(ModelRetryConfig(max_retries=4))
-
-        assert settings.retry.max_retries == 4
-        assert settings.retry.policy is not None
-
-    def test_declared_policy_merges_into_existing_settings(self) -> None:
-        settings = apply_model_retry(
-            ModelRetryConfig(max_retries=4), ModelSettings(temperature=0.2)
-        )
-
-        assert settings.temperature == 0.2
-        assert settings.retry.max_retries == 4
-
-    def test_settings_in_hand_win_over_the_declared_policy(self) -> None:
-        settings = apply_model_retry(
-            ModelRetryConfig(max_retries=4),
-            ModelSettings(retry=ModelRetrySettings(max_retries=9)),
-        )
-
-        assert settings.retry.max_retries == 9

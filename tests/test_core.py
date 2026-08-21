@@ -2189,6 +2189,132 @@ class TestModelRetryWiring:
 
 
 # ------------------------------------------------------------------ #
+# Model call timeout (ModelSettings.timeout wiring)
+# ------------------------------------------------------------------ #
+
+
+@pytest.fixture
+def timeout_runner(_registries):
+    """Runner with agents covering each combination of a bound and a retry policy."""
+    agent_reg, tool_reg, guardrail_reg = _registries
+    agent_reg.register(
+        AgentDefinition(
+            name="bounded_agent",
+            description="bounded",
+            instructions="answer",
+            model_timeout=30.0,
+        )
+    )
+    agent_reg.register(
+        AgentDefinition(
+            name="bounded_retrying_agent",
+            description="bounded and retrying",
+            instructions="answer",
+            model_retry=ModelRetryConfig(max_retries=4),
+            model_timeout=30.0,
+        )
+    )
+    agent_reg.register(
+        AgentDefinition(name="plain_agent", description="plain", instructions="answer")
+    )
+
+    with (
+        patch("sinan_agentic_core.core.base_runner.get_agent_registry", return_value=agent_reg),
+        patch("sinan_agentic_core.core.base_runner.get_tool_registry", return_value=tool_reg),
+        patch(
+            "sinan_agentic_core.core.base_runner.get_guardrail_registry", return_value=guardrail_reg
+        ),
+    ):
+        return BaseAgentRunner()
+
+
+class TestModelTimeoutWiring:
+    async def test_create_agent_attaches_the_bound(self, timeout_runner, context):
+        agent = await timeout_runner.create_agent("bounded_agent", context)
+
+        assert agent.model_settings.timeout == 30.0
+
+    async def test_create_agent_leaves_the_bound_unset_when_not_declared(
+        self, timeout_runner, context
+    ):
+        agent = await timeout_runner.create_agent("plain_agent", context)
+
+        assert agent.model_settings.timeout is None
+
+    async def test_a_bound_needs_no_retry_policy(self, timeout_runner, context):
+        """The two are separate keys, so declaring one must not turn the other on."""
+        agent = await timeout_runner.create_agent("bounded_agent", context)
+
+        assert agent.model_settings.retry is None
+
+    async def test_a_bound_and_a_policy_reach_the_same_agent(self, timeout_runner, context):
+        agent = await timeout_runner.create_agent("bounded_retrying_agent", context)
+
+        assert agent.model_settings.timeout == 30.0
+        assert agent.model_settings.retry.max_retries == 4
+
+    async def test_the_bound_merges_with_computed_model_settings(self, timeout_runner, context):
+        """A dynamic model_settings_fn keeps its values and gains the bound."""
+        timeout_runner.agent_registry.register(
+            AgentDefinition(
+                name="bounded_computed_agent",
+                description="bounded",
+                instructions="answer",
+                model_timeout=30.0,
+                model_settings_fn=lambda ctx: ModelSettings(temperature=0.2),
+            )
+        )
+
+        agent = await timeout_runner.create_agent("bounded_computed_agent", context)
+
+        assert agent.model_settings.temperature == 0.2
+        assert agent.model_settings.timeout == 30.0
+
+    async def test_the_bound_survives_a_model_settings_override(self, timeout_runner, context):
+        """An override replaces the computed settings but must not drop the bound."""
+        agent = await timeout_runner.create_agent(
+            "bounded_agent", context, model_settings_override=ModelSettings(temperature=0.9)
+        )
+
+        assert agent.model_settings.temperature == 0.9
+        assert agent.model_settings.timeout == 30.0
+
+    async def test_an_explicit_timeout_on_an_override_wins(self, timeout_runner, context):
+        agent = await timeout_runner.create_agent(
+            "bounded_agent", context, model_settings_override=ModelSettings(timeout=5.0)
+        )
+
+        assert agent.model_settings.timeout == 5.0
+
+    async def test_agent_as_tool_sub_agent_carries_the_bound(self, timeout_runner, context):
+        """The bound rides on model settings, so it reaches every sub-agent branch."""
+        with patch.object(Agent, "as_tool", autospec=True, return_value=Mock()) as mock_as_tool:
+            await timeout_runner._build_tools(["bounded_agent"], context)
+
+        sub_agent = mock_as_tool.call_args.args[0]
+        assert sub_agent.model_settings.timeout == 30.0
+
+    async def test_fallback_branch_bounds_the_rescue_call(self, timeout_runner):
+        """The branch bypasses Runner.run, so the bound rides the client's own timeout."""
+        client = await TestModelRetryWiring()._run_fallback(timeout_runner, "bounded_agent")
+
+        client.with_options.assert_called_once_with(timeout=30.0)
+
+    async def test_fallback_branch_leaves_the_client_alone_when_not_declared(self, timeout_runner):
+        client = await TestModelRetryWiring()._run_fallback(timeout_runner, "plain_agent")
+
+        client.with_options.assert_not_called()
+
+    async def test_fallback_branch_carries_both_declarations(self, timeout_runner):
+        """One rebuild of the client, so neither declaration can drop the other."""
+        client = await TestModelRetryWiring()._run_fallback(
+            timeout_runner, "bounded_retrying_agent"
+        )
+
+        client.with_options.assert_called_once_with(max_retries=4, timeout=30.0)
+
+
+# ------------------------------------------------------------------ #
 # Tool-output trimming (RunConfig.call_model_input_filter wiring)
 # ------------------------------------------------------------------ #
 

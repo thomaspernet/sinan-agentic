@@ -1227,6 +1227,60 @@ class TestModelRetry:
 
 
 # ---------------------------------------------------------------------------
+# model_timeout key
+# ---------------------------------------------------------------------------
+
+
+class TestModelTimeout:
+    def _catalog(self, entry: dict) -> AgentCatalog:
+        return AgentCatalog(tool_groups={}, raw_agents={"researcher": entry})
+
+    def test_defaults_to_off(self) -> None:
+        catalog = self._catalog({"model": "fast", "description": "Reads papers"})
+        assert catalog.get("researcher").model_timeout is None
+
+    def test_parses_the_declared_bound(self) -> None:
+        catalog = self._catalog(
+            {"model": "fast", "description": "Reads papers", "model_timeout": 30}
+        )
+        assert catalog.get("researcher").model_timeout == 30.0
+
+    def test_is_independent_of_model_retry(self) -> None:
+        """The bound is a sibling key, so it does not buy a retry policy."""
+        catalog = self._catalog(
+            {"model": "fast", "description": "Reads papers", "model_timeout": 30}
+        )
+        entry = catalog.get("researcher")
+
+        assert entry.model_timeout == 30.0
+        assert entry.model_retry is None
+
+    @pytest.mark.parametrize("declared", [0, -1, float("inf"), float("nan")])
+    def test_rejects_an_unusable_bound(self, declared: float) -> None:
+        """A bound that can never be met fails the load that declared it.
+
+        Non-positive and infinite alike: the SDK rejects both, but only once the
+        agent is built, so the constraint lives here to fail the load instead.
+        """
+        catalog = self._catalog(
+            {"model": "fast", "description": "Reads papers", "model_timeout": declared}
+        )
+        with pytest.raises(ValidationError):
+            catalog.get("researcher")
+
+    def test_loads_from_yaml(self, tmp_path) -> None:
+        path = tmp_path / "agents.yaml"
+        path.write_text(textwrap.dedent("""\
+                agents:
+                  researcher:
+                    model: fast
+                    description: Reads papers
+                    model_timeout: 45.5
+            """))
+        assert load_agent_catalog(path).get("researcher").model_timeout == 45.5
+
+
+# ---------------------------------------------------------------------------
 # tool_output_trim key
 # ---------------------------------------------------------------------------
 

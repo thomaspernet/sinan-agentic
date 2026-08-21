@@ -33,7 +33,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "openai-agents>=0.18.2",  # OpenAI Agents SDK — >=0.18.1 closes Chat Completions streams on early exit
+    "openai-agents>=0.21.1",  # OpenAI Agents SDK — >=0.21.1 carries ModelSettings.timeout
     "openai>=1.40",  # Direct AsyncOpenAI / AsyncAzureOpenAI client construction
     "pydantic>=2.0",
     "pyyaml>=6.0",
