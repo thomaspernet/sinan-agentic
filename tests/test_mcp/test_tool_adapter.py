@@ -2,6 +2,7 @@
 
 import copy
 import dataclasses
+import functools
 import inspect
 import json
 from typing import Any
@@ -17,6 +18,7 @@ from sinan_agentic_core.mcp.tool_adapter import (
     _resolve_annotation,
     _resolve_schema,
     _takes_context,
+    _wrapped_callable,
 )
 from sinan_agentic_core.registry.guardrail_registry import attach_tool_input_guardrails
 from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
@@ -792,3 +794,113 @@ def _run_context(ctx: RunContextWrapper, count: int) -> str:
 )
 def test_takes_context(fn, expected):
     assert _takes_context(fn) is expected
+
+
+# ---------------------------------------------------------------------------
+# Tests: which callable the direct path is willing to reach
+#
+# The direct path spreads the MCP arguments as ``**params``, so it only takes a
+# callable every parameter of which accepts one. A tool declaring a
+# positional-only parameter, ``*args`` or ``**kwargs`` is mapped by kind in the
+# SDK's ``FunctionSchema.to_call_args`` and keeps that invoker.
+# ---------------------------------------------------------------------------
+
+
+@function_tool
+async def varargs_tool(*tags: str) -> str:
+    """Collect its arguments through ``*args``."""
+    return json.dumps({"tags": list(tags)})
+
+
+@function_tool
+async def positional_only_tool(count: int, /) -> str:
+    """Declare a parameter that cannot be passed by name."""
+    return json.dumps({"count": count, "type": type(count).__name__})
+
+
+@function_tool(strict_mode=False)
+async def kwargs_tool(**extras: str) -> str:
+    """Collect its arguments through ``**kwargs``.
+
+    A ``**kwargs`` parameter needs an open mapping in the schema, which the
+    SDK's strict schema forbids, so the tool is declared non-strict.
+    """
+    return json.dumps({"extras": extras})
+
+
+async def test_a_varargs_tool_keeps_the_sdk_invoker():
+    adapter = _adapter_for("varargs", varargs_tool)
+
+    data = json.loads(await adapter.invoke("varargs", tags=["a", "b"]))
+
+    assert data == {"tags": ["a", "b"]}, "the SDK spreads the array into *args"
+
+
+async def test_a_positional_only_tool_keeps_the_sdk_invoker():
+    adapter = _adapter_for("positional_only", positional_only_tool)
+
+    data = json.loads(await adapter.invoke("positional_only", count="3"))
+
+    assert data["type"] == "int", "a positional-only parameter must not take the direct path"
+    assert data["count"] == 3
+
+
+async def test_a_kwargs_tool_keeps_the_sdk_invoker():
+    adapter = _adapter_for("kwargs", kwargs_tool)
+
+    data = json.loads(await adapter.invoke("kwargs", extras={"a": "b"}))
+
+    assert data == {"extras": {"a": "b"}}, "the SDK unpacks the mapping into **kwargs"
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [varargs_tool, positional_only_tool, kwargs_tool],
+    ids=["varargs", "positional_only", "kwargs"],
+)
+def test_a_signature_the_sdk_maps_by_kind_offers_no_direct_callable(tool):
+    assert _wrapped_callable(tool) is None
+
+
+def test_a_decorated_tool_with_ordinary_parameters_offers_its_callable():
+    assert _wrapped_callable(typed_tool) is typed_tool.__wrapped__
+
+
+# ---------------------------------------------------------------------------
+# Tests: a ``functools.wraps`` marker is not a FunctionTool callable
+# ---------------------------------------------------------------------------
+
+
+def _traced(fn):
+    """An ordinary decorator, of the kind ``functools.wraps`` is written for."""
+
+    @functools.wraps(fn)
+    async def inner(*args, **kwargs):
+        _traced.calls.append(fn.__name__)
+        return await fn(*args, **kwargs)
+
+    return inner
+
+
+_traced.calls = []
+
+
+@_traced
+async def decorated_raw_tool(ctx, query: str) -> str:
+    """A raw async tool that an ordinary decorator wrapped."""
+    return json.dumps({"query": query, "db": ctx.db_connector})
+
+
+async def test_a_wraps_marker_on_a_raw_tool_does_not_divert_it_from_its_context():
+    _traced.calls.clear()
+    assert decorated_raw_tool.__wrapped__ is not None, "functools.wraps set the marker"
+    adapter = _adapter_for("decorated_raw", decorated_raw_tool)
+
+    data = json.loads(await adapter.invoke("decorated_raw", query="hello"))
+
+    assert data == {"query": "hello", "db": "fake_db"}
+    assert _traced.calls == ["decorated_raw_tool"], "the decorator itself must still run"
+
+
+def test_a_wraps_marker_outside_a_function_tool_offers_no_direct_callable():
+    assert _wrapped_callable(decorated_raw_tool) is None

@@ -9,7 +9,10 @@ Invocation paths, in the order :meth:`MCPToolAdapter.invoke` tries them:
    SDK's ``FunctionTool.__wrapped__`` (every ``@function_tool``-decorated tool
    exposes it, and it survives the ``dataclasses.replace`` the registries hand
    records out through) or through an ``_impl`` attribute the app attached
-   itself. Skips the argument round-trip path 2 pays for.
+   itself. Skips the argument round-trip path 2 pays for. A callable is only
+   reached this way when every parameter can be passed by name, since the
+   arguments go in as ``**params``; the SDK owns the mapping for every other
+   parameter kind, so those tools stay on path 2.
 
 2. **``FunctionTool.on_invoke_tool``** — build a synthetic ``ToolContext`` from
    the app's ``MCPContextFactory`` and let the SDK parse the arguments back out
@@ -37,7 +40,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
-from agents import RunContextWrapper
+from agents import FunctionTool, RunContextWrapper
 from agents.tool_context import ToolContext
 
 from ..registry.guardrail_registry import has_tool_input_guardrails
@@ -82,6 +85,42 @@ def _takes_context(fn: Callable[..., Any]) -> bool:
     if annotation is inspect.Parameter.empty:
         return False
     return (get_origin(annotation) or annotation) in (RunContextWrapper, ToolContext)
+
+
+# The parameter kinds ``**params`` reaches. A positional-only parameter,
+# ``*args`` or ``**kwargs`` is mapped by kind in
+# ``agents.function_schema.FunctionSchema.to_call_args``; a tool declaring one
+# keeps that invoker rather than having the mapping re-implemented here.
+_KEYWORD_PASSABLE_KINDS = frozenset(
+    {inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY}
+)
+
+
+def _wrapped_callable(fn: Any) -> Callable[..., Any] | None:
+    """The callable behind *fn* when it can be called with the MCP arguments directly.
+
+    ``__wrapped__`` is read from a :class:`~agents.FunctionTool` only. The SDK
+    defines it there as a read-only descriptor that raises ``AttributeError``
+    when the tool wraps no callable — a hand-built tool, an agent-as-tool — so
+    the probe falls through rather than mistaking a missing callable for a
+    usable one. Every other object carrying the attribute means something else:
+    ``functools.wraps`` sets it on any wrapper it builds, and a raw async tool
+    behind an ordinary decorator belongs on path 3 with its app context.
+
+    Returns ``None`` when there is no callable to reach or when its signature
+    needs the SDK's parameter-kind mapping.
+    """
+    if not isinstance(fn, FunctionTool):
+        return None
+
+    wrapped: Callable[..., Any] | None = getattr(fn, "__wrapped__", None)
+    if wrapped is None:
+        return None
+
+    kinds = (param.kind for param in inspect.signature(wrapped).parameters.values())
+    if not all(kind in _KEYWORD_PASSABLE_KINDS for kind in kinds):
+        return None
+    return wrapped
 
 
 _JSON_NULL = "null"
@@ -327,11 +366,7 @@ class MCPToolAdapter:
             if impl is not None:
                 return await self._invoke_impl(impl, params)
 
-            # ``__wrapped__`` is the callable ``@function_tool`` decorated. It
-            # raises AttributeError on a tool that has none — a hand-built one,
-            # an agent-as-tool — so the probe falls through rather than
-            # mistaking a missing callable for a usable one.
-            wrapped = getattr(fn, "__wrapped__", None)
+            wrapped = _wrapped_callable(fn)
             if wrapped is not None:
                 return await self._invoke_wrapped(wrapped, tool_name, params)
 
@@ -372,11 +407,14 @@ class MCPToolAdapter:
         """Call the callable behind a ``@function_tool``-decorated tool directly.
 
         The arguments go in as they arrived, so the JSON the SDK would parse back
-        into them is never built for the call itself. A callable that declares a
-        context parameter still gets the same synthetic ``ToolContext`` path 2
-        builds; one that declares none is called with the tool arguments alone.
-        Decorating a sync function is supported by the SDK, so the result is
-        awaited only when there is something to await.
+        into them is never built for the call itself. Spreading them as keywords
+        is the whole of the calling convention here, which is why
+        :func:`_wrapped_callable` only offers up a callable whose parameters all
+        accept one. A callable that declares a context parameter still gets the
+        same synthetic ``ToolContext`` path 2 builds; one that declares none is
+        called with the tool arguments alone. Decorating a sync function is
+        supported by the SDK, so the result is awaited only when there is
+        something to await.
         """
         async with self._context_factory.tool_context() as app_ctx:
             args = (

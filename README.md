@@ -651,12 +651,24 @@ The `MCPToolAdapter` bridges MCP calls to your registered `@function_tool` funct
 
 1. MCP client calls a tool (e.g., `search_database(query="test")`)
 2. The adapter creates a context via your `MCPContextFactory`
-3. It builds a synthetic `ToolContext` and calls `FunctionTool.on_invoke_tool()`
+3. It calls the function `@function_tool` decorated, reached through the SDK's
+   `FunctionTool.__wrapped__`, passing the arguments straight through
 4. The tool function runs with a real database connection, just like when called by an agent
 5. The result is returned to the MCP client
 6. The context is cleaned up (connections closed)
 
 Each tool call gets its own context - no shared state between calls.
+
+A direct call reaches the function *below* the SDK's function-tool pipeline, so
+JSON-schema validation, tool-input guardrails, failure handling and tracing do
+not run. A tool falls back to `FunctionTool.on_invoke_tool()` — a synthetic
+`ToolContext` plus the arguments as JSON — whenever a direct call would change
+its behavior:
+
+- it declares tool-input guardrails, which only the SDK pipeline runs
+- it exposes no function to call: a hand-built `FunctionTool`, or an agent-as-tool
+- its signature declares a positional-only parameter, `*args`, or `**kwargs`,
+  which the SDK maps by parameter kind
 
 ### API reference
 
