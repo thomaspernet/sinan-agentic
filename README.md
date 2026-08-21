@@ -116,7 +116,22 @@ async for event in chat_streamed("What's the weather?", "weather_assistant", ses
             ...
 ```
 
-`error_kind` is a `RunErrorKind` value — `max_turns`, `context_overflow`, `model_refusal`, `model_behavior`, or `unknown` — carried as a plain string so the payload stays JSON-serializable. `RunErrorKind` is a `str` enum, so a comparison against either the member or its value works. Branch on it to decide whether a retry is worth attempting; an API layer that matched the message text instead would break the next time upstream rewords it.
+`error_kind` is a `RunErrorKind` value — `max_turns`, `context_overflow`, `model_refusal`, `model_behavior`, `input_guardrail_tripwire`, `output_guardrail_tripwire`, or `unknown` — carried as a plain string so the payload stays JSON-serializable. `RunErrorKind` is a `str` enum, so a comparison against either the member or its value works. Branch on it to decide whether a retry is worth attempting; an API layer that matched the message text instead would break the next time upstream rewords it.
+
+When a guardrail stops the run, the report carries a `guardrail` entry as well. The SDK's message names the guardrail's *class*, which is `InputGuardrail` for every input guardrail an agent declares, so the message alone never says which check rejected the request. The entry names the guardrail as it was registered — the name `agents.yaml` writes — and lists every guardrail that finished before the run stopped.
+
+```python
+result = await chat("My card number is ...", "weather_assistant", session)
+# {"success": False,
+#  "error": "Guardrail InputGuardrail triggered tripwire",
+#  "error_kind": "input_guardrail_tripwire",
+#  "guardrail": {"name": "blocks_pii",
+#                "results": [{"name": "off_topic", "tripwire_triggered": False},
+#                            {"name": "blocks_pii", "tripwire_triggered": True}]},
+#  "session_id": "..."}
+```
+
+All three chat functions and `run_workflow()` report the same set. Neither tripwire kind is retryable: a guardrail is a declared check saying no, so a second call that reaches a different answer has defeated it rather than recovered from a limit.
 
 ## Token Usage Tracking
 
@@ -400,6 +415,8 @@ register_agent(AgentDefinition(
 Tool-input guardrails attach to every local function tool the agent resolves. Registry tools are copied first, so one agent's guardrails never leak into another agent using the same tool. Hosted tools (web search, file search) are left untouched — the SDK runs tool-input guardrails for local function tools only.
 
 Both agent-building paths wire declared guardrails the same way: `BaseAgentRunner.create_agent()` and `create_agent_from_registry()`.
+
+The registered `name` is the guardrail's only identifier. Registration stamps it onto the SDK guardrail object, which otherwise falls back to the decorated function's `__name__` — so the tripwire report, the trace span, and the catalog all name the guardrail the way `agents.yaml` does. See [Reporting a failed run](#reporting-a-failed-run) for what a tripped guardrail reports back.
 
 ## Tool Catalog (YAML-driven tool metadata)
 
@@ -775,6 +792,8 @@ This is handled by `structured_tool_error()`, which is automatically wired into 
 | Provider `context_length_exceeded` | Narrow the request, or split it across several calls |
 | `ModelRefusalError` | Do not re-send the same request — restate it or handle it another way |
 | `ModelBehaviorError` | The response missed its output schema; retry once with a simpler request |
+| `InputGuardrailTripwireTriggered` | A guardrail rejected the request; do not re-send it |
+| `OutputGuardrailTripwireTriggered` | A guardrail blocked the answer; report it rather than retrying |
 | "not found" in message | Verify the ID exists in your context |
 | "required" in message | Check context for available IDs and provide all required fields |
 | Other | Review the error message and retry with corrected input |

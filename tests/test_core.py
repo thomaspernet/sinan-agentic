@@ -40,7 +40,13 @@ from sinan_agentic_core.registry.guardrail_registry import (
 )
 from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
 from sinan_agentic_core.session.agent_session import AgentSession
-from tests.conftest import make_context_overflow_error
+from tests.conftest import (
+    make_context_overflow_error,
+    make_input_tripwire_error,
+    make_output_tripwire_error,
+    registered_input_guardrail,
+    registered_output_guardrail,
+)
 
 
 @pytest.fixture
@@ -1658,6 +1664,23 @@ class TestStructuredToolError:
         data = json.loads(result)
         assert "schema" in data["retry_hint"].lower()
 
+    def test_input_tripwire_hint_tells_the_parent_not_to_re_send(self):
+        """A guardrail rejection is not a limit -- a retry that gets through has
+        defeated the check."""
+        from sinan_agentic_core.core.errors import structured_tool_error
+
+        error = make_input_tripwire_error(registered_input_guardrail("blocks_pii"))
+        data = json.loads(structured_tool_error(None, error))
+        assert "guardrail" in data["retry_hint"].lower()
+        assert "do not" in data["retry_hint"].lower()
+
+    def test_output_tripwire_hint_says_the_answer_was_withheld(self):
+        from sinan_agentic_core.core.errors import structured_tool_error
+
+        error = make_output_tripwire_error(registered_output_guardrail("blocks_secrets"))
+        data = json.loads(structured_tool_error(None, error))
+        assert "blocked" in data["retry_hint"].lower()
+
     def test_typed_hint_wins_over_message_text(self):
         """Regression for #47 -- the hint comes from the exception class, so a
         refusal whose text says "not found" still gets the refusal hint."""
@@ -1782,8 +1805,8 @@ class TestGuardrailCategoryWiring:
             "guarded_agent", context=AgentContext(database_connector=Mock())
         )
 
-        assert [g.get_name() for g in agent.input_guardrails] == ["guard_input"]
-        assert [g.get_name() for g in agent.output_guardrails] == ["guard_output"]
+        assert [g.get_name() for g in agent.input_guardrails] == ["g_in"]
+        assert [g.get_name() for g in agent.output_guardrails] == ["g_out"]
 
     async def test_create_agent_attaches_tool_input_guardrails(self, guardrail_runner):
         agent = await guardrail_runner.create_agent(
@@ -1791,7 +1814,7 @@ class TestGuardrailCategoryWiring:
         )
 
         tool = agent.tools[0]
-        assert [g.get_name() for g in tool.tool_input_guardrails] == ["guard_tool_input"]
+        assert [g.get_name() for g in tool.tool_input_guardrails] == ["g_tool"]
 
     async def test_registry_tool_is_not_mutated(self, guardrail_runner, _guardrail_registries):
         _, _, _, echo = _guardrail_registries
