@@ -27,7 +27,6 @@ from typing import Any
 from agents import Agent, ModelResponse, Runner, Usage
 from agents.models.interface import Model
 from openai import APIConnectionError
-from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 
 from sinan_agentic_core.core.base_runner import _CollectingSessionWrapper
 from sinan_agentic_core.core.model_retry import (
@@ -36,6 +35,7 @@ from sinan_agentic_core.core.model_retry import (
     apply_model_retry,
 )
 from sinan_agentic_core.session.agent_session import AgentSession
+from tests.core.conftest import assistant_message
 
 # A turn committed to the session before the run under test. This is what an
 # unconditional rewind pops, and it is not part of the failed request.
@@ -43,22 +43,11 @@ COMMITTED_INPUT = "the turn already in the session"
 
 USER_INPUT = "the turn that fails once"
 
+SECOND_USER_INPUT = "the next turn, which also fails once"
+
 RECOVERED_OUTPUT = "the answer the second attempt produces"
 
-ASSISTANT_ROLE = "assistant"
-
 USER_ROLE = "user"
-
-
-def _assistant_message(text: str) -> ResponseOutputMessage:
-    """Build the single assistant message the recovered attempt answers with."""
-    return ResponseOutputMessage(
-        id="msg_recovered",
-        content=[ResponseOutputText(annotations=[], text=text, type="output_text")],
-        role=ASSISTANT_ROLE,
-        status="completed",
-        type="message",
-    )
 
 
 class FailsOnceModel(Model):
@@ -77,7 +66,7 @@ class FailsOnceModel(Model):
         if self.attempts == 1:
             raise APIConnectionError(request=None)
         return ModelResponse(
-            output=[_assistant_message(RECOVERED_OUTPUT)],
+            output=[assistant_message(RECOVERED_OUTPUT, message_id="msg_recovered")],
             usage=Usage(),
             response_id="resp_recovered",
         )
@@ -143,13 +132,28 @@ class TestNonStreamedRetry:
             RECOVERED_OUTPUT,
         ]
 
-    async def test_a_retry_does_not_duplicate_the_turn_it_re_sends(self) -> None:
-        """The request is re-issued; the input it was built from is saved once."""
-        session = await _session_with_committed_turn("input-not-duplicated")
+    async def test_a_second_retried_turn_keeps_every_earlier_turn(self) -> None:
+        """A rewind cuts deeper the longer the conversation behind the retry is.
 
-        await Runner.run(_retrying_agent(FailsOnceModel()), USER_INPUT, session=session)
+        The first turn leaves three items in the session, so the second turn's
+        retry sits on accumulated history rather than on one committed turn.
+        That is the state an unconditional rewind takes the most out of.
+        """
+        session = await _session_with_committed_turn("two-retried-turns")
+        first, second = FailsOnceModel(), FailsOnceModel()
 
-        assert _contents(await session.get_items()).count(USER_INPUT) == 1
+        await Runner.run(_retrying_agent(first), USER_INPUT, session=session)
+        await Runner.run(_retrying_agent(second), SECOND_USER_INPUT, session=session)
+
+        assert (first.attempts, second.attempts) == (2, 2)
+
+        assert _contents(await session.get_items()) == [
+            COMMITTED_INPUT,
+            USER_INPUT,
+            RECOVERED_OUTPUT,
+            SECOND_USER_INPUT,
+            RECOVERED_OUTPUT,
+        ]
 
 
 class TestFallbackSessionWrapper:
