@@ -58,7 +58,9 @@ class AgentOrchestrator(BaseAgentRunner):
             ``{"success": True, "result": ..., "usage": ..., "session_id": ...}``
             on success, or ``{"success": False, "error": str, "error_kind": str,
             "session_id": ...}`` on failure. ``error_kind`` is a
-            ``RunErrorKind`` value naming why the run failed.
+            ``RunErrorKind`` value naming why the run failed; a guardrail
+            tripwire adds a ``guardrail`` entry naming the check that rejected
+            the run.
         """
         # 1. Setup session and context using base class methods
         session = self.setup_session(session_id=session_id, initial_history=initial_history)

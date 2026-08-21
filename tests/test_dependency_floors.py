@@ -30,6 +30,15 @@ from pathlib import Path
 # declarable from ``agents.yaml``, and the corruption is silent — the model just
 # stops being able to call the tool.
 #
+# 0.19.2 carries a third fix (#4071): before it, the run data attached to a
+# guardrail tripwire held every completed result under ``Runner.run_streamed()``
+# but an empty list under ``Runner.run()`` and ``Runner.run_sync()``, which
+# discarded their accumulator when the tripwire raised. ``run_error_payload()``
+# reports that set, and ``chat()``, ``chat_with_hooks()``, and
+# ``chat_streamed()`` all funnel through it — so below this floor one handler
+# would describe the same rejection differently depending on the entry point the
+# caller picked.
+#
 # This floor subsumes the earlier 0.18.1 one, which closes Chat Completions
 # streams on early exit (#3689) — the case ``chat_streamed()`` and
 # ``BaseAgentRunner._execute_streamed()`` hit whenever a caller breaks out of

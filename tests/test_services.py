@@ -33,7 +33,13 @@ from sinan_agentic_core.services.events import (
 )
 from sinan_agentic_core.services.hooks import StreamingRunHooks
 from sinan_agentic_core.session.agent_session import AgentSession
-from tests.conftest import collection_field_names, edit_every_level, make_context_overflow_error
+from tests.conftest import (
+    collection_field_names,
+    edit_every_level,
+    make_context_overflow_error,
+    make_input_tripwire_error,
+    registered_input_guardrail,
+)
 
 # Every run failure a chat function classifies, and the kind it must report.
 RUN_FAILURES = [
@@ -1325,3 +1331,91 @@ class TestChatStreamedAnswerOwnsItsToolList:
         payload["tools_called"].append("added_by_consumer")
 
         assert accumulator == ["search"]
+
+
+# -- guardrail tripwires across all three chat functions -----------------------
+
+
+class TestGuardrailTripwireReachesEveryChatFunction:
+    """One tripwire, three entry points, one report.
+
+    ``chat()`` and ``chat_with_hooks()`` run through ``Runner.run()`` while
+    ``chat_streamed()`` runs through ``Runner.run_streamed()``. Before
+    openai-agents 0.19.2 the non-streamed pair discarded the guardrail
+    accumulator when the tripwire raised, so the same handler saw an empty
+    result list there and a full one under streaming. All three now report the
+    guardrail that rejected the run and everything that finished beside it.
+    """
+
+    @staticmethod
+    def _get_chat_module():
+        import sys
+
+        return sys.modules["sinan_agentic_core.services.chat"]
+
+    @staticmethod
+    def _tripwire():
+        return make_input_tripwire_error(
+            registered_input_guardrail("blocks_pii"),
+            passed=[registered_input_guardrail("off_topic")],
+        )
+
+    EXPECTED_GUARDRAIL = {
+        "name": "blocks_pii",
+        "results": [
+            {"name": "off_topic", "tripwire_triggered": False},
+            {"name": "blocks_pii", "tripwire_triggered": True},
+        ],
+    }
+
+    async def _chat_failure(self):
+        chat_mod = self._get_chat_module()
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(side_effect=self._tripwire())
+                result = await chat_mod.chat(
+                    "Hi", agent_name="a", session=AgentSession(session_id="test")
+                )
+        return {key: result[key] for key in ("error", "error_kind", "guardrail")}
+
+    async def _hooks_failure(self):
+        chat_mod = self._get_chat_module()
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run = AsyncMock(side_effect=self._tripwire())
+                events = [
+                    event
+                    async for event in chat_mod.chat_with_hooks(
+                        "Hi", agent_name="a", session=AgentSession(session_id="test")
+                    )
+                ]
+        return next(e["data"] for e in events if e["event"] == "error")
+
+    async def _streamed_failure(self):
+        chat_mod = self._get_chat_module()
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run_streamed.side_effect = self._tripwire()
+                events = [
+                    event
+                    async for event in chat_mod.chat_streamed(
+                        "Hi", agent_name="a", session=AgentSession(session_id="test")
+                    )
+                ]
+        return next(e["data"] for e in events if e["event"] == "error")
+
+    async def test_chat_reports_the_guardrail(self):
+        failure = await self._chat_failure()
+        assert failure["error_kind"] == RunErrorKind.INPUT_GUARDRAIL_TRIPWIRE.value
+        assert failure["guardrail"] == self.EXPECTED_GUARDRAIL
+
+    async def test_all_three_report_the_same_thing(self):
+        reports = [
+            await self._chat_failure(),
+            await self._hooks_failure(),
+            await self._streamed_failure(),
+        ]
+        assert reports.count(reports[0]) == len(reports)

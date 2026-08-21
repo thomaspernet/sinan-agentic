@@ -681,6 +681,50 @@ class TestGuardrailCategory:
             GuardrailDefinition("g", "d", lambda: None, "sideways")
 
 
+class TestGuardrailDefinitionNamesTheSDKObject:
+    """One guardrail, one identifier: whatever registered it.
+
+    An SDK guardrail falls back to the decorated function's ``__name__`` when
+    its own ``name`` is unset, so without this the tripwire exception, the trace
+    span, and the catalog would each report a different string for the same
+    guardrail -- and none of them the name ``agents.yaml`` writes.
+    """
+
+    @staticmethod
+    def _sdk_guardrail(decorator):
+        async def _check(ctx, agent, data):
+            return GuardrailFunctionOutput(output_info=None, tripwire_triggered=False)
+
+        return decorator(_check)
+
+    @pytest.mark.parametrize(
+        ("decorator", "category"),
+        [
+            (input_guardrail, GuardrailCategory.INPUT),
+            (output_guardrail, GuardrailCategory.OUTPUT),
+            (tool_input_guardrail, GuardrailCategory.TOOL_INPUT),
+        ],
+    )
+    def test_registration_names_the_guardrail(self, decorator, category):
+        guardrail = self._sdk_guardrail(decorator)
+        GuardrailDefinition("blocks_pii", "d", guardrail, category)
+        assert guardrail.get_name() == "blocks_pii"
+
+    def test_the_function_name_no_longer_leaks_through(self):
+        guardrail = self._sdk_guardrail(input_guardrail)
+        GuardrailDefinition("blocks_pii", "d", guardrail, GuardrailCategory.INPUT)
+        assert guardrail.get_name() != "_check"
+
+    def test_a_plain_callable_is_left_alone(self):
+        """Only an SDK guardrail carries a ``name`` slot to stamp."""
+
+        def fn():
+            return None
+
+        GuardrailDefinition("g", "d", fn, GuardrailCategory.INPUT)
+        assert not hasattr(fn, "name")
+
+
 class TestResolveGuardrails:
     @staticmethod
     def _registry():
@@ -1019,15 +1063,15 @@ class TestAgentFactoryGuardrails:
 
         agent = create_agent_from_registry("_fg_guarded_agent")
 
-        assert [g.get_name() for g in agent.input_guardrails] == ["guard_input"]
-        assert [g.get_name() for g in agent.output_guardrails] == ["guard_output"]
+        assert [g.get_name() for g in agent.input_guardrails] == ["_fg_in"]
+        assert [g.get_name() for g in agent.output_guardrails] == ["_fg_out"]
 
     def test_tool_input_guardrails_attach_to_tools(self, factory_guardrails):
         from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
 
         agent = create_agent_from_registry("_fg_guarded_agent")
 
-        assert [g.get_name() for g in agent.tools[0].tool_input_guardrails] == ["guard_tool_input"]
+        assert [g.get_name() for g in agent.tools[0].tool_input_guardrails] == ["_fg_tool"]
 
     def test_registry_tool_is_not_mutated(self, factory_guardrails):
         from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
