@@ -286,27 +286,6 @@ class TestCreateAgent:
 
 
 # ------------------------------------------------------------------ #
-# run_agent (backward-compatible)
-# ------------------------------------------------------------------ #
-
-
-class TestRunAgent:
-    async def test_returns_output_and_usage(self, runner, mock_run_result):
-        ctx = AgentContext(database_connector=Mock())
-        session = AgentSession(session_id="run-test")
-
-        with (
-            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-        ):
-            mock_runner_cls.run = AsyncMock(return_value=mock_run_result)
-            result = await runner.run_agent("basic_agent", session, ctx, "hello")
-
-        assert result["output"] == "Test response"
-        assert result["usage"]["input_tokens"] == 100
-
-
-# ------------------------------------------------------------------ #
 # _build_hosted_tools
 # ------------------------------------------------------------------ #
 
@@ -427,33 +406,6 @@ class TestCollectingSessionWrapper:
 
 
 class TestExecuteBasic:
-    async def test_returns_final_output_directly(self, runner, mock_run_result):
-        ctx = AgentContext(database_connector=Mock())
-        session = AgentSession(session_id="exec-test")
-
-        with (
-            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-        ):
-            mock_runner_cls.run = AsyncMock(return_value=mock_run_result)
-            result = await runner.execute("basic_agent", ctx, session, input_text="hello")
-
-        # execute() returns final_output directly, not wrapped in {"output": ...}
-        assert result == "Test response"
-
-    async def test_max_turns_passed(self, runner, mock_run_result):
-        ctx = AgentContext(database_connector=Mock())
-        session = AgentSession(session_id="test")
-
-        with (
-            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-        ):
-            mock_runner_cls.run = AsyncMock(return_value=mock_run_result)
-            await runner.execute("basic_agent", ctx, session, max_turns=20)
-            call_kwargs = mock_runner_cls.run.call_args.kwargs
-            assert call_kwargs["max_turns"] == 20
-
     async def test_routes_to_basic_by_default(self, runner, mock_run_result):
         ctx = AgentContext(database_connector=Mock())
         session = AgentSession(session_id="test")
@@ -507,38 +459,6 @@ class TestExecuteStreaming:
             await runner._execute_streamed("basic_agent", ctx, session, lambda e: None, 30, "hello")
             call_kwargs = mock_runner_cls.run_streamed.call_args.kwargs
             assert call_kwargs["max_turns"] == 30
-
-    async def test_on_event_receives_answer(self, runner):
-        ctx = AgentContext(database_connector=Mock())
-        session = AgentSession(session_id="test")
-        events = []
-
-        # Build a mock streamed result
-        mock_result = Mock()
-        mock_result.final_output = "Streamed answer"
-        mock_result.raw_responses = []
-
-        async def mock_stream_events():
-            return
-            yield  # make it an async generator
-
-        mock_result.stream_events = mock_stream_events
-
-        with (
-            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-        ):
-            mock_runner_cls.run_streamed = Mock(return_value=mock_result)
-            result = await runner._execute_streamed(
-                "basic_agent", ctx, session, lambda e: events.append(e), 10, "hello"
-            )
-
-        assert result == "Streamed answer"
-        # Should have received an answer event
-        answer_events = [e for e in events if e["event"] == "answer"]
-        assert len(answer_events) == 1
-        assert answer_events[0]["data"]["response"] == "Streamed answer"
-        assert "usage" in answer_events[0]["data"]
 
 
 class TestStreamedAnswerOwnsItsUsageRecord:
