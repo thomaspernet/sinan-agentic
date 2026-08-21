@@ -7,6 +7,7 @@ Also retains run_agent() for backward compatibility.
 """
 
 import copy
+import inspect
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -165,7 +166,7 @@ class BaseAgentRunner:
         agent_def = self._get_agent_definition(agent_name)
         ctx_wrapper = RunContextWrapper(context)
 
-        instructions = self._build_instructions(agent_def, ctx_wrapper)
+        instructions = await self._build_instructions(agent_def, ctx_wrapper)
         agent_tools = await self._build_tools(agent_def.tools, context)
         hosted = self._build_hosted_tools(agent_def.hosted_tools)
         agent_tools.extend(hosted)
@@ -451,7 +452,7 @@ class BaseAgentRunner:
             )
 
             ctx_wrapper = RunContextWrapper(context)
-            instructions = self._build_instructions(agent_def, ctx_wrapper)
+            instructions = await self._build_instructions(agent_def, ctx_wrapper)
 
             # NOTE: a declared tool_output_trim does not reach this prompt. The
             # SDK applies the filter through RunConfig.call_model_input_filter,
@@ -814,8 +815,13 @@ class BaseAgentRunner:
             )
         return agent_def
 
-    def _build_instructions(self, agent_def: Any, ctx_wrapper: RunContextWrapper[Any]) -> str:
+    async def _build_instructions(self, agent_def: Any, ctx_wrapper: RunContextWrapper[Any]) -> str:
         """Build agent instructions, handling both static and dynamic.
+
+        Dynamic instructions follow the SDK's await-by-result rule: the callable
+        is invoked once and its result awaited when awaitable, so an ``async def``
+        builder — or a builder object with an async ``__call__`` — resolves to its
+        text instead of leaking a coroutine repr into the system prompt.
 
         Args:
             agent_def: Agent definition with instructions
@@ -826,7 +832,8 @@ class BaseAgentRunner:
         """
         instructions = agent_def.instructions
         if callable(instructions):
-            instructions = instructions(ctx_wrapper, agent_def)
+            result = instructions(ctx_wrapper, agent_def)
+            instructions = await result if inspect.isawaitable(result) else result
         return str(instructions)
 
     async def _build_tools(self, tool_names: list[str], context: Any) -> list[Any]:

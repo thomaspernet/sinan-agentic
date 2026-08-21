@@ -196,6 +196,22 @@ class TestCreateAgent:
         ctx = AgentContext(database_connector=Mock())
         agent = await runner.create_agent("dynamic_agent", ctx)
         assert agent.name == "dynamic_agent"
+        assert agent.instructions == "dynamic instructions"
+
+    async def test_async_callable_instructions(self, runner):
+        async def build(ctx, agent_def):
+            return "async instructions"
+
+        runner.agent_registry.register(
+            AgentDefinition(
+                name="async_dynamic_agent",
+                description="async dynamic",
+                instructions=build,
+            )
+        )
+        ctx = AgentContext(database_connector=Mock())
+        agent = await runner.create_agent("async_dynamic_agent", ctx)
+        assert agent.instructions == "async instructions"
 
     async def test_output_dataclass_type(self, runner):
         from pydantic import BaseModel
@@ -1435,17 +1451,63 @@ class TestPrivateHelpers:
         with pytest.raises(ValueError, match="not found"):
             runner._get_agent_definition("nonexistent")
 
-    def test_build_instructions_string(self, runner):
+    async def test_build_instructions_string(self, runner):
         agent_def = Mock()
         agent_def.instructions = "static instructions"
         ctx_wrapper = Mock()
-        assert runner._build_instructions(agent_def, ctx_wrapper) == "static instructions"
+        assert await runner._build_instructions(agent_def, ctx_wrapper) == "static instructions"
 
-    def test_build_instructions_callable(self, runner):
+    async def test_build_instructions_callable(self, runner):
         agent_def = Mock()
         agent_def.instructions = lambda ctx, agent: "dynamic"
         ctx_wrapper = Mock()
-        assert runner._build_instructions(agent_def, ctx_wrapper) == "dynamic"
+        assert await runner._build_instructions(agent_def, ctx_wrapper) == "dynamic"
+
+    async def test_build_instructions_async_callable(self, runner):
+        async def build(ctx, agent):
+            return "awaited"
+
+        agent_def = Mock()
+        agent_def.instructions = build
+        ctx_wrapper = Mock()
+        assert await runner._build_instructions(agent_def, ctx_wrapper) == "awaited"
+
+    async def test_build_instructions_async_callable_object(self, runner):
+        # A builder object with an async __call__ is the shape that used to
+        # stringify a coroutine into the system prompt.
+        class AsyncBuilder:
+            async def __call__(self, ctx, agent):
+                return "from async object"
+
+        agent_def = Mock()
+        agent_def.instructions = AsyncBuilder()
+        ctx_wrapper = Mock()
+        result = await runner._build_instructions(agent_def, ctx_wrapper)
+        assert result == "from async object"
+        assert "coroutine" not in result
+
+    async def test_build_instructions_sync_callable_object(self, runner):
+        class SyncBuilder:
+            def __call__(self, ctx, agent):
+                return "from sync object"
+
+        agent_def = Mock()
+        agent_def.instructions = SyncBuilder()
+        ctx_wrapper = Mock()
+        assert await runner._build_instructions(agent_def, ctx_wrapper) == "from sync object"
+
+    async def test_build_instructions_calls_the_callable_once(self, runner):
+        calls = []
+
+        async def build(ctx, agent):
+            calls.append(ctx)
+            return "once"
+
+        agent_def = Mock()
+        agent_def.instructions = build
+        ctx_wrapper = Mock()
+        await runner._build_instructions(agent_def, ctx_wrapper)
+        assert calls == [ctx_wrapper]
 
     def test_resolve_output_type_none(self, runner):
         assert runner._resolve_output_type(None) is str

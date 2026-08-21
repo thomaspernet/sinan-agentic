@@ -198,7 +198,9 @@ class InstructionBuilder:
         """Return a function compatible with AgentDefinition.instructions.
 
         The returned function has signature (context, agent_def) -> str,
-        matching what BaseAgentRunner._build_instructions() expects.
+        matching what BaseAgentRunner._build_instructions() expects. That helper
+        also awaits an awaitable result, so an async callable declared directly
+        on AgentDefinition.instructions resolves the same way.
 
         Usage:
             class MyBuilder(InstructionBuilder):
