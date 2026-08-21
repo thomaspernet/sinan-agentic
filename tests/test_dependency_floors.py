@@ -48,6 +48,18 @@ from pathlib import Path
 # this floor the probe finds nothing and every MCP call falls back to the SDK
 # invoker — slower, but not wrong, so nothing raises to signal the drop.
 #
+# 0.19.0 carries a fifth fix (#3931): before it, a failed non-streamed model
+# request rewound session items on every retry, not only when a server
+# conversation tracker owned the conversation. The rewind popped the turn's
+# prepared input — history already committed to a plain local session included —
+# so the retried request ran against a session missing earlier turns.
+# ``rewind_session_items`` skips a session without ``pop_item``, but both session
+# objects that reach a run here implement it: ``AgentSession`` and the
+# ``_CollectingSessionWrapper`` the recovery branch runs behind. ``model_retry:``
+# is what puts an agent on the retry path at all, and ``apply_model_retry``
+# overlays the policy onto every agent-building path, so any declaring agent is
+# exposed. The streamed path never rewound session items and is unaffected.
+#
 # This floor subsumes the earlier 0.18.1 one, which closes Chat Completions
 # streams on early exit (#3689) — the case ``chat_streamed()`` and
 # ``BaseAgentRunner._execute_streamed()`` hit whenever a caller breaks out of

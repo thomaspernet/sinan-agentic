@@ -29,34 +29,17 @@ from agents import (
     output_guardrail,
 )
 from agents.models.interface import Model
-from openai.types.responses import (
-    Response,
-    ResponseCompletedEvent,
-    ResponseOutputMessage,
-    ResponseOutputText,
-)
+from openai.types.responses import Response, ResponseCompletedEvent
 
 from sinan_agentic_core.core.base_runner import _CollectingSessionWrapper
 from sinan_agentic_core.session.agent_session import AgentSession
+from tests.core.conftest import ASSISTANT_ROLE, assistant_message
 
 # The answer the scripted model produces. A guardrail either blocks it or lets
 # it through, and the session is searched for this exact text either way.
 BLOCKED_OUTPUT = "the answer a guardrail rejects"
 
 USER_INPUT = "produce an answer"
-
-ASSISTANT_ROLE = "assistant"
-
-
-def _assistant_message(text: str) -> ResponseOutputMessage:
-    """Build the single assistant message the scripted model answers with."""
-    return ResponseOutputMessage(
-        id="msg_scripted",
-        content=[ResponseOutputText(annotations=[], text=text, type="output_text")],
-        role=ASSISTANT_ROLE,
-        status="completed",
-        type="message",
-    )
 
 
 class ScriptedModel(Model):
@@ -72,7 +55,7 @@ class ScriptedModel(Model):
     async def get_response(self, *args: Any, **kwargs: Any) -> ModelResponse:
         """Return the scripted message as a completed non-streamed response."""
         return ModelResponse(
-            output=[_assistant_message(self._text)],
+            output=[assistant_message(self._text, message_id="msg_scripted")],
             usage=Usage(),
             response_id="resp_scripted",
         )
@@ -85,7 +68,7 @@ class ScriptedModel(Model):
                 created_at=0.0,
                 model="scripted",
                 object="response",
-                output=[_assistant_message(self._text)],
+                output=[assistant_message(self._text, message_id="msg_scripted")],
                 parallel_tool_calls=False,
                 tool_choice="auto",
                 tools=[],
