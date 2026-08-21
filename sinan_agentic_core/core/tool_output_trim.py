@@ -8,7 +8,9 @@ has to rescue it with a second, condensed model call.
 
 The SDK ships a filter that prevents that: it replaces oversized tool outputs
 from older turns with a short preview *before* each model call, leaving recent
-turns at full fidelity. Reaching it means importing ``agents.extensions`` and
+turns at full fidelity. Where a turn replayed a tool *search*, it also strips
+prose — descriptions, titles, examples — out of the tool schemas that search
+returned, at every depth. Reaching it means importing ``agents.extensions`` and
 constructing the filter by hand at every agent.
 
 This module carries the same choice as data — how many turns to keep intact, the

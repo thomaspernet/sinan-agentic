@@ -7,8 +7,9 @@ from typing import Any
 import pytest
 from agents import Agent
 from agents.extensions import ToolOutputTrimmer
+from agents.function_schema import function_schema
 from agents.run_config import CallModelData, ModelInputData
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from sinan_agentic_core.core.tool_output_trim import (
     ToolOutputTrimConfig,
@@ -51,6 +52,74 @@ def _filtered(trimmer: ToolOutputTrimmer, items: list[Any]) -> list[Any]:
 
 def _tool_output(items: list[Any]) -> str:
     return next(item["output"] for item in items if item.get("type") == "function_call_output")
+
+
+# Pydantic keys ``$defs`` by class name, so a nested argument model named after a
+# schema keyword is what puts a ``description`` entry in the definitions map — the
+# lowercase name is the collision under test, not a style slip.
+class description(BaseModel):  # noqa: N801
+    """A self-referential argument model whose class name collides with a keyword."""
+
+    text: str
+    # Self-reference: the SDK inlines a definition it can, so recursion is what
+    # keeps a real ``$ref`` in the schema the model finally sees.
+    child: description | None = None
+
+
+description.model_rebuild()
+
+
+def _lookup(term: str, description: description) -> str:
+    """Look up a term.
+
+    Args:
+        term: What to look up.
+        description: How to describe it.
+    """
+    return term
+
+
+def _searchable_tool() -> dict[str, Any]:
+    """One function tool as tool search reports it, schema built by the SDK itself."""
+    schema = function_schema(_lookup)
+    return {
+        "type": "function",
+        "name": schema.name,
+        # Bulky enough that the serialized tool list clears any sane cap.
+        "description": "prose " * 400,
+        "parameters": schema.params_json_schema,
+    }
+
+
+def _tool_search_conversation(tool: dict[str, Any]) -> list[Any]:
+    """One answered tool search from an older turn, followed by a newer user turn."""
+    return [
+        {"role": "user", "content": "first question"},
+        {"type": "tool_search_call", "call_id": "s1"},
+        {"type": "tool_search_output", "call_id": "s1", "tools": [tool]},
+        {"role": "user", "content": "second question"},
+    ]
+
+
+def _searched_tool(items: list[Any]) -> dict[str, Any]:
+    output = next(item for item in items if item.get("type") == "tool_search_output")
+    tool: dict[str, Any] = output["tools"][0]
+    return tool
+
+
+def _ref_targets(schema: Any) -> list[str]:
+    """Every ``$ref`` pointer anywhere in a schema, in document order."""
+    if isinstance(schema, dict):
+        refs: list[str] = []
+        for key, value in schema.items():
+            if key == "$ref" and isinstance(value, str):
+                refs.append(value)
+            else:
+                refs.extend(_ref_targets(value))
+        return refs
+    if isinstance(schema, list):
+        return [ref for item in schema for ref in _ref_targets(item)]
+    return []
 
 
 class TestConfigDefaults:
@@ -218,3 +287,59 @@ class TestFilterBehavior:
         _filtered(trimmer, items)
 
         assert _tool_output(items) == BULKY_OUTPUT
+
+
+class TestSearchedToolSchemaIntegrity:
+    """Trimming reaches the tool schemas tool search replays, and must not corrupt them.
+
+    The filter strips prose keywords — ``description``, ``title``, ``$comment``,
+    ``examples`` — at every depth of a replayed tool schema. Those words are also
+    legal *names*: a JSON Schema keys ``$defs`` and ``properties`` by names the tool
+    author chose, and Pydantic derives both from Python class and field names. A
+    trimmer that walks a name-keyed map as if its keys were keywords deletes the
+    definition a live ``$ref`` points at, and the schema stops resolving — silently,
+    and only for consumers who declared ``tool_output_trim``.
+    """
+
+    TRIM_EVERYTHING = ToolOutputTrimConfig(recent_turns=1, max_output_chars=100, preview_chars=50)
+
+    def test_trimming_reaches_the_replayed_schema(self) -> None:
+        """Guards the rest of the class: without this, the assertions below pass vacuously."""
+        original = _searchable_tool()
+
+        trimmed = _searched_tool(
+            _filtered(self.TRIM_EVERYTHING.build(), _tool_search_conversation(original))
+        )
+
+        assert len(trimmed["description"]) < len(original["description"])
+        assert "title" not in trimmed["parameters"]["properties"]["term"]
+
+    def test_a_definition_named_like_a_keyword_survives(self) -> None:
+        """``$defs`` is keyed by class name, so its keys are names, not keywords."""
+        trimmed = _searched_tool(
+            _filtered(self.TRIM_EVERYTHING.build(), _tool_search_conversation(_searchable_tool()))
+        )
+
+        assert "description" in trimmed["parameters"]["$defs"]
+
+    def test_a_parameter_named_like_a_keyword_survives(self) -> None:
+        """``properties`` is keyed by argument name, and one may be called ``description``."""
+        trimmed = _searched_tool(
+            _filtered(self.TRIM_EVERYTHING.build(), _tool_search_conversation(_searchable_tool()))
+        )
+
+        assert set(trimmed["parameters"]["properties"]) == {"term", "description"}
+
+    def test_every_ref_still_resolves(self) -> None:
+        """A dangling ``$ref`` is the failure the model sees: the tool becomes uncallable."""
+        original = _searchable_tool()
+        trimmed = _searched_tool(
+            _filtered(self.TRIM_EVERYTHING.build(), _tool_search_conversation(original))
+        )
+        schema = trimmed["parameters"]
+
+        refs = _ref_targets(schema)
+        assert refs == _ref_targets(original["parameters"]), "the schema lost or gained a reference"
+        for ref in refs:
+            name = ref.removeprefix("#/$defs/")
+            assert name in schema["$defs"], f"{ref} points at a definition trimming removed"
