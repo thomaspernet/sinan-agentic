@@ -87,7 +87,7 @@ class AgentYamlEntry(BaseModel):
     # Seconds one model-call attempt may take. The SDK rejects a non-positive or
     # infinite value too, but only once the agent is built — constraining it here
     # fails the load that declared it instead.
-    model_timeout: float | None = Field(default=None, gt=0)
+    model_timeout: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     tool_output_trim: ToolOutputTrimConfig | None = None
     capabilities: list[CapabilityRef] = []
     effort: str | None = None

@@ -1255,9 +1255,13 @@ class TestModelTimeout:
         assert entry.model_timeout == 30.0
         assert entry.model_retry is None
 
-    @pytest.mark.parametrize("declared", [0, -1])
-    def test_rejects_a_non_positive_bound(self, declared: float) -> None:
-        """A bound that can never be met fails the load that declared it."""
+    @pytest.mark.parametrize("declared", [0, -1, float("inf"), float("nan")])
+    def test_rejects_an_unusable_bound(self, declared: float) -> None:
+        """A bound that can never be met fails the load that declared it.
+
+        Non-positive and infinite alike: the SDK rejects both, but only once the
+        agent is built, so the constraint lives here to fail the load instead.
+        """
         catalog = self._catalog(
             {"model": "fast", "description": "Reads papers", "model_timeout": declared}
         )
