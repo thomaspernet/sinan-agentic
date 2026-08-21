@@ -2,7 +2,6 @@
 
 import json
 
-import httpx
 import pytest
 from agents import MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError, ModelTimeoutError
 from openai import BadRequestError, RateLimitError
@@ -13,7 +12,7 @@ from sinan_agentic_core.core.run_errors import (
     classify_run_error,
     run_error_payload,
 )
-from tests.conftest import make_context_overflow_error
+from tests.conftest import make_context_overflow_error, make_provider_status_error
 
 
 class TestClassifyRunError:
@@ -41,21 +40,16 @@ class TestClassifyRunError:
 
     def test_other_provider_error_is_unknown(self):
         """A 429 is a provider error too -- only the overflow code counts."""
-        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
-        error = RateLimitError(
+        error = make_provider_status_error(
+            RateLimitError,
             "Rate limit reached",
-            response=httpx.Response(429, request=request),
-            body={"code": "rate_limit_exceeded", "type": "requests"},
+            429,
+            {"code": "rate_limit_exceeded", "type": "requests"},
         )
         assert classify_run_error(error) is RunErrorKind.UNKNOWN
 
     def test_provider_error_without_a_code_is_unknown(self):
-        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
-        error = BadRequestError(
-            "Bad request",
-            response=httpx.Response(400, request=request),
-            body=None,
-        )
+        error = make_provider_status_error(BadRequestError, "Bad request", 400, None)
         assert classify_run_error(error) is RunErrorKind.UNKNOWN
 
     def test_plain_exception_is_unknown(self):

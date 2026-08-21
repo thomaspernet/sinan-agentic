@@ -4,18 +4,50 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import fields
 from types import UnionType
-from typing import Any, Union, get_args, get_origin, get_type_hints
+from typing import Any, TypeVar, Union, get_args, get_origin, get_type_hints
 from unittest.mock import Mock, patch
 
-import httpx
+# openai 3.x types ``APIStatusError.response`` as an ``httpx2.Response`` and
+# ships httpx2 as its own dependency, so a provider error built here is only
+# the shape the installed client raises when it is built from httpx2. The
+# httpx 1.x line still reaches the environment, but only as a transitive of the
+# MCP SDK -- a library this suite does not route provider errors through.
+import httpx2
 import pytest
 from agents import Usage, set_tracing_disabled
 from agents.testing import ScriptedModel
-from openai import BadRequestError
+from openai import APIStatusError, BadRequestError
 
 from sinan_agentic_core.core.run_errors import CONTEXT_OVERFLOW_ERROR_CODE
 from sinan_agentic_core.models.context import AgentContext
 from sinan_agentic_core.session.agent_session import AgentSession, ConversationHistory
+
+# The endpoint a provider error is raised against. Only its presence matters --
+# ``APIStatusError`` reads ``response.request`` back -- so every provider error
+# the suite builds names the same one.
+PROVIDER_ENDPOINT = "https://api.openai.com/v1/chat/completions"
+
+StatusErrorT = TypeVar("StatusErrorT", bound=APIStatusError)
+
+
+def make_provider_status_error(
+    error_class: type[StatusErrorT],
+    message: str,
+    status_code: int,
+    body: object | None,
+) -> StatusErrorT:
+    """Build a typed provider error the way the installed openai client raises one.
+
+    Every provider error in the suite goes through here so the transport the
+    error carries is decided once, against the client actually installed,
+    rather than at each construction site.
+    """
+    request = httpx2.Request("POST", PROVIDER_ENDPOINT)
+    return error_class(
+        message,
+        response=httpx2.Response(status_code, request=request),
+        body=body,
+    )
 
 
 def make_context_overflow_error(
@@ -27,11 +59,11 @@ def make_context_overflow_error(
     provider's HTTP 400 with ``context_length_exceeded`` in the error body's
     ``code`` field. Tests classify against that shape, not against a message.
     """
-    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
-    return BadRequestError(
+    return make_provider_status_error(
+        BadRequestError,
         message,
-        response=httpx.Response(400, request=request),
-        body={
+        400,
+        {
             "message": message,
             "type": "invalid_request_error",
             "code": CONTEXT_OVERFLOW_ERROR_CODE,
