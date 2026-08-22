@@ -1,6 +1,6 @@
 """Shared fixtures and helpers for sinan_agentic_core tests."""
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import fields
 from types import UnionType
@@ -14,12 +14,29 @@ from unittest.mock import Mock, patch
 # MCP SDK -- a library this suite does not route provider errors through.
 import httpx2
 import pytest
-from agents import Usage, set_tracing_disabled
+from agents import (
+    GuardrailFunctionOutput,
+    InputGuardrail,
+    InputGuardrailResult,
+    InputGuardrailTripwireTriggered,
+    OutputGuardrail,
+    OutputGuardrailResult,
+    OutputGuardrailTripwireTriggered,
+    RunErrorDetails,
+    Usage,
+    input_guardrail,
+    output_guardrail,
+    set_tracing_disabled,
+)
 from agents.testing import ScriptedModel
 from openai import APIStatusError, BadRequestError
 
 from sinan_agentic_core.core.run_errors import CONTEXT_OVERFLOW_ERROR_CODE
 from sinan_agentic_core.models.context import AgentContext
+from sinan_agentic_core.registry.guardrail_registry import (
+    GuardrailCategory,
+    GuardrailDefinition,
+)
 from sinan_agentic_core.session.agent_session import AgentSession, ConversationHistory
 
 # The endpoint a provider error is raised against. Only its presence matters --
@@ -69,6 +86,123 @@ def make_context_overflow_error(
             "code": CONTEXT_OVERFLOW_ERROR_CODE,
         },
     )
+
+
+def registered_input_guardrail(name: str) -> InputGuardrail[Any]:
+    """An input guardrail whose only distinguishing identifier is its registration.
+
+    Every guardrail built here wraps a function literally called ``_check`` and
+    is an instance of the same ``InputGuardrail`` class, so a report that names
+    it can have read that name off neither the function's ``__name__`` nor the
+    class name the SDK renders into the tripwire message -- only off the
+    registration.
+    """
+
+    @input_guardrail
+    async def _check(ctx: Any, agent: Any, data: Any) -> GuardrailFunctionOutput:
+        return GuardrailFunctionOutput(output_info=None, tripwire_triggered=False)
+
+    GuardrailDefinition(
+        name=name,
+        description="Registered for a test.",
+        function=_check,
+        category=GuardrailCategory.INPUT,
+    )
+    return _check
+
+
+def registered_output_guardrail(name: str) -> OutputGuardrail[Any]:
+    """The output-slot twin of :func:`registered_input_guardrail`."""
+
+    @output_guardrail
+    async def _check(ctx: Any, agent: Any, data: Any) -> GuardrailFunctionOutput:
+        return GuardrailFunctionOutput(output_info=None, tripwire_triggered=False)
+
+    GuardrailDefinition(
+        name=name,
+        description="Registered for a test.",
+        function=_check,
+        category=GuardrailCategory.OUTPUT,
+    )
+    return _check
+
+
+def _run_error_details(
+    *,
+    input_guardrail_results: list[InputGuardrailResult],
+    output_guardrail_results: list[OutputGuardrailResult],
+) -> RunErrorDetails:
+    """The run data the SDK attaches to an ``AgentsException`` before re-raising."""
+    return RunErrorDetails(
+        input="Hi",
+        new_items=[],
+        raw_responses=[],
+        last_agent=Mock(),
+        context_wrapper=Mock(),
+        input_guardrail_results=input_guardrail_results,
+        output_guardrail_results=output_guardrail_results,
+    )
+
+
+def make_input_tripwire_error(
+    tripped: InputGuardrail[Any],
+    passed: Sequence[InputGuardrail[Any]] = (),
+    *,
+    with_run_data: bool = True,
+) -> InputGuardrailTripwireTriggered:
+    """Build the exception an input guardrail raises, as the SDK builds it.
+
+    From openai-agents 0.19.2 the run data carries every guardrail that
+    completed -- the passing ones and the tripping one -- on every entry point.
+    Pass ``with_run_data=False`` for the case the SDK leaves it unset, which is
+    what a redacted failure produces.
+    """
+    results = [
+        InputGuardrailResult(
+            guardrail=guardrail,
+            output=GuardrailFunctionOutput(output_info=None, tripwire_triggered=False),
+        )
+        for guardrail in passed
+    ]
+    tripping = InputGuardrailResult(
+        guardrail=tripped,
+        output=GuardrailFunctionOutput(output_info=None, tripwire_triggered=True),
+    )
+    results.append(tripping)
+
+    error = InputGuardrailTripwireTriggered(tripping)
+    if with_run_data:
+        error.run_data = _run_error_details(
+            input_guardrail_results=results,
+            output_guardrail_results=[],
+        )
+    return error
+
+
+def make_output_tripwire_error(
+    tripped: OutputGuardrail[Any],
+    passed: Sequence[OutputGuardrail[Any]] = (),
+) -> OutputGuardrailTripwireTriggered:
+    """The output-slot twin of :func:`make_input_tripwire_error`."""
+
+    def result(guardrail: OutputGuardrail[Any], *, triggered: bool) -> OutputGuardrailResult:
+        return OutputGuardrailResult(
+            guardrail=guardrail,
+            agent_output="answer",
+            agent=Mock(),
+            output=GuardrailFunctionOutput(output_info=None, tripwire_triggered=triggered),
+        )
+
+    results = [result(guardrail, triggered=False) for guardrail in passed]
+    tripping = result(tripped, triggered=True)
+    results.append(tripping)
+
+    error = OutputGuardrailTripwireTriggered(tripping)
+    error.run_data = _run_error_details(
+        input_guardrail_results=[],
+        output_guardrail_results=results,
+    )
+    return error
 
 
 @pytest.fixture(scope="session", autouse=True)

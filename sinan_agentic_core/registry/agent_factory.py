@@ -51,7 +51,7 @@ def create_agent_from_registry(
     ``pre_approval_tool_input_guardrails`` setting: declared tool-input
     guardrails still run before their tool executes, but without it they run
     after the SDK emits a pending human-approval interruption rather than
-    before it (``openai-agents`` 0.18.3, ``agents.run_internal.tool_execution``).
+    before it (``openai-agents`` 0.20.0, ``agents.run_internal.tool_execution``).
     And a declared ``tool_output_trim``, which it reads off the definition
     registered under the agent's name, since the SDK installs the trimming
     filter through ``RunConfig`` and there is no slot for it on the agent.

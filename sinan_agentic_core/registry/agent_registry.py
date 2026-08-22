@@ -23,7 +23,8 @@ class AgentDefinition:
 
     name: str
     description: str  # Description of agent's purpose
-    instructions: str | Callable[..., Any] | None = None  # Static string or dynamic function
+    # Static string, or a sync/async callable resolved per run by the runner
+    instructions: str | Callable[..., Any] | None = None
     # Optional fields (default to empty lists)
     tools: list[str] = field(default_factory=list)  # Tool names from registry
     guardrails: list[str] = field(default_factory=list)  # Guardrail names

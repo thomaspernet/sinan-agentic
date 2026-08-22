@@ -7,7 +7,6 @@ from unittest.mock import Mock, patch
 import pytest
 from agents import Agent, MessageOutputItem, ModelBehaviorError
 from agents.agent_output import AgentOutputSchema
-from openai.types.responses import ResponseOutputMessage, ResponseOutputText
 from pydantic import BaseModel
 
 from sinan_agentic_core.core.output_recovery import (
@@ -19,6 +18,7 @@ from sinan_agentic_core.core.output_recovery import (
     salvage_structured_output,
 )
 from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
+from tests.core.conftest import assistant_message
 
 
 class Extraction(BaseModel):
@@ -55,14 +55,7 @@ def recovery_registry():
 
 def _message_item(text: str) -> MessageOutputItem:
     """Build a MessageOutputItem carrying *text*, as the SDK would."""
-    raw = ResponseOutputMessage(
-        id="msg-1",
-        type="message",
-        role="assistant",
-        status="completed",
-        content=[ResponseOutputText(text=text, type="output_text", annotations=[])],
-    )
-    return MessageOutputItem(raw_item=raw, agent=Mock())
+    return MessageOutputItem(raw_item=assistant_message(text, message_id="msg-1"), agent=Mock())
 
 
 def _handler_input(text: str | None, output_type: type | None = Extraction):

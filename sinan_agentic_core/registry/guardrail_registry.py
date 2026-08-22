@@ -7,7 +7,13 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
-from agents import FunctionTool, InputGuardrail, OutputGuardrail, ToolInputGuardrail
+from agents import (
+    FunctionTool,
+    InputGuardrail,
+    OutputGuardrail,
+    ToolInputGuardrail,
+    ToolOutputGuardrail,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +46,21 @@ class GuardrailDefinition:
     category: GuardrailCategory
 
     def __post_init__(self) -> None:
-        """Coerce the category to :class:`GuardrailCategory` and reject unknowns.
+        """Normalize the category, and name the SDK guardrail after this record.
 
-        This is the only place a category is validated. Callers that hold a raw
-        string (a config loader, an untyped consumer) may pass it straight in —
-        a valid one is normalized to the enum, an invalid one raises here.
+        The category check is the only place a category is validated. Callers
+        that hold a raw string (a config loader, an untyped consumer) may pass it
+        straight in — a valid one is normalized to the enum, an invalid one
+        raises here.
+
+        Naming is the same idea applied to identity. ``name`` is what
+        ``agents.yaml`` writes and what :class:`GuardrailRegistry` keys on, but
+        the SDK guardrail object carries its own ``name`` and falls back to the
+        decorated function's ``__name__`` when it is unset — so a tripwire,
+        a trace span, and the catalog would each report a different identifier
+        for one guardrail. Stamping the registered name onto the object makes
+        this record the single authority: whatever declared the guardrail is
+        what every consumer reads back.
         """
         try:
             self.category = GuardrailCategory(self.category)
@@ -54,6 +70,12 @@ class GuardrailDefinition:
                 f"Guardrail '{self.name}' has unknown category '{self.category}'. "
                 f"Valid categories: {valid}"
             ) from exc
+
+        if isinstance(
+            self.function,
+            InputGuardrail | OutputGuardrail | ToolInputGuardrail | ToolOutputGuardrail,
+        ):
+            self.function.name = self.name
 
 
 @dataclass(frozen=True)
@@ -171,6 +193,25 @@ class GuardrailRegistry:
             if definition is not None and definition.category == category:
                 return True
         return False
+
+
+def has_tool_input_guardrails(tool: Any) -> bool:
+    """Whether *tool* is a local function tool carrying a tool-input guardrail.
+
+    The counterpart to :func:`attach_tool_input_guardrails`: one function writes
+    the guardrails onto a tool, this one reads them back. Every caller that has
+    to know whether a tool is guarded — the run config that turns pre-approval
+    on, the MCP adapter that keeps a guarded tool off its direct-call fast path —
+    asks here, so the definition of "guarded" cannot drift between them.
+
+    Args:
+        tool: Any resolved tool. A hosted tool is never guarded — the SDK runs
+            tool-input guardrails for local function tools only.
+
+    Returns:
+        True when the tool is a FunctionTool with at least one tool-input guardrail.
+    """
+    return isinstance(tool, FunctionTool) and bool(tool.tool_input_guardrails)
 
 
 def attach_tool_input_guardrails(

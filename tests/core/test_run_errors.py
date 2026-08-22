@@ -12,7 +12,14 @@ from sinan_agentic_core.core.run_errors import (
     classify_run_error,
     run_error_payload,
 )
-from tests.conftest import make_context_overflow_error, make_provider_status_error
+from tests.conftest import (
+    make_context_overflow_error,
+    make_input_tripwire_error,
+    make_output_tripwire_error,
+    make_provider_status_error,
+    registered_input_guardrail,
+    registered_output_guardrail,
+)
 
 
 class TestClassifyRunError:
@@ -37,6 +44,21 @@ class TestClassifyRunError:
 
     def test_context_overflow_reads_the_provider_error_code(self):
         assert classify_run_error(make_context_overflow_error()) is RunErrorKind.CONTEXT_OVERFLOW
+
+    def test_input_tripwire_is_typed(self):
+        error = make_input_tripwire_error(registered_input_guardrail("blocks_pii"))
+        assert classify_run_error(error) is RunErrorKind.INPUT_GUARDRAIL_TRIPWIRE
+
+    def test_output_tripwire_is_typed(self):
+        error = make_output_tripwire_error(registered_output_guardrail("blocks_secrets"))
+        assert classify_run_error(error) is RunErrorKind.OUTPUT_GUARDRAIL_TRIPWIRE
+
+    def test_the_two_tripwires_are_told_apart(self):
+        """One kind for both would leave callers reading a nested field to know
+        whether anything ran at all."""
+        rejected_input = make_input_tripwire_error(registered_input_guardrail("blocks_pii"))
+        blocked_answer = make_output_tripwire_error(registered_output_guardrail("blocks_pii"))
+        assert classify_run_error(rejected_input) is not classify_run_error(blocked_answer)
 
     def test_other_provider_error_is_unknown(self):
         """A 429 is a provider error too -- only the overflow code counts."""
@@ -69,7 +91,12 @@ class TestClassifyRunError:
 
 
 class TestFallbackRecoverableKinds:
-    """Only the two out-of-room failures are worth a condensed second call."""
+    """Only the two out-of-room failures are worth a condensed second call.
+
+    A guardrail tripwire is deliberately outside the set: it is a declared check
+    saying no, so a second call that reaches a different answer has defeated the
+    guardrail rather than recovered from a limit.
+    """
 
     def test_covers_max_turns_and_overflow(self):
         assert FALLBACK_RECOVERABLE_KINDS == {
@@ -83,6 +110,8 @@ class TestFallbackRecoverableKinds:
             RunErrorKind.MODEL_REFUSAL,
             RunErrorKind.MODEL_BEHAVIOR,
             RunErrorKind.MODEL_TIMEOUT,
+            RunErrorKind.INPUT_GUARDRAIL_TRIPWIRE,
+            RunErrorKind.OUTPUT_GUARDRAIL_TRIPWIRE,
             RunErrorKind.UNKNOWN,
         ],
     )
@@ -120,3 +149,83 @@ class TestRunErrorPayload:
         payload = run_error_payload(MaxTurnsExceeded("Max turns (10) exceeded"))
         assert json.loads(json.dumps(payload)) == payload
         assert type(payload["error_kind"]) is str
+
+
+class TestGuardrailTripwirePayload:
+    """A tripwire message names the SDK class, so the payload names the guardrail."""
+
+    def test_sdk_message_alone_cannot_identify_the_guardrail(self):
+        """The premise: two different guardrails render the identical message."""
+        pii = run_error_payload(make_input_tripwire_error(registered_input_guardrail("blocks_pii")))
+        topic = run_error_payload(
+            make_input_tripwire_error(registered_input_guardrail("off_topic"))
+        )
+
+        assert pii["error"] == topic["error"]
+        assert pii["guardrail"]["name"] != topic["guardrail"]["name"]
+
+    def test_names_the_guardrail_that_tripped(self):
+        error = make_input_tripwire_error(registered_input_guardrail("blocks_pii"))
+        assert run_error_payload(error)["guardrail"]["name"] == "blocks_pii"
+
+    def test_results_carry_every_guardrail_that_finished(self):
+        """0.19.2 records each result as its guardrail completes, so the passing
+        ones survive the raise instead of being discarded with the accumulator."""
+        error = make_input_tripwire_error(
+            registered_input_guardrail("blocks_pii"),
+            passed=[registered_input_guardrail("off_topic")],
+        )
+
+        assert run_error_payload(error)["guardrail"]["results"] == [
+            {"name": "off_topic", "tripwire_triggered": False},
+            {"name": "blocks_pii", "tripwire_triggered": True},
+        ]
+
+    def test_the_name_survives_missing_run_data(self):
+        """The tripping guardrail comes off the exception itself, so it is
+        reported even when the SDK attached no run data."""
+        error = make_input_tripwire_error(
+            registered_input_guardrail("blocks_pii"), with_run_data=False
+        )
+
+        details = run_error_payload(error)["guardrail"]
+        assert details["name"] == "blocks_pii"
+        assert details["results"] == []
+
+    def test_output_tripwire_reads_the_output_results(self):
+        error = make_output_tripwire_error(
+            registered_output_guardrail("blocks_secrets"),
+            passed=[registered_output_guardrail("checks_tone")],
+        )
+
+        payload = run_error_payload(error)
+        assert payload["error_kind"] == RunErrorKind.OUTPUT_GUARDRAIL_TRIPWIRE.value
+        assert payload["guardrail"] == {
+            "name": "blocks_secrets",
+            "results": [
+                {"name": "checks_tone", "tripwire_triggered": False},
+                {"name": "blocks_secrets", "tripwire_triggered": True},
+            ],
+        }
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            MaxTurnsExceeded("Max turns (10) exceeded"),
+            ModelRefusalError("I can't help with that."),
+            RuntimeError("Something else broke"),
+        ],
+    )
+    def test_non_tripwire_failures_carry_no_guardrail_entry(self, error):
+        assert "guardrail" not in run_error_payload(error)
+
+    def test_tripwire_payload_is_json_serializable(self):
+        """The guardrail's own ``output_info`` is arbitrary, so the payload
+        reports names and flags -- everything here crosses an API boundary."""
+        payload = run_error_payload(
+            make_input_tripwire_error(
+                registered_input_guardrail("blocks_pii"),
+                passed=[registered_input_guardrail("off_topic")],
+            )
+        )
+        assert json.loads(json.dumps(payload)) == payload

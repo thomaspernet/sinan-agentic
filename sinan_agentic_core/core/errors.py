@@ -33,6 +33,16 @@ _KIND_RETRY_HINTS: dict[RunErrorKind, str] = {
         "The sub-agent's response did not match its output schema. Retry "
         "once with a simpler request."
     ),
+    RunErrorKind.INPUT_GUARDRAIL_TRIPWIRE: (
+        "A guardrail rejected the request before the sub-agent ran. Do not "
+        "re-send it -- the check will reject it again. Ask for something the "
+        "guardrail allows, or report the rejection to the user."
+    ),
+    RunErrorKind.OUTPUT_GUARDRAIL_TRIPWIRE: (
+        "A guardrail blocked the sub-agent's answer. The answer is withheld "
+        "deliberately -- do not retry to get around it; report that the "
+        "response was blocked."
+    ),
 }
 
 # Hints for the ValueErrors this framework's own tools raise. These have no
