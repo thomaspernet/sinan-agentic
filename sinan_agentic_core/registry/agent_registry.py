@@ -43,6 +43,10 @@ class AgentDefinition:
     # Retry transient model-API failures inside the SDK instead of failing the
     # run. Off unless declared — retries cost latency and duplicate requests.
     model_retry: ModelRetryConfig | None = None
+    # Seconds one model-call attempt may take, transport waits included. Off
+    # unless declared — the SDK leaves a call unbounded, and a bound short
+    # enough to cut a slow-but-healthy response is worse than none.
+    model_timeout: float | None = None
     # Shrink oversized tool outputs from older turns before each model call, so
     # the run overflows less often. Off unless declared — trimming removes
     # content the model would otherwise have seen.

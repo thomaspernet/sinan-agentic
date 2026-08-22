@@ -41,7 +41,8 @@ from ..session import AgentSession, ConversationHistory
 from ..utils.turn_budget_context import set_turn_budget
 from .capabilities import Capability
 from .errors import structured_tool_error
-from .model_retry import apply_model_retry, build_model_retry_settings
+from .model_retry import build_model_retry_settings
+from .model_settings import apply_declared_model_settings
 from .output_recovery import (
     build_output_schema,
     invalid_final_output_handlers,
@@ -185,7 +186,11 @@ class BaseAgentRunner:
         else:
             model_settings = self._build_model_settings(agent_def, ctx_wrapper)
 
-        model_settings = apply_model_retry(agent_def.model_retry, model_settings)
+        model_settings = apply_declared_model_settings(
+            model_settings,
+            model_retry=agent_def.model_retry,
+            model_timeout=agent_def.model_timeout,
+        )
 
         effective_model = model_override or agent_def.model
 
@@ -457,7 +462,7 @@ class BaseAgentRunner:
             # NOTE: a declared tool_output_trim does not reach this prompt. The
             # SDK applies the filter through RunConfig.call_model_input_filter,
             # read only inside Runner.run (agents.run_internal.turn_preparation,
-            # openai-agents==0.20.0), which this branch bypasses. The filter also
+            # openai-agents==0.21.1), which this branch bypasses. The filter also
             # keys its window off the last N *user* messages, and a rescue prompt
             # replays a single one — so running it here would trim nothing. The
             # prompt builder caps each output instead.
@@ -471,13 +476,22 @@ class BaseAgentRunner:
 
             # NOTE: retry policies and backoff are runner-managed — the SDK reads
             # them off the resolved ModelSettings inside Runner.run
-            # (agents.run_internal.model_retry, openai-agents==0.20.0), which this
+            # (agents.run_internal.model_retry, openai-agents==0.21.1), which this
             # branch bypasses. Only the declared attempt count carries over, via
             # the OpenAI client's own retry, so a rescue call is not left on the
             # client default while every other branch honors the agent's budget.
+            # The declared per-attempt timeout carries over the same way: the SDK
+            # enforces it in the module above, but the client's own per-request
+            # timeout bounds this call to the same number of seconds, so the
+            # rescue cannot be the one model call left free to hang.
+            client_options: dict[str, Any] = {}
             retry_settings = build_model_retry_settings(agent_def.model_retry)
             if retry_settings is not None and retry_settings.max_retries is not None:
-                client = client.with_options(max_retries=retry_settings.max_retries)
+                client_options["max_retries"] = retry_settings.max_retries
+            if agent_def.model_timeout is not None:
+                client_options["timeout"] = agent_def.model_timeout
+            if client_options:
+                client = client.with_options(**client_options)
 
             # Reuse or build the SDK's AgentOutputSchema so the fallback
             # LLM sees the identical JSON schema (including the "response"

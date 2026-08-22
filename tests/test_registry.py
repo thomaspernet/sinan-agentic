@@ -1141,6 +1141,74 @@ class TestAgentFactoryModelRetry:
         assert agent.model_settings.retry.max_retries == 4
 
 
+# -- AgentFactory model timeout wiring -----------------------------------------
+
+
+@pytest.fixture
+def factory_timeout():
+    """Global registry carrying one agent declaring a bound and one declaring both."""
+    from sinan_agentic_core.registry.agent_registry import get_agent_registry
+
+    get_agent_registry().register(
+        AgentDefinition(
+            name="_ft_bounded_agent",
+            description="bounded",
+            instructions="You are bounded",
+            model_timeout=30.0,
+        )
+    )
+    get_agent_registry().register(
+        AgentDefinition(
+            name="_ft_bounded_retrying_agent",
+            description="bounded and retrying",
+            instructions="You are bounded and retry",
+            model_retry=ModelRetryConfig(max_retries=4),
+            model_timeout=30.0,
+        )
+    )
+
+
+class TestAgentFactoryModelTimeout:
+    def test_declared_bound_rides_on_the_agent_model_settings(self, factory_timeout):
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+
+        agent = create_agent_from_registry("_ft_bounded_agent")
+
+        assert agent.model_settings.timeout == 30.0
+
+    def test_a_bound_needs_no_retry_policy(self, factory_timeout):
+        """The two are separate keys, so declaring one must not turn the other on."""
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+
+        agent = create_agent_from_registry("_ft_bounded_agent")
+
+        assert agent.model_settings.retry is None
+
+    def test_agent_without_a_bound_keeps_the_sdk_default_settings(self, factory_retry):
+        """Omitting the kwarg matters: Agent.model_settings must stay a real object."""
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+
+        agent = create_agent_from_registry("_fr_plain_agent")
+
+        assert agent.model_settings.timeout is None
+
+    def test_a_bound_and_a_policy_reach_the_same_agent(self, factory_timeout):
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+
+        agent = create_agent_from_registry("_ft_bounded_retrying_agent")
+
+        assert agent.model_settings.timeout == 30.0
+        assert agent.model_settings.retry.max_retries == 4
+
+    def test_model_override_leaves_the_bound_in_place(self, factory_timeout):
+        from sinan_agentic_core.registry.agent_factory import create_agent_from_registry
+
+        agent = create_agent_from_registry("_ft_bounded_agent", model_override="gpt-4o")
+
+        assert agent.model == "gpt-4o"
+        assert agent.model_settings.timeout == 30.0
+
+
 # -- AgentFactory run-level settings -------------------------------------------
 
 

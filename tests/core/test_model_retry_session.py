@@ -6,9 +6,9 @@ non-streamed retry rewound session items unconditionally, so a retry popped the
 turn's prepared input — history already committed to a plain local session
 included — and the run continued against a session missing earlier turns.
 
-The shape the bug needs is what this framework wires: ``apply_model_retry``
-overlays a declared policy onto the ``ModelSettings`` every agent-building path
-assembles, and every run path passes a session into ``Runner.run``. The SDK
+The shape the bug needs is what this framework wires:
+``apply_declared_model_settings`` overlays a declared policy onto the
+``ModelSettings`` every agent-building path assembles, and every run path passes a session into ``Runner.run``. The SDK
 skips the rewind for a session without ``pop_item``, but both session objects
 that reach a run here implement it — ``AgentSession`` and, on the recovery
 branch, ``_CollectingSessionWrapper``. These tests drive the real SDK loop
@@ -29,11 +29,8 @@ from agents.models.interface import Model
 from openai import APIConnectionError
 
 from sinan_agentic_core.core.base_runner import _CollectingSessionWrapper
-from sinan_agentic_core.core.model_retry import (
-    ModelRetryConfig,
-    RetryBackoffConfig,
-    apply_model_retry,
-)
+from sinan_agentic_core.core.model_retry import ModelRetryConfig, RetryBackoffConfig
+from sinan_agentic_core.core.model_settings import apply_declared_model_settings
 from sinan_agentic_core.session.agent_session import AgentSession
 from tests.core.conftest import assistant_message
 
@@ -91,7 +88,7 @@ def _retrying_agent(model: Model) -> Agent[Any]:
         name="retrying",
         instructions="answer",
         model=model,
-        model_settings=apply_model_retry(retry),
+        model_settings=apply_declared_model_settings(model_retry=retry),
     )
 
 

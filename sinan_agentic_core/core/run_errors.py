@@ -9,11 +9,12 @@ owned by whoever last worded the upstream message, and one that also fired on an
 unrelated error whose text happened to quote those words.
 
 The SDK raises a distinct exception class per failure (``MaxTurnsExceeded``,
-``ModelRefusalError``, ``ModelBehaviorError``, the two guardrail tripwires), so
-those are decided by type. Context overflow has no exception class in the SDK: it
-reaches the runner as the provider's HTTP 400, whose machine-readable ``code``
-field carries ``context_length_exceeded``. This module reads that field off the
-typed ``openai.APIStatusError`` rather than out of the rendered message.
+``ModelRefusalError``, ``ModelBehaviorError``, ``ModelTimeoutError``, the two
+guardrail tripwires), so those are decided by type. Context overflow has no
+exception class in the SDK: it reaches the runner as the provider's HTTP 400,
+whose machine-readable ``code`` field carries ``context_length_exceeded``. This
+module reads that field off the typed ``openai.APIStatusError`` rather than out
+of the rendered message.
 
 :func:`classify_run_error` is the single place that decides which kind an
 exception is; every branch that reacts to a failed run keys off the result.
@@ -43,6 +44,7 @@ from agents import (
     MaxTurnsExceeded,
     ModelBehaviorError,
     ModelRefusalError,
+    ModelTimeoutError,
     OutputGuardrailResult,
     OutputGuardrailTripwireTriggered,
 )
@@ -66,6 +68,11 @@ class RunErrorKind(str, Enum):
     - ``MODEL_BEHAVIOR`` -> the SDK's ``ModelBehaviorError``: the model did
       something the run cannot use — malformed structured output, a call to a
       tool that does not exist.
+    - ``MODEL_TIMEOUT`` -> the SDK's ``ModelTimeoutError``: one model-call
+      attempt outran the agent's declared ``model_timeout``. The bound is the
+      caller's own policy, so this is a limit they chose, not a failure of the
+      run — and telling it apart from ``UNKNOWN`` is what lets them raise the
+      bound rather than hunt a bug.
     - ``INPUT_GUARDRAIL_TRIPWIRE`` -> the SDK's
       ``InputGuardrailTripwireTriggered``: a declared input guardrail rejected
       the request before the agent ran.
@@ -85,6 +92,7 @@ class RunErrorKind(str, Enum):
     CONTEXT_OVERFLOW = "context_overflow"
     MODEL_REFUSAL = "model_refusal"
     MODEL_BEHAVIOR = "model_behavior"
+    MODEL_TIMEOUT = "model_timeout"
     INPUT_GUARDRAIL_TRIPWIRE = "input_guardrail_tripwire"
     OUTPUT_GUARDRAIL_TRIPWIRE = "output_guardrail_tripwire"
     UNKNOWN = "unknown"
@@ -98,7 +106,9 @@ class RunErrorKind(str, Enum):
 # saying no, and a retry that reaches a different outcome is the guardrail being
 # defeated, not a limit being recovered from. A malformed output is absent too;
 # that one is already handled in-run by the SDK's ``invalid_final_output``
-# handler.
+# handler. So is a timeout: the rescue is another model call, bounded by the same
+# declared number of seconds, so a provider slow enough to trip the bound trips
+# it again.
 FALLBACK_RECOVERABLE_KINDS = frozenset({RunErrorKind.MAX_TURNS, RunErrorKind.CONTEXT_OVERFLOW})
 
 
@@ -118,6 +128,8 @@ def classify_run_error(error: BaseException) -> RunErrorKind:
         return RunErrorKind.MODEL_REFUSAL
     if isinstance(error, ModelBehaviorError):
         return RunErrorKind.MODEL_BEHAVIOR
+    if isinstance(error, ModelTimeoutError):
+        return RunErrorKind.MODEL_TIMEOUT
     if isinstance(error, InputGuardrailTripwireTriggered):
         return RunErrorKind.INPUT_GUARDRAIL_TRIPWIRE
     if isinstance(error, OutputGuardrailTripwireTriggered):

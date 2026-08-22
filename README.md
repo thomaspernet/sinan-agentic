@@ -25,6 +25,7 @@ A framework for building AI agents using the OpenAI Agents SDK. Fork this reposi
 - **Knowledge Store** - Inject domain knowledge from YAML files into agent system prompts
 - **Structured Agent-as-Tool** - Typed input schemas and structured error handling for sub-agent calls
 - **Model Retry Policies** - Declare `model_retry` on an agent and transient model-API failures retry inside the SDK instead of failing the run
+- **Model Call Timeout** - Declare `model_timeout` on an agent and no single model-call attempt hangs past the declared number of seconds
 - **Tool Output Trimming** - Declare `tool_output_trim` on an agent and oversized tool outputs from older turns shrink before each model call, so the run overflows less often
 - **Capabilities** - Pluggable agent behaviors (turn budgets, error recovery, tool tracing, custom hooks) - write a `Capability` subclass and attach it to an `AgentDefinition`. See [`documentation/project/capabilities.md`](documentation/project/capabilities.md).
 - **MCP Server** - Expose registered tools as an MCP server (stdio or HTTP) with zero description duplication - all metadata comes from `tools.yaml`
@@ -1095,6 +1096,45 @@ Triggers combine: the call is retried when any listed trigger matches. A delay s
 Both agent-building paths attach the declared policy the same way: `BaseAgentRunner.create_agent()` and `create_agent_from_registry()`. An agent resolved by name in `chat()`, `chat_with_hooks()`, or `chat_streamed()` therefore retries too. Settings supplied by the caller still win field by field, so an explicit `retry` on a `model_settings` override replaces the declared one.
 
 The overflow-fallback path is the one partial case. Its rescue call goes straight to the OpenAI client instead of through the runner, so it honors `max_retries` but not `retry_on` or `backoff`.
+
+## Model Call Timeout
+
+Nothing bounds a model call by default. A provider that accepts the request and then stalls holds the run open until the caller gives up, and a declared `model_retry` makes that worse rather than better — an attempt budget multiplies an unbounded wait instead of capping it.
+
+Declare `model_timeout` on an agent and each model-call attempt gets a deadline in seconds. Like `model_retry`, it rides on the agent's model settings rather than on a per-run argument, so it reaches every execution path — `execute()` in all three modes, `run_agent()`, handoffs, and `as_tool()` sub-agents.
+
+```yaml
+# agents.yaml
+agents:
+  researcher:
+    model: gpt-4o-mini
+    description: Reads papers and summarizes findings
+    model_timeout: 30          # seconds, per attempt
+    model_retry:
+      max_retries: 3           # ...so three attempts are bounded at 30s each
+```
+
+`model_timeout` is its own key, not part of the `model_retry:` block. Bounding how long one attempt may hang and deciding whether to pay for another one are separate choices, and either is useful without the other. The value is seconds and must be greater than zero; a non-positive or infinite one is rejected at load time.
+
+```python
+from sinan_agentic_core import AgentDefinition, register_agent
+
+register_agent(AgentDefinition(
+    name="researcher",
+    description=cfg.description,
+    instructions=build_researcher_instructions,
+    model_timeout=cfg.model_timeout,      # from agents.yaml
+    # ...or inline: model_timeout=30.0
+))
+```
+
+The bound covers the complete attempt, transport waits included, and is enforced through normal asyncio cancellation. It does **not** bound the whole run, tool calls, or the delay a `backoff` schedule waits between attempts — `turn_budget` and `max_turns` are what cap the loop itself.
+
+When the deadline passes the run fails with the SDK's `ModelTimeoutError`, which `classify_run_error()` reports as `RunErrorKind.MODEL_TIMEOUT` and `chat()` returns as `error_kind: "model_timeout"`. That kind exists so a caller can tell their own bound firing apart from an unrecoverable failure — the answer to one is usually a larger number, not a bug hunt.
+
+Timing out is not one of the failures `execute(fallback_on_overflow=True)` rescues: the rescue is another model call, bounded by the same number of seconds, so a provider slow enough to trip the bound trips it again. The rescue call is bounded — it goes straight to the OpenAI client, which gets the declared timeout as its own per-request limit.
+
+Both agent-building paths attach the bound the same way: `BaseAgentRunner.create_agent()` and `create_agent_from_registry()`. Settings supplied by the caller still win field by field, so an explicit `timeout` on a `model_settings` override replaces the declared one.
 
 ## Tool Output Trimming
 
