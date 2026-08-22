@@ -32,15 +32,21 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+# Every requirement carries a ceiling as well as a floor. An unbounded
+# requirement hands a consumer — and a CI run — the next major on the day it is
+# published: openai 3.0 replaced httpx with httpx2 and mcp 2.0 removed
+# mcp.server.fastmcp, both of which reached this package unannounced. The
+# ceiling is the major this package is written and tested against; raising it
+# is a deliberate change, made against a suite that runs on the new major.
 dependencies = [
-    "openai-agents>=0.21.1",  # OpenAI Agents SDK — >=0.21.1 carries ModelSettings.timeout
-    # The three floors below match the ones openai-agents declares for itself.
-    # They are shared dependencies: resolving openai-agents already forces at
-    # least these versions on every consumer, so a lower floor here would only
-    # describe a combination this package never installs or tests.
-    "openai>=3.0.0",  # Direct AsyncOpenAI / AsyncAzureOpenAI client construction, httpx2-backed
-    "pydantic>=2.12.2",
-    "pyyaml>=6.0",
+    "openai-agents>=0.21.1,<0.23",  # OpenAI Agents SDK — >=0.21.1 carries ModelSettings.timeout
+    # The three ranges below match the ones openai-agents declares for itself.
+    # They are shared dependencies: resolving openai-agents already forces them
+    # on every consumer, so a wider range here would only describe a combination
+    # this package never installs or tests.
+    "openai>=3.0.0,<4",  # Direct AsyncOpenAI / AsyncAzureOpenAI client construction, httpx2-backed
+    "pydantic>=2.12.2,<3",
+    "pyyaml>=6.0,<7",
 ]
 
 [project.optional-dependencies]
@@ -61,6 +67,12 @@ dev = [
     "mypy>=1.0",
     "mcp>=1.19.0,<2",
     "types-PyYAML>=6.0",
+    # The transport ``openai`` is built on. ``tests/conftest.py`` constructs the
+    # ``httpx2.Request``/``Response`` pair ``APIStatusError`` reads back, so the
+    # suite imports it directly and cannot rely on reaching it as a transitive:
+    # the client swapped HTTP libraries once already. The range matches the one
+    # ``openai`` declares for itself.
+    "httpx2>=2.7.0,<3",
 ]
 
 [project.urls]
