@@ -71,9 +71,9 @@ class RunErrorKind(str, Enum):
       ``failed`` / ``incomplete`` state (an output-token cap, a content filter,
       a provider-side error). That last one is the provider reporting an
       outcome rather than the model misbehaving, but openai-agents raises the
-      same exception class for it — on the streamed path since 0.21.1, on the
-      non-streamed one since 0.22.0 — and only the message distinguishes them,
-      so they share a kind.
+      same exception class for it — on the streamed path throughout the
+      version range this package supports, on the non-streamed one since 0.22.0
+      — and only the message distinguishes them, so they share a kind.
     - ``MODEL_TIMEOUT`` -> the SDK's ``ModelTimeoutError``: one model-call
       attempt outran the agent's declared ``model_timeout``. The bound is the
       caller's own policy, so this is a limit they chose, not a failure of the

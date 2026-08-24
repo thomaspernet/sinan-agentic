@@ -2,8 +2,8 @@
 
 A Responses turn can end in ``failed`` or ``incomplete`` — an output-token cap,
 a content filter, a provider-side error — and the payload then carries no
-output. openai-agents 0.21.1 raised ``ModelBehaviorError`` for that on the
-streamed and websocket paths but not on the non-streamed one, where
+output. Before 0.22.0, openai-agents raised ``ModelBehaviorError`` for that on
+the streamed and websocket paths but not on the non-streamed one, where
 ``get_response()`` handed the run a ``ModelResponse(output=[])``: a successful
 empty turn. ``chat()`` reported ``{"success": True}`` with an empty response and
 committed an empty assistant message to the session, which the model then read
@@ -53,6 +53,10 @@ MODEL_NAME = "gpt-4o-mini"
 USER_INPUT = "produce an answer"
 
 ANSWERED_OUTPUT = "the answer a completed turn carries"
+
+# The roles a committed session item carries, in the order a completed turn
+# writes them.
+USER_ROLE = "user"
 
 ASSISTANT_ROLE = "assistant"
 
@@ -118,7 +122,7 @@ class TestTerminalResponseFailsTheTurn:
         read back as history. A raise leaves the turn's input and nothing else."""
         _, items = await _chat_over(_response(status, output=[]), f"session-{status}")
 
-        assert [item["role"] for item in items] == ["user"]
+        assert [item["role"] for item in items] == [USER_ROLE]
 
     @pytest.mark.parametrize("status", TERMINAL_STATUSES)
     async def test_the_failure_carries_no_response(self, status):
@@ -133,7 +137,7 @@ class TestTerminalResponseFailsTheTurn:
 
         assert result["success"] is True
         assert result["response"] == ANSWERED_OUTPUT
-        assert [item["role"] for item in items] == ["user", ASSISTANT_ROLE]
+        assert [item["role"] for item in items] == [USER_ROLE, ASSISTANT_ROLE]
 
 
 class TestTerminalResponseClassification:
