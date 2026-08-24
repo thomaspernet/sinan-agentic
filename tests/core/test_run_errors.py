@@ -95,7 +95,13 @@ class TestFallbackRecoverableKinds:
 
     A guardrail tripwire is deliberately outside the set: it is a declared check
     saying no, so a second call that reaches a different answer has defeated the
-    guardrail rather than recovered from a limit.
+    guardrail rather than recovered from a limit. ``MODEL_BEHAVIOR`` is outside
+    it for a reason of its own: the kind covers both a malformed final output,
+    which the ``invalid_final_output`` handler has already tried to salvage, and
+    a terminal ``failed`` / ``incomplete`` Responses payload, which raises before
+    that handler is consulted — and nothing here can admit one route without the
+    other. ``tests/test_terminal_response_failure.py`` pins that decision against
+    the exception the SDK actually raises.
     """
 
     def test_covers_max_turns_and_overflow(self):
