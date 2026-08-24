@@ -67,7 +67,13 @@ class RunErrorKind(str, Enum):
       produce the requested output.
     - ``MODEL_BEHAVIOR`` -> the SDK's ``ModelBehaviorError``: the model did
       something the run cannot use — malformed structured output, a call to a
-      tool that does not exist.
+      tool that does not exist, or a Responses turn that ended in a terminal
+      ``failed`` / ``incomplete`` state (an output-token cap, a content filter,
+      a provider-side error). That last one is the provider reporting an
+      outcome rather than the model misbehaving, but openai-agents raises the
+      same exception class for it — on the streamed path since 0.21.1, on the
+      non-streamed one since 0.22.0 — and only the message distinguishes them,
+      so they share a kind.
     - ``MODEL_TIMEOUT`` -> the SDK's ``ModelTimeoutError``: one model-call
       attempt outran the agent's declared ``model_timeout``. The bound is the
       caller's own policy, so this is a limit they chose, not a failure of the
@@ -104,11 +110,28 @@ class RunErrorKind(str, Enum):
 # answer, not recovering from a limit. The guardrail tripwires are absent for the
 # same reason and more sharply: a tripwire is the project's own declared check
 # saying no, and a retry that reaches a different outcome is the guardrail being
-# defeated, not a limit being recovered from. A malformed output is absent too;
-# that one is already handled in-run by the SDK's ``invalid_final_output``
-# handler. So is a timeout: the rescue is another model call, bounded by the same
-# declared number of seconds, so a provider slow enough to trip the bound trips
-# it again.
+# defeated, not a limit being recovered from. A timeout is absent too: the rescue
+# is another model call, bounded by the same declared number of seconds, so a
+# provider slow enough to trip the bound trips it again.
+#
+# ``MODEL_BEHAVIOR`` is absent, and that takes two reasons because the kind
+# covers two routes to the same exception class. A malformed final output is
+# handled in-run by the SDK's ``invalid_final_output`` handler, so reaching here
+# means salvage was already tried and declined. A terminal ``failed`` /
+# ``incomplete`` Responses payload never meets that handler at all: openai-agents
+# raises it from inside ``get_response``, before any final-output validation.
+#
+# The decision on that second route is to leave it out. An output-cap
+# ``incomplete`` genuinely reads as "ran out of room" — the family the condensed
+# call does rescue — but nothing here can act on only that subset: the two routes
+# share one kind, and the sole thing separating them at the call site is the
+# exception message (``status=``, ``incomplete_details=``), the contract this
+# module exists to stop branching on. Admitting the kind would admit malformed
+# output and unknown-tool calls with it. The rescue would also have nothing to
+# work with: it condenses the tool output the failed run gathered, and the
+# terminal check fires on the model call itself, so a run that dies there
+# gathered none. Splitting the subset off needs its own ``RunErrorKind``, which
+# needs the SDK to type the failure — not a message match added here.
 FALLBACK_RECOVERABLE_KINDS = frozenset({RunErrorKind.MAX_TURNS, RunErrorKind.CONTEXT_OVERFLOW})
 
 
