@@ -24,7 +24,7 @@ from typing import Any
 
 from agents import Agent
 
-from ..core.model_retry import apply_model_retry
+from ..core.model_settings import apply_declared_model_settings
 from .agent_registry import get_agent_registry
 from .guardrail_registry import attach_tool_input_guardrails, get_guardrail_registry
 from .tool_registry import get_tool_registry
@@ -40,9 +40,10 @@ def create_agent_from_registry(
     the ToolRegistry and its guardrail references through the GuardrailRegistry,
     and returns a fully configured Agent. Each guardrail lands in the SDK slot
     its category maps to: ``input`` and ``output`` on the agent, ``tool_input``
-    on the agent's local function tools. A declared ``model_retry`` policy rides
-    on the agent's model settings, so transient model-API failures retry inside
-    the SDK instead of failing the run.
+    on the agent's local function tools. A declared ``model_retry`` policy and a
+    declared ``model_timeout`` both ride on the agent's model settings, so
+    transient model-API failures retry inside the SDK instead of failing the run
+    and no single attempt hangs past the declared bound.
 
     NOTE: run-level settings are not wired here — they belong to the run, not
     the agent, so a caller driving ``Runner`` themselves passes them in.
@@ -50,7 +51,7 @@ def create_agent_from_registry(
     ``pre_approval_tool_input_guardrails`` setting: declared tool-input
     guardrails still run before their tool executes, but without it they run
     after the SDK emits a pending human-approval interruption rather than
-    before it (``openai-agents`` 0.18.3, ``agents.run_internal.tool_execution``).
+    before it (``openai-agents`` 0.20.0, ``agents.run_internal.tool_execution``).
     And a declared ``tool_output_trim``, which it reads off the definition
     registered under the agent's name, since the SDK installs the trimming
     filter through ``RunConfig`` and there is no slot for it on the agent.
@@ -117,7 +118,10 @@ def create_agent_from_registry(
         "output_guardrails": guardrails.output_guardrails,
     }
 
-    model_settings = apply_model_retry(agent_def.model_retry)
+    model_settings = apply_declared_model_settings(
+        model_retry=agent_def.model_retry,
+        model_timeout=agent_def.model_timeout,
+    )
     if model_settings is not None:
         agent_kwargs["model_settings"] = model_settings
 

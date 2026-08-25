@@ -28,9 +28,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from agents import Agent, FunctionTool, RunConfig, ToolExecutionConfig
+from agents import Agent, RunConfig, ToolExecutionConfig
 
 from ..registry.agent_registry import resolve_agent_definition
+from ..registry.guardrail_registry import has_tool_input_guardrails
 from .tool_output_trim import ToolOutputTrimConfig, build_tool_output_trimmer
 
 
@@ -74,7 +75,7 @@ def tool_input_pre_approval() -> ToolExecutionConfig:
     guardrail returns its message as the tool output — so a call the guardrail
     would refuse never reaches an approver. Without it, those guardrails run only
     once the approval is resolved, just before the tool executes
-    (``openai-agents`` 0.18.3, ``agents.run_internal.tool_execution``).
+    (``openai-agents`` 0.20.0, ``agents.run_internal.tool_execution``).
 
     Returns:
         A fresh ToolExecutionConfig with pre-approval enabled. The SDK dataclass
@@ -85,9 +86,7 @@ def tool_input_pre_approval() -> ToolExecutionConfig:
 
 def _has_tool_input_guardrails(agent: Agent) -> bool:
     """Whether any of *agent*'s local function tools carries a tool-input guardrail."""
-    return any(
-        isinstance(tool, FunctionTool) and tool.tool_input_guardrails for tool in agent.tools
-    )
+    return any(has_tool_input_guardrails(tool) for tool in agent.tools)
 
 
 def _declared_tool_output_trim(agent: Agent) -> ToolOutputTrimConfig | None:

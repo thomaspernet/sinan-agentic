@@ -1,9 +1,9 @@
 ---
-description: "Draft a fresh umbrella epic (name + body with a child checklist) from selected issues or propagation follow-ups, present it for human approval, and only on explicit approval create it on GitHub. Never creates the epic unasked."
+description: "Draft a fresh umbrella epic (name + body with a child checklist) from selected issues or propagation follow-ups, present it for human approval, and only on explicit approval create it on GitHub — rooting a draft workflow now or leaving it as a Backlog epic to convert later, as the human chooses. Never creates the epic unasked."
 capability: core
 ---
 
-Mint a **fresh umbrella epic** to group related work under one workflow. The agent **drafts** the epic name + body; the human **approves** before anything is created on GitHub. This is the shared primitive every growth/assembly path uses (assemble, propagation attach, growth re-parent) — built once here (#2590, epic #2586).
+Mint a **fresh umbrella epic** to group related work. The agent **drafts** the epic name + body; the human **approves** before anything is created on GitHub, and — for a selected set — **chooses whether the epic roots a workflow now or stays a Backlog epic to convert later**. This is the shared primitive every growth/assembly path uses (assemble, propagation attach, growth re-parent) — built once here (#2590, epic #2586).
 
 Two hard rules, no exceptions:
 
@@ -32,10 +32,12 @@ Pass `--repo "$REPO"` to every `devwatch` and `gh` command.
 
 This skill drafts from exactly **one** of two documented input shapes:
 
-- **Assemble** — a *set of selected issues* the operator wants to start as one. You summarise the selection into an umbrella name + body whose `## Children` checklist lists each selected issue.
+- **Assemble** — a *set of selected issues* the operator wants to group. You summarise the selection into an umbrella name + body whose `## Children` checklist lists each selected issue. This shape has **two destinations** and the human picks between them at the §3 gate — see there.
 - **Propagation / growth** — an *originating issue or diff* plus its *scan-hit follow-ups*. You summarise the originating change and the second-wave follow-ups into an umbrella whose checklist lists the originating issue (adopted as a child) and each follow-up.
 
 Decide the shape from the invocation context. If it is ambiguous, ask the human which one before drafting — do not guess.
+
+This skill always mints a **fresh** umbrella. Moving issues onto an epic that already exists is not this skill — that is `regroup-onto-existing-epic` (a whole group) or `rehome-member` (one issue). If the theme is already on file as an open epic, say so and stop rather than minting a duplicate.
 
 ## 1. Gather the inputs (read-only)
 
@@ -81,11 +83,36 @@ Show the human the drafted name and body in full and ask them to approve, edit, 
 
 Do **not** proceed past this gate without an explicit approval in the conversation. There is no auto-approve for epic creation — minting the epic is the human's call (locked decision, "Agent never acts unasked").
 
+**Assemble shape — ask the destination in the same breath.** A selected set can land two ways, and which one is the human's call, not yours:
+
+> Where should it land?
+>
+> **(a) Workflow now** — the epic roots a `draft` workflow and the selected issues become its steps. Ready to start; the group leaves the Backlog.
+>
+> **(b) Backlog epic** — the epic carries the selected issues as `child-of` children and roots **no** workflow. It stays in the Backlog as a collapse/expand row, and you convert it yourself with **Convert to workflow** when you are ready.
+
+Do not default to (a). "Bundle these under an epic" does not say which destination, so ask — the answer changes what lands and is not recoverable by re-running this skill. The propagation/growth shape has no such choice: it re-parents an *existing* workflow onto the new epic, so (a) is the only thing it can mean.
+
 ## 4. Create the umbrella (only after approval)
 
-Once — and only once — the human approves, create the epic via the approval-gated CLI command. `--approve` is the machine-level assertion that the human signed off; the command refuses to create anything without it.
+Once — and only once — the human approves, the approved name and body go to the `devwatch` command that matches the shape and — for assemble — the destination they chose:
 
-The approved name and the approved body are both drafted prose that name issues and symbols in backticks, so pass each through its own **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command. Mangling either one between the approval gate and the create defeats what the gate guarantees: the epic that lands must be the epic the human signed off on.
+| Input shape | Command | What lands |
+|---|---|---|
+| **Assemble → (a) workflow now** | `assemble-epic` (§5) | the epic, a `draft` workflow rooted on it, every selected issue moved onto it as a step |
+| **Assemble → (b) backlog epic** | `mint-umbrella-epic` then one `link` per member (§5) | the epic and a `child-of` edge per member — **no** workflow |
+| **Propagation / growth** — an originating issue plus its follow-ups | `attach-propagation-followups` (§5) | the epic, the originating issue's workflow re-parented onto it, and the follow-ups adopted as members |
+| **Neither** — a theme placeholder with no members to bind | `mint-umbrella-epic` (§5) | the epic, and nothing else |
+
+Every row creates the same epic through the same primitive — the `epic` label, **no branch** (#1116) — and every row prints the new epic number. What differs is which binding the members get, and whether a workflow is rooted on it now or later.
+
+**Membership and grouping are two different bindings — take the one the human chose.** An issue is a *member* of a **workflow**, never of an epic, and every membership command refuses a destination that does not already root a non-terminal workflow. No `devwatch` command roots a workflow on an epic that already exists, so a label-only epic can never gain *members* from a terminal afterwards. If the group is meant to run as a workflow, take the `assemble-epic` row now — do not mint bare intending to attach members later.
+
+A `child-of` edge is the **other** binding, and it is not a failed membership write. An epic with children and no workflow is the Backlog's **un-converted epic** — a supported, first-class row, not a dead end: the birth seed deliberately skips epics, so a minted umbrella owns no workflow; the Backlog groups its children by that `child-of` edge rather than by workflow membership; and **Convert to workflow** on that row seeds the new workflow's steps from those same edges, retiring each member's birth draft as it inserts. That is destination (b), and it is the whole point of offering the choice. What it is *not* is a back door onto an epic that was meant to have a workflow — the two destinations answer different questions, and the human picked between them in §3.
+
+`--approve` is the machine-level assertion that the human signed off in §3. Every row refuses without it, so the approval gate holds whichever command carries the draft.
+
+The approved name and the approved body are both drafted prose that name issues and symbols in backticks, so pass each through its own **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command. Mangling either one between the approval gate and the create defeats what the gate guarantees: the epic that lands must be the epic the human signed off on. Build them once — every row uses `"$TITLE"` and `"$BODY"`:
 
 ```bash
 TITLE=$(cat <<'TITLE_EOF'
@@ -97,7 +124,40 @@ BODY=$(cat <<'BODY_EOF'
 <approved body>
 BODY_EOF
 )
+```
 
+## 5. Bind the members — finish it from this terminal
+
+**There is no dashboard flow to hand off to.** The browser client ships the mint call with no screen that invokes it, and even invoked it would only mint — nothing there binds membership. Do not report the epic and wait for a UI to finish the job — there is no UI, and the commands below are the whole job.
+
+Run the command the §4 row selected, reusing the `"$TITLE"` and `"$BODY"` already built.
+
+### Assemble → (a) workflow now
+
+One call. It mints the epic, roots a `draft` workflow on it, and moves **every** selected issue onto that workflow:
+
+```bash
+devwatch --repo "$REPO" assemble-epic \
+  --title "$TITLE" \
+  --body "$BODY" \
+  --member <issue> \
+  --member <issue> \
+  --area <backend|frontend|agents|infrastructure> \
+  --priority <P0-critical|P1-high|P2-medium|P3-low> \
+  --approve
+```
+
+Pass the whole set — `--member` is repeatable and this door expects a selection spanning many source workflows, because every freshly filed issue is born into its own one-member draft. It resolves the base branch from the repo's own `dev` branch and the action set from the workflow defaults, which is exactly what those drafts carry.
+
+Only an issue **still in its birth draft** is bundled. One that has already joined a real epic, or that has already executed (a branch, a run), owns a branch contract this door does not read, so it is left in place and named in the output. Move those separately: `rehome-member` for one issue, `regroup-onto-existing-epic` / `regroup-onto-new-epic` when a whole group is leaving one epic for another.
+
+The epic lands unstarted: `draft` status, every autonomy toggle off, nothing queued.
+
+### Assemble → (b) backlog epic
+
+Two steps, because no single door mints-and-links. First mint the umbrella — it roots no workflow, since the birth seed skips epics:
+
+```bash
 devwatch --repo "$REPO" mint-umbrella-epic \
   --title "$TITLE" \
   --body "$BODY" \
@@ -106,8 +166,47 @@ devwatch --repo "$REPO" mint-umbrella-epic \
   --approve
 ```
 
-This applies the `epic` label and creates **no branch** (#1116). The command prints the new epic number.
+Then write one `child-of` edge per member onto the epic number it printed:
 
-## 5. Hand off — do NOT re-parent here
+```bash
+devwatch --repo "$REPO" link <issue> <epic-number> --type child-of
+```
 
-This skill mints the epic and stops. Re-parenting the members onto it (turning the selection/originating issue + follow-ups into children of the new epic) and binding it as a workflow's root is the consumer flow's job — assemble (#2593), propagation attach (#2592), or growth re-parent (#2591) — not this primitive's. Report the new epic number and the members that should become its children, then stop.
+Each `link` writes the edge and rewrites that issue's GitHub body `Links:` section. Members keep their own birth drafts, and nothing is started.
+
+Unlike the single-call rows this one **can land half-done**: if a `link` fails, the epic still exists and the edges that already landed still hold. Do not re-mint. Report exactly which members are linked and which are not, with the `link` command to retry each — the epic number is the part that cannot be recreated.
+
+The result is the Backlog's un-converted epic row, children nested under it. The human converts it when ready; **Convert to workflow** seeds the steps from these same edges.
+
+### Neither — no members to bind
+
+```bash
+devwatch --repo "$REPO" mint-umbrella-epic \
+  --title "$TITLE" \
+  --body "$BODY" \
+  --area <backend|frontend|agents|infrastructure> \
+  --priority <P0-critical|P1-high|P2-medium|P3-low> \
+  --approve
+```
+
+### Propagation / growth — an originating issue plus its follow-ups
+
+One call. It mints the epic, re-parents the originating issue's workflow onto it, and adopts each follow-up as a member:
+
+```bash
+devwatch --repo "$REPO" attach-propagation-followups \
+  --origin-issue <originating-issue> \
+  --followup <follow-up> \
+  --followup <follow-up> \
+  --title "$TITLE" \
+  --body "$BODY" \
+  --area <backend|frontend|agents|infrastructure> \
+  --priority <P0-critical|P1-high|P2-medium|P3-low> \
+  --approve
+```
+
+### Then report
+
+Nothing auto-runs on any row — no run is opened and the dispatcher is never fired, even where auto-execute is on. Report the new epic number, then what the chosen row actually bound: for a workflow row, the members that landed as **pending** steps; for the backlog row, the members now linked as children and the fact that the epic roots no workflow yet, so the human knows to convert it when ready.
+
+Report — verbatim — anything the command named as left in place or not linked, together with the retry command it printed for each. An unbound member is the one part of the job left undone, and naming it is what lets the human finish it.

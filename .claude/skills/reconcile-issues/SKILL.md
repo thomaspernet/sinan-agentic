@@ -1,5 +1,5 @@
 ---
-description: "Reconcile orphan issues that have no child-of: pick a parent for each, write the child-of link, and let convergence re-home them. Confirms before touching any issue with a run/branch, and reports misrouted members without touching them."
+description: "Reconcile orphan issues that have no child-of: pick a parent for each, write the child-of link, and let convergence re-home them. Confirms before touching any issue with a run/branch, and reports misrouted members and workflow-less parents without touching them."
 capability: core
 ---
 
@@ -17,6 +17,10 @@ appears. This skill is the human-in-the-loop remainder:
 - **Misrouted members** (#3727) — a `child-of` that reaches a different workflow
   root than the one owning the step. Reported here, never touched: the link is
   already right, so the fix is a membership re-home, not another link.
+- **Unrooted parents** (#3827) — a `child-of` that reaches no workflow root at
+  all, because the declared parent is a label-only epic. Reported here, never
+  touched: the link is already right too, and no second link helps — the parent
+  needs a workflow rooted on it before anything can converge onto it.
 
 This skill **reuses the membership service** — it lists candidates via
 `devwatch attach-candidates` (backed by `attach_service`) and writes the
@@ -44,15 +48,18 @@ devwatch --repo "$REPO" attach-candidates --json
 Each entry is an open, non-epic issue whose membership needs a decision. Fields:
 
 - `number`, `title` — the issue.
-- `disposition` — `pristine`, `work_started`, or `misrouted` (see below).
+- `disposition` — `pristine`, `work_started`, `misrouted`, or `unrooted_parent`
+  (see below).
 - `roots` — the candidate parents the link may point at: each is an **epic** or
   a **workflow root** (never a mere step — #1316). Picking one of these is what
   lets convergence re-home the orphan, because the chain reaches a workflow root.
-  Empty for a `misrouted` entry — there is nothing to pick.
+  Empty for a `misrouted` or `unrooted_parent` entry — there is nothing to pick.
 - `divergence` — present only on a `misrouted` entry: `link_root`,
   `workflow_root`, and the `reason` sentence naming both. `null` otherwise.
+- `unrooted_parent` — present only on an `unrooted_parent` entry: `parent` and
+  the `reason` sentence naming it. `null` otherwise.
 
-Two shapes, and **only the orphan shape is this skill's job**:
+Three shapes, and **only the orphan shape is this skill's job**:
 
 - **Orphans** (`pristine`, `work_started`) — no `child-of` at all, so their only
   home is their own single-member self-rooted workflow and convergence has
@@ -68,6 +75,17 @@ Two shapes, and **only the orphan shape is this skill's job**:
   `devwatch link` on them. Report them to the human, quoting `divergence.reason`
   verbatim, and say the fix is a re-home of the member onto the workflow rooted
   at `link_root` — an explicit operator action outside this skill.
+- **Unrooted parent** (`unrooted_parent`) — the issue already has a `child-of`
+  too, but that chain reaches **no** workflow root at all (#3827): the declared
+  parent is a label-only epic, so convergence has nowhere to project the
+  membership to and the issue re-roots its own draft forever. **Writing another
+  link fixes nothing here either** — the link is already correct; what is
+  missing is a workflow rooted on the parent. Do not offer a parent for these
+  and do not run `devwatch link` on them. Report them to the human, quoting
+  `unrooted_parent.reason` verbatim, and say the fix is to root a workflow on
+  that parent (`devwatch regroup-onto-new-epic`, or the dashboard's workflow
+  create) — an explicit operator action outside this skill. Once one exists,
+  these converge on their own with no further link.
 
 If the list is empty, report "Nothing to reconcile — every open issue has a home,
 and every link agrees with it." and stop. (Run the plain
@@ -77,9 +95,10 @@ when reporting to the human.)
 ## 2. Present the orphans and ask for a parent
 
 Show the orphans as a table: number, title, disposition, and the candidate
-parents (`#N — title`). List any `misrouted` entries in a separate, read-only
-section — they are reported, not placed. Then, for each **orphan** the human
-wants to place, ask **which candidate parent** it belongs under.
+parents (`#N — title`). List any `misrouted` and `unrooted_parent` entries in a
+separate, read-only section — they are reported, not placed. Then, for each
+**orphan** the human wants to place, ask **which candidate parent** it belongs
+under.
 
 - Offer the orphan's `roots` as the choices. Picking one of them guarantees the
   re-home, because each is a valid workflow root.
@@ -133,5 +152,5 @@ branch, or drive any pipeline step.
 
 This skill **lists candidates and writes `child-of` links for orphans** —
 nothing else. It does not create workflows, cut branches, implement, force-move
-committed work, or act on a `misrouted` entry beyond reporting it. Membership
-lands via convergence on its own schedule.
+committed work, or act on a `misrouted` / `unrooted_parent` entry beyond
+reporting it. Membership lands via convergence on its own schedule.

@@ -19,7 +19,10 @@ A failure never reaches the caller as an exception, so each of the three
 reports *why* it failed: the caught error is classified into a
 ``RunErrorKind`` and travels as ``error_kind`` beside the rendered message.
 An API layer branches on that kind — retry a ``max_turns``, surface a
-``model_refusal`` — instead of matching the message text.
+``model_refusal`` — instead of matching the message text. A guardrail tripwire
+carries a ``guardrail`` entry too, naming the check that stopped the run and
+listing every guardrail that finished; all three functions report the same set,
+which openai-agents populates uniformly from 0.19.2 on.
 
 Each function accepts either ``agent_name`` (resolved via the registry)
 or a pre-built ``agent`` instance.  Use the latter when you need
@@ -135,7 +138,8 @@ async def chat(
         ``{"success": True, "response": str, "session_id": str, "tools_called": list, "usage": dict}``
         or ``{"success": False, "error": str, "error_kind": str, "session_id": str}``
         on failure, where ``error_kind`` is a ``RunErrorKind`` value naming why
-        the run failed.
+        the run failed. A guardrail tripwire adds a ``guardrail`` entry naming
+        the check that rejected the run.
     """
     if session is None:
         raise ValueError("'session' is required")
@@ -209,7 +213,9 @@ async def chat_with_hooks(
             {"event": "answer",     "data": {"response": "...", "tools_called": [...]}}
             {"event": "error",      "data": {"error": "...", "error_kind": "..."}}
 
-        ``error_kind`` is a ``RunErrorKind`` value naming why the run failed.
+        ``error_kind`` is a ``RunErrorKind`` value naming why the run failed; a
+        guardrail tripwire adds a ``guardrail`` entry naming the check that
+        rejected the run.
 
         The ``answer`` payload owns its ``tools_called`` list: it is copied out
         of the hooks accumulator rather than aliased to it, so the payload is a
@@ -317,7 +323,9 @@ async def chat_streamed(
             {"event": "answer",          "data": {"response": "...", "tools_called": [...]}}
             {"event": "error",           "data": {"error": "...", "error_kind": "..."}}
 
-        ``error_kind`` is a ``RunErrorKind`` value naming why the run failed.
+        ``error_kind`` is a ``RunErrorKind`` value naming why the run failed; a
+        guardrail tripwire adds a ``guardrail`` entry naming the check that
+        rejected the run.
 
         The ``answer`` payload owns its ``tools_called`` list: it is copied out
         of the accumulator this run appends to rather than aliased to it, so the

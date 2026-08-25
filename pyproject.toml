@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sinan-agentic-core"
-version = "0.13.0"
+version = "0.14.0"
 description = "State-of-the-art framework for building AI agents with OpenAI Agents SDK"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,16 +32,31 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+# Every requirement carries a ceiling as well as a floor. An unbounded
+# requirement hands a consumer — and a CI run — the next major on the day it is
+# published: openai 3.0 replaced httpx with httpx2 and mcp 2.0 removed
+# mcp.server.fastmcp, both of which reached this package unannounced. The
+# ceiling is the major this package is written and tested against; raising it
+# is a deliberate change, made against a suite that runs on the new major.
 dependencies = [
-    "openai-agents>=0.18.2",  # OpenAI Agents SDK — >=0.18.1 closes Chat Completions streams on early exit
-    "openai>=1.40",  # Direct AsyncOpenAI / AsyncAzureOpenAI client construction
-    "pydantic>=2.0",
-    "pyyaml>=6.0",
+    "openai-agents>=0.21.1,<0.23",  # OpenAI Agents SDK — >=0.21.1 carries ModelSettings.timeout
+    # The three ranges below match the ones openai-agents declares for itself.
+    # They are shared dependencies: resolving openai-agents already forces them
+    # on every consumer, so a wider range here would only describe a combination
+    # this package never installs or tests.
+    "openai>=3.0.0,<4",  # Direct AsyncOpenAI / AsyncAzureOpenAI client construction, httpx2-backed
+    "pydantic>=2.12.2,<3",
+    "pyyaml>=6.0,<7",
 ]
 
 [project.optional-dependencies]
+# The SDK admits ``mcp>=1.19.0,<3``, but ``mcp/server_builder.py`` builds on
+# ``FastMCP`` from ``mcp.server.fastmcp``, which MCP SDK v2 removed in favour of
+# ``mcp.server.mcpserver``. Until the builder targets that API the extra
+# declares the major it actually supports, so a consumer resolving today gets a
+# working server instead of an ImportError.
 mcp = [
-    "mcp>=1.0.0",
+    "mcp>=1.19.0,<2",
 ]
 dev = [
     "pytest>=7.0",
@@ -50,8 +65,14 @@ dev = [
     "black>=23.0",
     "ruff>=0.1.0",
     "mypy>=1.0",
-    "mcp>=1.0.0",
+    "mcp>=1.19.0,<2",
     "types-PyYAML>=6.0",
+    # The transport ``openai`` is built on. ``tests/conftest.py`` constructs the
+    # ``httpx2.Request``/``Response`` pair ``APIStatusError`` reads back, so the
+    # suite imports it directly and cannot rely on reaching it as a transitive:
+    # the client swapped HTTP libraries once already. The range matches the one
+    # ``openai`` declares for itself.
+    "httpx2>=2.7.0,<3",
 ]
 
 [project.urls]

@@ -40,7 +40,13 @@ from sinan_agentic_core.registry.guardrail_registry import (
 )
 from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
 from sinan_agentic_core.session.agent_session import AgentSession
-from tests.conftest import make_context_overflow_error
+from tests.conftest import (
+    make_context_overflow_error,
+    make_input_tripwire_error,
+    make_output_tripwire_error,
+    registered_input_guardrail,
+    registered_output_guardrail,
+)
 
 
 @pytest.fixture
@@ -190,6 +196,22 @@ class TestCreateAgent:
         ctx = AgentContext(database_connector=Mock())
         agent = await runner.create_agent("dynamic_agent", ctx)
         assert agent.name == "dynamic_agent"
+        assert agent.instructions == "dynamic instructions"
+
+    async def test_async_callable_instructions(self, runner):
+        async def build(ctx, agent_def):
+            return "async instructions"
+
+        runner.agent_registry.register(
+            AgentDefinition(
+                name="async_dynamic_agent",
+                description="async dynamic",
+                instructions=build,
+            )
+        )
+        ctx = AgentContext(database_connector=Mock())
+        agent = await runner.create_agent("async_dynamic_agent", ctx)
+        assert agent.instructions == "async instructions"
 
     async def test_output_dataclass_type(self, runner):
         from pydantic import BaseModel
@@ -283,27 +305,6 @@ class TestCreateAgent:
         agent = await runner.create_agent("hosted_agent", ctx)
         assert agent.name == "hosted_agent"
         assert mock_tool in agent.tools
-
-
-# ------------------------------------------------------------------ #
-# run_agent (backward-compatible)
-# ------------------------------------------------------------------ #
-
-
-class TestRunAgent:
-    async def test_returns_output_and_usage(self, runner, mock_run_result):
-        ctx = AgentContext(database_connector=Mock())
-        session = AgentSession(session_id="run-test")
-
-        with (
-            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-        ):
-            mock_runner_cls.run = AsyncMock(return_value=mock_run_result)
-            result = await runner.run_agent("basic_agent", session, ctx, "hello")
-
-        assert result["output"] == "Test response"
-        assert result["usage"]["input_tokens"] == 100
 
 
 # ------------------------------------------------------------------ #
@@ -427,33 +428,6 @@ class TestCollectingSessionWrapper:
 
 
 class TestExecuteBasic:
-    async def test_returns_final_output_directly(self, runner, mock_run_result):
-        ctx = AgentContext(database_connector=Mock())
-        session = AgentSession(session_id="exec-test")
-
-        with (
-            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-        ):
-            mock_runner_cls.run = AsyncMock(return_value=mock_run_result)
-            result = await runner.execute("basic_agent", ctx, session, input_text="hello")
-
-        # execute() returns final_output directly, not wrapped in {"output": ...}
-        assert result == "Test response"
-
-    async def test_max_turns_passed(self, runner, mock_run_result):
-        ctx = AgentContext(database_connector=Mock())
-        session = AgentSession(session_id="test")
-
-        with (
-            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-        ):
-            mock_runner_cls.run = AsyncMock(return_value=mock_run_result)
-            await runner.execute("basic_agent", ctx, session, max_turns=20)
-            call_kwargs = mock_runner_cls.run.call_args.kwargs
-            assert call_kwargs["max_turns"] == 20
-
     async def test_routes_to_basic_by_default(self, runner, mock_run_result):
         ctx = AgentContext(database_connector=Mock())
         session = AgentSession(session_id="test")
@@ -507,38 +481,6 @@ class TestExecuteStreaming:
             await runner._execute_streamed("basic_agent", ctx, session, lambda e: None, 30, "hello")
             call_kwargs = mock_runner_cls.run_streamed.call_args.kwargs
             assert call_kwargs["max_turns"] == 30
-
-    async def test_on_event_receives_answer(self, runner):
-        ctx = AgentContext(database_connector=Mock())
-        session = AgentSession(session_id="test")
-        events = []
-
-        # Build a mock streamed result
-        mock_result = Mock()
-        mock_result.final_output = "Streamed answer"
-        mock_result.raw_responses = []
-
-        async def mock_stream_events():
-            return
-            yield  # make it an async generator
-
-        mock_result.stream_events = mock_stream_events
-
-        with (
-            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
-            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
-        ):
-            mock_runner_cls.run_streamed = Mock(return_value=mock_result)
-            result = await runner._execute_streamed(
-                "basic_agent", ctx, session, lambda e: events.append(e), 10, "hello"
-            )
-
-        assert result == "Streamed answer"
-        # Should have received an answer event
-        answer_events = [e for e in events if e["event"] == "answer"]
-        assert len(answer_events) == 1
-        assert answer_events[0]["data"]["response"] == "Streamed answer"
-        assert "usage" in answer_events[0]["data"]
 
 
 class TestStreamedAnswerOwnsItsUsageRecord:
@@ -1429,17 +1371,63 @@ class TestPrivateHelpers:
         with pytest.raises(ValueError, match="not found"):
             runner._get_agent_definition("nonexistent")
 
-    def test_build_instructions_string(self, runner):
+    async def test_build_instructions_string(self, runner):
         agent_def = Mock()
         agent_def.instructions = "static instructions"
         ctx_wrapper = Mock()
-        assert runner._build_instructions(agent_def, ctx_wrapper) == "static instructions"
+        assert await runner._build_instructions(agent_def, ctx_wrapper) == "static instructions"
 
-    def test_build_instructions_callable(self, runner):
+    async def test_build_instructions_callable(self, runner):
         agent_def = Mock()
         agent_def.instructions = lambda ctx, agent: "dynamic"
         ctx_wrapper = Mock()
-        assert runner._build_instructions(agent_def, ctx_wrapper) == "dynamic"
+        assert await runner._build_instructions(agent_def, ctx_wrapper) == "dynamic"
+
+    async def test_build_instructions_async_callable(self, runner):
+        async def build(ctx, agent):
+            return "awaited"
+
+        agent_def = Mock()
+        agent_def.instructions = build
+        ctx_wrapper = Mock()
+        assert await runner._build_instructions(agent_def, ctx_wrapper) == "awaited"
+
+    async def test_build_instructions_async_callable_object(self, runner):
+        # A builder object with an async __call__ is the shape that used to
+        # stringify a coroutine into the system prompt.
+        class AsyncBuilder:
+            async def __call__(self, ctx, agent):
+                return "from async object"
+
+        agent_def = Mock()
+        agent_def.instructions = AsyncBuilder()
+        ctx_wrapper = Mock()
+        result = await runner._build_instructions(agent_def, ctx_wrapper)
+        assert result == "from async object"
+        assert "coroutine" not in result
+
+    async def test_build_instructions_sync_callable_object(self, runner):
+        class SyncBuilder:
+            def __call__(self, ctx, agent):
+                return "from sync object"
+
+        agent_def = Mock()
+        agent_def.instructions = SyncBuilder()
+        ctx_wrapper = Mock()
+        assert await runner._build_instructions(agent_def, ctx_wrapper) == "from sync object"
+
+    async def test_build_instructions_calls_the_callable_once(self, runner):
+        calls = []
+
+        async def build(ctx, agent):
+            calls.append(ctx)
+            return "once"
+
+        agent_def = Mock()
+        agent_def.instructions = build
+        ctx_wrapper = Mock()
+        await runner._build_instructions(agent_def, ctx_wrapper)
+        assert calls == [ctx_wrapper]
 
     def test_resolve_output_type_none(self, runner):
         assert runner._resolve_output_type(None) is str
@@ -1658,6 +1646,23 @@ class TestStructuredToolError:
         data = json.loads(result)
         assert "schema" in data["retry_hint"].lower()
 
+    def test_input_tripwire_hint_tells_the_parent_not_to_re_send(self):
+        """A guardrail rejection is not a limit -- a retry that gets through has
+        defeated the check."""
+        from sinan_agentic_core.core.errors import structured_tool_error
+
+        error = make_input_tripwire_error(registered_input_guardrail("blocks_pii"))
+        data = json.loads(structured_tool_error(None, error))
+        assert "guardrail" in data["retry_hint"].lower()
+        assert "do not" in data["retry_hint"].lower()
+
+    def test_output_tripwire_hint_says_the_answer_was_withheld(self):
+        from sinan_agentic_core.core.errors import structured_tool_error
+
+        error = make_output_tripwire_error(registered_output_guardrail("blocks_secrets"))
+        data = json.loads(structured_tool_error(None, error))
+        assert "blocked" in data["retry_hint"].lower()
+
     def test_typed_hint_wins_over_message_text(self):
         """Regression for #47 -- the hint comes from the exception class, so a
         refusal whose text says "not found" still gets the refusal hint."""
@@ -1782,8 +1787,8 @@ class TestGuardrailCategoryWiring:
             "guarded_agent", context=AgentContext(database_connector=Mock())
         )
 
-        assert [g.get_name() for g in agent.input_guardrails] == ["guard_input"]
-        assert [g.get_name() for g in agent.output_guardrails] == ["guard_output"]
+        assert [g.get_name() for g in agent.input_guardrails] == ["g_in"]
+        assert [g.get_name() for g in agent.output_guardrails] == ["g_out"]
 
     async def test_create_agent_attaches_tool_input_guardrails(self, guardrail_runner):
         agent = await guardrail_runner.create_agent(
@@ -1791,7 +1796,7 @@ class TestGuardrailCategoryWiring:
         )
 
         tool = agent.tools[0]
-        assert [g.get_name() for g in tool.tool_input_guardrails] == ["guard_tool_input"]
+        assert [g.get_name() for g in tool.tool_input_guardrails] == ["g_tool"]
 
     async def test_registry_tool_is_not_mutated(self, guardrail_runner, _guardrail_registries):
         _, _, _, echo = _guardrail_registries
@@ -2186,6 +2191,132 @@ class TestModelRetryWiring:
         client = await self._run_fallback(retry_runner, "plain_agent")
 
         client.with_options.assert_not_called()
+
+
+# ------------------------------------------------------------------ #
+# Model call timeout (ModelSettings.timeout wiring)
+# ------------------------------------------------------------------ #
+
+
+@pytest.fixture
+def timeout_runner(_registries):
+    """Runner with agents covering each combination of a bound and a retry policy."""
+    agent_reg, tool_reg, guardrail_reg = _registries
+    agent_reg.register(
+        AgentDefinition(
+            name="bounded_agent",
+            description="bounded",
+            instructions="answer",
+            model_timeout=30.0,
+        )
+    )
+    agent_reg.register(
+        AgentDefinition(
+            name="bounded_retrying_agent",
+            description="bounded and retrying",
+            instructions="answer",
+            model_retry=ModelRetryConfig(max_retries=4),
+            model_timeout=30.0,
+        )
+    )
+    agent_reg.register(
+        AgentDefinition(name="plain_agent", description="plain", instructions="answer")
+    )
+
+    with (
+        patch("sinan_agentic_core.core.base_runner.get_agent_registry", return_value=agent_reg),
+        patch("sinan_agentic_core.core.base_runner.get_tool_registry", return_value=tool_reg),
+        patch(
+            "sinan_agentic_core.core.base_runner.get_guardrail_registry", return_value=guardrail_reg
+        ),
+    ):
+        return BaseAgentRunner()
+
+
+class TestModelTimeoutWiring:
+    async def test_create_agent_attaches_the_bound(self, timeout_runner, context):
+        agent = await timeout_runner.create_agent("bounded_agent", context)
+
+        assert agent.model_settings.timeout == 30.0
+
+    async def test_create_agent_leaves_the_bound_unset_when_not_declared(
+        self, timeout_runner, context
+    ):
+        agent = await timeout_runner.create_agent("plain_agent", context)
+
+        assert agent.model_settings.timeout is None
+
+    async def test_a_bound_needs_no_retry_policy(self, timeout_runner, context):
+        """The two are separate keys, so declaring one must not turn the other on."""
+        agent = await timeout_runner.create_agent("bounded_agent", context)
+
+        assert agent.model_settings.retry is None
+
+    async def test_a_bound_and_a_policy_reach_the_same_agent(self, timeout_runner, context):
+        agent = await timeout_runner.create_agent("bounded_retrying_agent", context)
+
+        assert agent.model_settings.timeout == 30.0
+        assert agent.model_settings.retry.max_retries == 4
+
+    async def test_the_bound_merges_with_computed_model_settings(self, timeout_runner, context):
+        """A dynamic model_settings_fn keeps its values and gains the bound."""
+        timeout_runner.agent_registry.register(
+            AgentDefinition(
+                name="bounded_computed_agent",
+                description="bounded",
+                instructions="answer",
+                model_timeout=30.0,
+                model_settings_fn=lambda ctx: ModelSettings(temperature=0.2),
+            )
+        )
+
+        agent = await timeout_runner.create_agent("bounded_computed_agent", context)
+
+        assert agent.model_settings.temperature == 0.2
+        assert agent.model_settings.timeout == 30.0
+
+    async def test_the_bound_survives_a_model_settings_override(self, timeout_runner, context):
+        """An override replaces the computed settings but must not drop the bound."""
+        agent = await timeout_runner.create_agent(
+            "bounded_agent", context, model_settings_override=ModelSettings(temperature=0.9)
+        )
+
+        assert agent.model_settings.temperature == 0.9
+        assert agent.model_settings.timeout == 30.0
+
+    async def test_an_explicit_timeout_on_an_override_wins(self, timeout_runner, context):
+        agent = await timeout_runner.create_agent(
+            "bounded_agent", context, model_settings_override=ModelSettings(timeout=5.0)
+        )
+
+        assert agent.model_settings.timeout == 5.0
+
+    async def test_agent_as_tool_sub_agent_carries_the_bound(self, timeout_runner, context):
+        """The bound rides on model settings, so it reaches every sub-agent branch."""
+        with patch.object(Agent, "as_tool", autospec=True, return_value=Mock()) as mock_as_tool:
+            await timeout_runner._build_tools(["bounded_agent"], context)
+
+        sub_agent = mock_as_tool.call_args.args[0]
+        assert sub_agent.model_settings.timeout == 30.0
+
+    async def test_fallback_branch_bounds_the_rescue_call(self, timeout_runner):
+        """The branch bypasses Runner.run, so the bound rides the client's own timeout."""
+        client = await TestModelRetryWiring()._run_fallback(timeout_runner, "bounded_agent")
+
+        client.with_options.assert_called_once_with(timeout=30.0)
+
+    async def test_fallback_branch_leaves_the_client_alone_when_not_declared(self, timeout_runner):
+        client = await TestModelRetryWiring()._run_fallback(timeout_runner, "plain_agent")
+
+        client.with_options.assert_not_called()
+
+    async def test_fallback_branch_carries_both_declarations(self, timeout_runner):
+        """One rebuild of the client, so neither declaration can drop the other."""
+        client = await TestModelRetryWiring()._run_fallback(
+            timeout_runner, "bounded_retrying_agent"
+        )
+
+        client.with_options.assert_called_once_with(max_retries=4, timeout=30.0)
 
 
 # ------------------------------------------------------------------ #

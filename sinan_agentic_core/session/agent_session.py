@@ -17,8 +17,10 @@ if TYPE_CHECKING:
     from ..core.capabilities import Capability
     from .sqlite_store import SQLiteSessionStore
 
-# Key the SDK's AgentOutputSchema wraps a non-dict output type under
-# (``agents.agent_output._WRAPPER_DICT_KEY``, openai-agents==0.18.3).
+# Key the SDK's AgentOutputSchema wraps a non-dict output type under. The SDK
+# keeps it private (``agents.agent_output._WRAPPER_DICT_KEY``), so it is mirrored
+# here rather than imported; ``tests/test_session.py`` asserts the two still
+# agree, which is what catches a rename on an SDK bump.
 _STRUCTURED_OUTPUT_WRAPPER_KEY = "response"
 
 

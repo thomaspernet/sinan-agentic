@@ -17,6 +17,15 @@ verbatim, so those runs raise today even though the payload is valid. This
 module locates the embedded payload and validates it against the agent's own
 schema. Anything that does not validate is not recovered.
 
+``ModelBehaviorError`` reaches a caller by two routes and this handler sits on
+only one of them. The malformed-final-output route runs the whole turn first,
+so the failed run data exists and salvage has something to re-parse. The other
+route is a Responses turn the provider ended in a terminal ``failed`` /
+``incomplete`` state: openai-agents raises that from inside ``get_response``,
+before any final output is validated, so no ``invalid_final_output`` handler is
+consulted and the error propagates to the caller as-is. Both arrive classified
+as ``RunErrorKind.MODEL_BEHAVIOR``; only the first is recoverable here.
+
 The scan that locates the payload, :func:`iter_payload_candidates`, is the
 shared half: anything that has to read a payload out of a model message —
 recovery here, session persistence in ``session/agent_session.py`` — reads it
