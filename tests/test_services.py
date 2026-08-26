@@ -1265,6 +1265,130 @@ class TestChatStreamed:
         ]
 
 
+class TestChatStreamedReasoning:
+    """OPUS reads this path, so the model's thinking has to reach it here too."""
+
+    @staticmethod
+    def _get_chat_module():
+        import sys
+
+        return sys.modules["sinan_agentic_core.services.chat"]
+
+    @staticmethod
+    def _raw(data):
+        event = Mock()
+        event.type = "raw_response_event"
+        event.data = data
+        return event
+
+    @staticmethod
+    def _reasoning_item(summary_texts):
+        from agents.items import ReasoningItem
+        from openai.types.responses import ResponseReasoningItem
+
+        event = Mock()
+        event.type = "run_item_stream_event"
+        event.item = ReasoningItem(
+            agent=Mock(),
+            raw_item=ResponseReasoningItem(
+                id="rs_1",
+                type="reasoning",
+                summary=[{"text": text, "type": "summary_text"} for text in summary_texts],
+            ),
+        )
+        return event
+
+    async def _stream(self, raw_events):
+        chat_mod = self._get_chat_module()
+
+        mock_result = Mock()
+        mock_result.final_output = "Streamed answer"
+        mock_result.raw_responses = []
+        mock_result.new_items = []
+
+        async def stream_events():
+            for raw in raw_events:
+                yield raw
+
+        mock_result.stream_events = stream_events
+
+        with patch.object(chat_mod, "create_agent_from_registry") as mock_factory:
+            mock_factory.return_value = _agent_double()
+            with patch.object(chat_mod, "Runner") as mock_runner:
+                mock_runner.run_streamed.return_value = mock_result
+                return [
+                    event
+                    async for event in chat_mod.chat_streamed(
+                        "Hi", agent_name="test_agent", session=AgentSession(session_id="test")
+                    )
+                ]
+
+    async def test_the_summary_text_is_forwarded_chunk_by_chunk(self):
+        from openai.types.responses import ResponseReasoningSummaryTextDeltaEvent
+
+        def delta(text, index=0):
+            return ResponseReasoningSummaryTextDeltaEvent(
+                delta=text,
+                item_id="rs_1",
+                output_index=0,
+                sequence_number=1,
+                summary_index=index,
+                type="response.reasoning_summary_text.delta",
+            )
+
+        events = await self._stream([self._raw(delta("Look")), self._raw(delta("ing", 1))])
+
+        forwarded = [e["data"] for e in events if e["event"] == "reasoning_delta"]
+        assert forwarded == [{"delta": "Look", "index": 0}, {"delta": "ing", "index": 1}]
+
+    async def test_the_part_boundaries_bracket_each_thought(self):
+        from openai.types.responses import (
+            ResponseReasoningSummaryPartAddedEvent,
+            ResponseReasoningSummaryPartDoneEvent,
+        )
+
+        added = ResponseReasoningSummaryPartAddedEvent(
+            item_id="rs_1",
+            output_index=0,
+            part={"text": "", "type": "summary_text"},
+            sequence_number=1,
+            summary_index=0,
+            type="response.reasoning_summary_part.added",
+        )
+        done = ResponseReasoningSummaryPartDoneEvent(
+            item_id="rs_1",
+            output_index=0,
+            part={"text": "Reading the schema", "type": "summary_text"},
+            sequence_number=2,
+            summary_index=0,
+            type="response.reasoning_summary_part.done",
+        )
+
+        events = await self._stream([self._raw(added), self._raw(done)])
+
+        assert [e for e in events if e["event"].startswith("reasoning_part")] == [
+            {"event": "reasoning_part_added", "data": {"index": 0}},
+            {"event": "reasoning_part_done", "data": {"index": 0, "text": "Reading the schema"}},
+        ]
+
+    async def test_the_terminal_event_repeats_every_thought(self):
+        events = await self._stream([self._reasoning_item(["first thought", "then this"])])
+
+        reasoning = next(e for e in events if e["event"] == "reasoning")
+        assert reasoning["data"]["summary"] == ["first thought", "then this"]
+
+    async def test_a_reasoning_item_without_a_summary_says_nothing(self):
+        events = await self._stream([self._reasoning_item([])])
+
+        assert not [e for e in events if e["event"] == "reasoning"]
+
+    async def test_an_unrelated_raw_event_is_still_ignored(self):
+        """The new branch is a fallthrough, so it must not turn noise into events."""
+        events = await self._stream([self._raw(Mock())])
+
+        assert [e["event"] for e in events] == ["answer"]
+
+
 class TestChatStreamedAnswerOwnsItsToolList:
     """The answer payload is a fixed record, so it and the stream never share a list."""
 

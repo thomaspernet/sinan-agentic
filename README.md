@@ -99,6 +99,53 @@ async for event in chat_streamed("What's the weather?", "weather_assistant", ses
         print(f"\nTools used: {event['data']['tools_called']}")
 ```
 
+### Streaming the model's reasoning
+
+A reasoning model can narrate its own thinking, and both streaming paths —
+`chat_streamed()` and `BaseAgentRunner.execute(streaming=True)` — forward that
+narration as it is written. Ask for it on the agent's `model_settings`; nothing
+else is needed, and an agent that does not ask for it streams exactly as before.
+
+```python
+from agents import Agent, ModelSettings
+from openai.types.shared import Reasoning
+
+agent = Agent(
+    name="analyst",
+    model="gpt-5",
+    model_settings=ModelSettings(reasoning=Reasoning(effort="medium", summary="auto")),
+)
+
+async for event in chat_streamed("Why did revenue drop?", agent=agent, session=session):
+    if event["event"] == "reasoning_delta":
+        print(event["data"]["delta"], end="", flush=True)   # a thought, as it is written
+    elif event["event"] == "reasoning_part_done":
+        print()                                             # that thought ended
+    elif event["event"] == "text_delta":
+        print(event["data"]["delta"], end="", flush=True)
+```
+
+| Event | Payload | Meaning |
+|---|---|---|
+| `reasoning_part_added` | `{"index": 0}` | a new thought starts |
+| `reasoning_delta` | `{"delta": "...", "index": 0}` | the next chunk of thought `index` |
+| `reasoning_part_done` | `{"index": 0, "text": "..."}` | thought `index` is finished |
+| `reasoning` | `{"summary": ["...", "..."]}` | every finished thought, repeated once at the end |
+
+`index` is what separates one thought from the next — a step log renders each as
+its own paragraph. The terminal `reasoning` event repeats them all, the same
+guarantee `answer` gives for the response text, so a consumer that dropped a
+fragment still ends up with exactly what was said.
+
+The model decides how much to narrate, and how much arrives varies with the
+model and its `effort` setting. A turn it had nothing to say about produces no
+reasoning events at all — normal, rather than a dropped event, so a consumer
+must render that case. What arrives is the model's own summary of its thinking,
+not its raw internal tokens.
+
+Outside the streamed paths, `BaseAgentRunner.last_reasoning` holds the same
+summaries for the run that just finished.
+
 ### Reporting a failed run
 
 None of the three raises on a failed run — the failure comes back as data. Alongside the rendered message, each reports the *kind* of failure, classified by exception type through `classify_run_error()` (see [Structured error handling](#structured-error-handling)). `AgentOrchestrator.run_workflow()` reports it the same way.

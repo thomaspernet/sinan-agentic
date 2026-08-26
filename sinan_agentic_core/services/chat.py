@@ -52,6 +52,7 @@ from agents import Agent, ItemHelpers, Runner, Usage
 from openai.types.responses import ResponseTextDeltaEvent
 
 from ..core.output_recovery import build_error_handlers
+from ..core.reasoning import reasoning_event, reasoning_stream_event, reasoning_summary_texts
 from ..core.run_config import build_run_config
 from ..core.run_errors import run_error_payload
 from ..core.stream_preview import tool_output_preview
@@ -316,6 +317,10 @@ async def chat_streamed(
         Event dicts::
 
             {"event": "text_delta",      "data": {"delta": "..."}}
+            {"event": "reasoning_part_added", "data": {"index": 0}}
+            {"event": "reasoning_delta", "data": {"delta": "...", "index": 0}}
+            {"event": "reasoning_part_done",  "data": {"index": 0, "text": "..."}}
+            {"event": "reasoning",       "data": {"summary": ["...", "..."]}}
             {"event": "tool_call",       "data": {"tool": "...", "message": "..."}}
             {"event": "tool_output",     "data": {"output": "..."}}
             {"event": "message_output",  "data": {"text": "..."}}
@@ -332,6 +337,17 @@ async def chat_streamed(
         payload is a fixed record of this run — the same guarantee
         ``chat_with_hooks()`` gives.  Only the container is copied; the entries
         are plain tool names.
+
+        The reasoning events carry what the model says about its own thinking.
+        They appear only when the caller asked for it — a reasoning model with
+        ``Reasoning(summary="auto")`` in its ``model_settings`` — and a turn the
+        model had nothing to say about yields none, which is normal rather than
+        a dropped event. A summary arrives one thought per part: ``index`` names
+        the part a delta belongs to, and the ``reasoning_part_added`` /
+        ``reasoning_part_done`` pair brackets it, so a consumer rendering a step
+        log knows where one thought ends and the next begins. The terminal
+        ``reasoning`` event repeats every finished part — the same guarantee
+        ``answer`` gives for the response text.
     """
     if session is None:
         raise ValueError("'session' is required")
@@ -357,11 +373,14 @@ async def chat_streamed(
         tools_called: list[str] = []
 
         async for event in result.stream_events():
-            # Token-level text deltas
-            if event.type == "raw_response_event" and isinstance(
-                event.data, ResponseTextDeltaEvent
-            ):
-                yield {"event": "text_delta", "data": {"delta": event.data.delta}}
+            # Token-level text deltas, and the model's own account of its thinking
+            if event.type == "raw_response_event":
+                if isinstance(event.data, ResponseTextDeltaEvent):
+                    yield {"event": "text_delta", "data": {"delta": event.data.delta}}
+                else:
+                    reasoning = reasoning_stream_event(event.data)
+                    if reasoning:
+                        yield reasoning
 
             # Higher-level run-item events
             elif event.type == "run_item_stream_event":
@@ -388,6 +407,10 @@ async def chat_streamed(
                         "event": "message_output",
                         "data": {"text": ItemHelpers.text_message_output(item)},
                     }
+                elif item.type == "reasoning_item":
+                    summary = reasoning_summary_texts(item)
+                    if summary:
+                        yield reasoning_event(summary)
 
             # Agent handoff
             elif event.type == "agent_updated_stream_event":
