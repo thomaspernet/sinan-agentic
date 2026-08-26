@@ -48,6 +48,12 @@ from .output_recovery import (
     invalid_final_output_handlers,
     salvage_structured_output,
 )
+from .reasoning import (
+    reasoning_event,
+    reasoning_stream_event,
+    reasoning_summary_texts,
+    run_reasoning_texts,
+)
 from .run_config import tool_input_pre_approval
 from .run_errors import FALLBACK_RECOVERABLE_KINDS, classify_run_error
 from .stream_preview import tool_output_preview
@@ -96,6 +102,14 @@ class BaseAgentRunner:
         # on_fallback_end) gets its own deep copy. A shallow copy would leave the
         # nested *_tokens_details mappings shared.
         self.last_usage: dict[str, Any] | None = None
+
+        # What the model said about its own thinking on the last run, one entry
+        # per summary part. The streamed path delivers this as events while the
+        # run is happening; the non-streaming paths hand back only
+        # ``final_output``, so this is where their reasoning survives. Rebuilt
+        # from scratch by every run, and empty unless the caller asked for a
+        # summary via ``model_settings``.
+        self.last_reasoning: list[str] = []
 
         self.tool_map = self.tool_registry.get_all_functions()
 
@@ -378,6 +392,7 @@ class BaseAgentRunner:
         result = await Runner.run(**run_kwargs)
 
         self.last_usage = self._aggregate_usage(result)
+        self.last_reasoning = run_reasoning_texts(result)
         logger.info(f"Agent '{agent_name}' completed successfully")
         return result.final_output
 
@@ -441,6 +456,7 @@ class BaseAgentRunner:
         try:
             run_result = await Runner.run(**run_kwargs)
             self.last_usage = self._aggregate_usage(run_result)
+            self.last_reasoning = run_reasoning_texts(run_result)
             logger.info(f"Agent '{agent_name}' completed successfully")
             return run_result.final_output
 
@@ -577,6 +593,30 @@ class BaseAgentRunner:
         Adds user message to session, streams events via on_event callback,
         and returns final_output.
 
+        Events delivered to ``on_event``::
+
+            {"event": "text_delta",         "data": {"delta": "..."}}
+            {"event": "reasoning_part_added", "data": {"index": 0}}
+            {"event": "reasoning_delta",    "data": {"delta": "...", "index": 0}}
+            {"event": "reasoning_part_done", "data": {"index": 0, "text": "..."}}
+            {"event": "reasoning",          "data": {"summary": ["...", "..."]}}
+            {"event": "tool_call",          "data": {"tool": "...", "message": "..."}}
+            {"event": "tool_output",        "data": {"output": "..."}}
+            {"event": "message_output",     "data": {"text": "..."}}
+            {"event": "agent_updated",      "data": {"agent": "..."}}
+            {"event": "answer",             "data": {...}}
+
+        The reasoning events carry what the model says about its own thinking,
+        and only appear when the caller asked for it — ``model_settings`` reaches
+        the agent untouched, so ``Reasoning(summary="auto")`` on a reasoning
+        model is what turns them on. A summary arrives in parts, one thought per
+        part: ``index`` is the part a delta belongs to, and the
+        ``reasoning_part_added`` / ``reasoning_part_done`` pair brackets it, so a
+        consumer rendering a step log knows where one thought ends and the next
+        begins. The terminal ``reasoning`` event repeats every finished part —
+        the same guarantee ``answer`` gives for the response text, so a consumer
+        that dropped a fragment still ends up with exactly what was said.
+
         The ``answer`` event owns its ``usage`` payload: it is a deep copy of the
         record kept as ``self.last_usage``, so editing it does not rewrite the
         runner's own record and a later reader of ``last_usage`` does not see
@@ -625,6 +665,7 @@ class BaseAgentRunner:
         result = Runner.run_streamed(**run_kwargs)
 
         tools_called: list[str] = []
+        reasoning_said: list[str] = []
 
         total_input_tokens = 0
         total_output_tokens = 0
@@ -643,6 +684,10 @@ class BaseAgentRunner:
                         total_output_tokens += resp_usage.output_tokens or 0
                         last_input_tokens = resp_usage.input_tokens or 0
                         request_count += 1
+                else:
+                    reasoning = reasoning_stream_event(event.data)
+                    if on_event and reasoning:
+                        on_event(reasoning)
 
             elif event.type == "run_item_stream_event":
                 item = event.item
@@ -676,6 +721,11 @@ class BaseAgentRunner:
                                 "data": {"text": ItemHelpers.text_message_output(item)},
                             }
                         )
+                elif item.type == "reasoning_item":
+                    summary = reasoning_summary_texts(item)
+                    reasoning_said.extend(summary)
+                    if on_event and summary:
+                        on_event(reasoning_event(summary))
 
             elif event.type == "agent_updated_stream_event":
                 if on_event:
@@ -699,6 +749,7 @@ class BaseAgentRunner:
         # Last response's input_tokens = actual context window usage (not sum)
         usage["last_input_tokens"] = last_input_tokens
         self.last_usage = usage
+        self.last_reasoning = reasoning_said
 
         if on_event:
             on_event(
