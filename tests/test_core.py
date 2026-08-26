@@ -20,6 +20,13 @@ from agents import (
     output_guardrail,
     tool_input_guardrail,
 )
+from agents.items import ReasoningItem
+from openai.types.responses import (
+    ResponseReasoningItem,
+    ResponseReasoningSummaryPartAddedEvent,
+    ResponseReasoningSummaryPartDoneEvent,
+    ResponseReasoningSummaryTextDeltaEvent,
+)
 
 from sinan_agentic_core.core.base_runner import (
     FALLBACK_PROMPT_TOOL_OUTPUT_CHARS,
@@ -465,6 +472,7 @@ class TestExecuteStreaming:
 
         mock_result = Mock()
         mock_result.final_output = "ok"
+        mock_result.new_items = []
         mock_result.raw_responses = []
 
         async def mock_stream_events():
@@ -495,6 +503,7 @@ class TestStreamedAnswerOwnsItsUsageRecord:
 
         mock_result = Mock()
         mock_result.final_output = "Streamed answer"
+        mock_result.new_items = []
         mock_result.raw_responses = []
 
         async def mock_stream_events():
@@ -574,6 +583,7 @@ class TestStreamedAnswerOwnsItsToolList:
 
         mock_result = Mock()
         mock_result.final_output = "Streamed answer"
+        mock_result.new_items = []
         mock_result.raw_responses = []
 
         async def mock_stream_events():
@@ -613,6 +623,204 @@ class TestStreamedAnswerOwnsItsToolList:
 
         assert data["tools_called"] == ["search", "added_by_consumer"]
         assert "completed, 1 tool calls" in caplog.text
+
+
+class TestStreamedReasoningEvents:
+    """What the model says about its own thinking reaches the consumer as written."""
+
+    @staticmethod
+    async def _stream(runner, raw_events):
+        """Stream a turn whose SDK events are *raw_events*; return what was emitted."""
+        ctx = AgentContext(database_connector=Mock())
+        session = AgentSession(session_id="test")
+        events = []
+
+        mock_result = Mock()
+        mock_result.final_output = "Streamed answer"
+        mock_result.new_items = []
+        mock_result.raw_responses = []
+
+        async def mock_stream_events():
+            for raw in raw_events:
+                yield raw
+
+        mock_result.stream_events = mock_stream_events
+
+        with (
+            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
+        ):
+            mock_runner_cls.run_streamed = Mock(return_value=mock_result)
+            await runner._execute_streamed(
+                "basic_agent", ctx, session, lambda e: events.append(e), 10, "hello"
+            )
+
+        return events
+
+    @staticmethod
+    def _raw(data):
+        event = Mock()
+        event.type = "raw_response_event"
+        event.data = data
+        return event
+
+    @staticmethod
+    def _reasoning_item(summary_texts):
+        item = ReasoningItem(
+            agent=Mock(),
+            raw_item=ResponseReasoningItem(
+                id="rs_1",
+                type="reasoning",
+                summary=[{"text": text, "type": "summary_text"} for text in summary_texts],
+            ),
+        )
+        event = Mock()
+        event.type = "run_item_stream_event"
+        event.item = item
+        return event
+
+    @staticmethod
+    def _delta(delta, summary_index=0):
+        return ResponseReasoningSummaryTextDeltaEvent(
+            delta=delta,
+            item_id="rs_1",
+            output_index=0,
+            sequence_number=1,
+            summary_index=summary_index,
+            type="response.reasoning_summary_text.delta",
+        )
+
+    async def test_the_summary_text_is_forwarded_chunk_by_chunk(self, runner):
+        events = await self._stream(
+            runner, [self._raw(self._delta("Look")), self._raw(self._delta("ing"))]
+        )
+
+        deltas = [e["data"]["delta"] for e in events if e["event"] == "reasoning_delta"]
+        assert deltas == ["Look", "ing"]
+
+    async def test_a_delta_names_the_thought_it_belongs_to(self, runner):
+        """Two thoughts run together without the index."""
+        events = await self._stream(
+            runner,
+            [self._raw(self._delta("first")), self._raw(self._delta("second", summary_index=1))],
+        )
+
+        indexes = [e["data"]["index"] for e in events if e["event"] == "reasoning_delta"]
+        assert indexes == [0, 1]
+
+    async def test_an_empty_delta_is_not_forwarded(self, runner):
+        """Same bar as text_delta: an empty chunk says nothing."""
+        events = await self._stream(runner, [self._raw(self._delta(""))])
+
+        assert not [e for e in events if e["event"] == "reasoning_delta"]
+
+    async def test_the_part_boundaries_bracket_each_thought(self, runner):
+        added = ResponseReasoningSummaryPartAddedEvent(
+            item_id="rs_1",
+            output_index=0,
+            part={"text": "", "type": "summary_text"},
+            sequence_number=1,
+            summary_index=0,
+            type="response.reasoning_summary_part.added",
+        )
+        done = ResponseReasoningSummaryPartDoneEvent(
+            item_id="rs_1",
+            output_index=0,
+            part={"text": "Looking at the schema", "type": "summary_text"},
+            sequence_number=3,
+            summary_index=0,
+            type="response.reasoning_summary_part.done",
+        )
+
+        events = await self._stream(
+            runner,
+            [self._raw(added), self._raw(self._delta("Looking at the schema")), self._raw(done)],
+        )
+
+        bracketing = [e for e in events if e["event"].startswith("reasoning_part")]
+        assert bracketing == [
+            {"event": "reasoning_part_added", "data": {"index": 0}},
+            {
+                "event": "reasoning_part_done",
+                "data": {"index": 0, "text": "Looking at the schema"},
+            },
+        ]
+
+    async def test_the_terminal_event_repeats_every_thought(self, runner):
+        """A consumer that dropped a fragment still ends up with what was said."""
+        events = await self._stream(
+            runner, [self._reasoning_item(["first thought", "second thought"])]
+        )
+
+        reasoning = next(e for e in events if e["event"] == "reasoning")
+        assert reasoning["data"]["summary"] == ["first thought", "second thought"]
+
+    async def test_a_reasoning_item_without_a_summary_says_nothing(self, runner):
+        """The model reasons on every turn; only a caller asking for a summary gets text."""
+        events = await self._stream(runner, [self._reasoning_item([])])
+
+        assert not [e for e in events if e["event"] == "reasoning"]
+
+    async def test_the_runner_keeps_the_whole_run_s_reasoning(self, runner):
+        """The same record a non-streamed run leaves behind, for a caller that wants it."""
+        await self._stream(
+            runner, [self._reasoning_item(["first thought"]), self._reasoning_item(["then this"])]
+        )
+
+        assert runner.last_reasoning == ["first thought", "then this"]
+
+
+class TestReasoningSurvivesANonStreamedRun:
+    """``Runner.run()`` hands back only final_output, so the runner keeps the rest."""
+
+    @staticmethod
+    def _result(summary_texts):
+        item = ReasoningItem(
+            agent=Mock(),
+            raw_item=ResponseReasoningItem(
+                id="rs_1",
+                type="reasoning",
+                summary=[{"text": text, "type": "summary_text"} for text in summary_texts],
+            ),
+        )
+        return Mock(final_output="ok", raw_responses=[], new_items=[item])
+
+    async def _run_basic(self, runner, result):
+        with patch(
+            "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
+        ):
+            await runner.execute(
+                "basic_agent",
+                AgentContext(database_connector=Mock()),
+                AgentSession(session_id="s1"),
+            )
+
+    async def test_the_runner_records_what_the_model_reasoned(self, runner):
+        await self._run_basic(runner, self._result(["first thought", "second thought"]))
+
+        assert runner.last_reasoning == ["first thought", "second thought"]
+
+    async def test_a_later_run_without_reasoning_does_not_report_the_last_one(self, runner):
+        """The record is rebuilt per run, so a stale summary never reads as fresh."""
+        await self._run_basic(runner, self._result(["first thought"]))
+        await self._run_basic(runner, Mock(final_output="ok", raw_responses=[], new_items=[]))
+
+        assert runner.last_reasoning == []
+
+    async def test_the_fallback_path_records_it_too(self, runner):
+        result = self._result(["weighing the options"])
+
+        with patch(
+            "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
+        ):
+            await runner.execute(
+                "basic_agent",
+                AgentContext(database_connector=Mock()),
+                AgentSession(session_id="s1"),
+                fallback_on_overflow=True,
+            )
+
+        assert runner.last_reasoning == ["weighing the options"]
 
 
 # ------------------------------------------------------------------ #
@@ -1826,7 +2034,7 @@ class TestGuardrailCategoryWiring:
 
     async def test_execute_basic_passes_run_config(self, guardrail_runner):
         session = AgentSession(session_id="s1")
-        result = Mock(final_output="ok", context_wrapper=Mock(usage=Usage()))
+        result = Mock(final_output="ok", new_items=[], context_wrapper=Mock(usage=Usage()))
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -1840,7 +2048,7 @@ class TestGuardrailCategoryWiring:
 
     async def test_execute_basic_omits_run_config_without_tool_guardrails(self, guardrail_runner):
         session = AgentSession(session_id="s1")
-        result = Mock(final_output="ok", context_wrapper=Mock(usage=Usage()))
+        result = Mock(final_output="ok", new_items=[], context_wrapper=Mock(usage=Usage()))
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -1870,7 +2078,7 @@ class TestGuardrailCategoryWiring:
 
     async def test_run_agent_passes_run_config(self, guardrail_runner):
         session = AgentSession(session_id="s1")
-        result = Mock(final_output="ok", raw_responses=[])
+        result = Mock(final_output="ok", raw_responses=[], new_items=[])
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -1884,7 +2092,7 @@ class TestGuardrailCategoryWiring:
 
     async def test_run_agent_omits_run_config_without_tool_guardrails(self, guardrail_runner):
         session = AgentSession(session_id="s1")
-        result = Mock(final_output="ok", raw_responses=[])
+        result = Mock(final_output="ok", raw_responses=[], new_items=[])
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -1945,7 +2153,7 @@ class TestInvalidOutputRecoveryWiring:
 
     async def test_execute_basic_passes_error_handlers(self, recovery_runner):
         session = AgentSession(session_id="s1")
-        result = Mock(final_output="ok", raw_responses=[])
+        result = Mock(final_output="ok", raw_responses=[], new_items=[])
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -1959,7 +2167,7 @@ class TestInvalidOutputRecoveryWiring:
 
     async def test_execute_basic_omits_error_handlers_when_opted_out(self, recovery_runner):
         session = AgentSession(session_id="s1")
-        result = Mock(final_output="ok", raw_responses=[])
+        result = Mock(final_output="ok", raw_responses=[], new_items=[])
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -1972,7 +2180,7 @@ class TestInvalidOutputRecoveryWiring:
 
     async def test_execute_with_fallback_passes_error_handlers(self, recovery_runner):
         session = AgentSession(session_id="s1")
-        result = Mock(final_output="ok", raw_responses=[])
+        result = Mock(final_output="ok", raw_responses=[], new_items=[])
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -2012,7 +2220,7 @@ class TestInvalidOutputRecoveryWiring:
 
     async def test_run_agent_passes_error_handlers(self, recovery_runner):
         session = AgentSession(session_id="s1")
-        result = Mock(final_output="ok", raw_responses=[])
+        result = Mock(final_output="ok", raw_responses=[], new_items=[])
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -2388,7 +2596,7 @@ class TestToolOutputTrimWiring:
         assert run_config.call_model_input_filter.max_output_chars == 4000
 
     async def test_execute_basic_passes_the_filter(self, trim_runner, context):
-        result = Mock(final_output="ok", context_wrapper=Mock(usage=Usage()))
+        result = Mock(final_output="ok", new_items=[], context_wrapper=Mock(usage=Usage()))
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -2399,7 +2607,7 @@ class TestToolOutputTrimWiring:
         assert run_config.call_model_input_filter.max_output_chars == 4000
 
     async def test_execute_with_fallback_passes_the_filter(self, trim_runner, context):
-        result = Mock(final_output="ok", context_wrapper=Mock(usage=Usage()))
+        result = Mock(final_output="ok", new_items=[], context_wrapper=Mock(usage=Usage()))
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -2415,7 +2623,7 @@ class TestToolOutputTrimWiring:
         assert run_config.call_model_input_filter.max_output_chars == 4000
 
     async def test_execute_streamed_passes_the_filter(self, trim_runner, context):
-        stream = Mock(final_output="ok", raw_responses=[])
+        stream = Mock(final_output="ok", raw_responses=[], new_items=[])
 
         async def no_events():
             return
@@ -2438,7 +2646,7 @@ class TestToolOutputTrimWiring:
         assert run_config.call_model_input_filter.max_output_chars == 4000
 
     async def test_run_agent_passes_the_filter(self, trim_runner, context):
-        result = Mock(final_output="ok", raw_responses=[])
+        result = Mock(final_output="ok", raw_responses=[], new_items=[])
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)

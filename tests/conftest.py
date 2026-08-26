@@ -335,4 +335,5 @@ def mock_run_result(sample_usage):
     result = Mock()
     result.raw_responses = [response]
     result.final_output = "Test response"
+    result.new_items = []
     return result
