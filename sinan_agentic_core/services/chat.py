@@ -52,7 +52,12 @@ from agents import Agent, ItemHelpers, Runner, Usage
 from openai.types.responses import ResponseTextDeltaEvent
 
 from ..core.output_recovery import build_error_handlers
-from ..core.reasoning import reasoning_event, reasoning_stream_event, reasoning_summary_texts
+from ..core.reasoning import (
+    reasoning_event,
+    reasoning_stream_event,
+    reasoning_summary_texts,
+    run_reasoning_texts,
+)
 from ..core.run_config import build_run_config
 from ..core.run_errors import run_error_payload
 from ..core.stream_preview import tool_output_preview
@@ -136,11 +141,18 @@ async def chat(
             *model_override* are ignored.
 
     Returns:
-        ``{"success": True, "response": str, "session_id": str, "tools_called": list, "usage": dict}``
-        or ``{"success": False, "error": str, "error_kind": str, "session_id": str}``
+        ``{"success": True, "response": str, "session_id": str, "tools_called": list,
+        "usage": dict, "reasoning": list[str]}`` or
+        ``{"success": False, "error": str, "error_kind": str, "session_id": str}``
         on failure, where ``error_kind`` is a ``RunErrorKind`` value naming why
         the run failed. A guardrail tripwire adds a ``guardrail`` entry naming
         the check that rejected the run.
+
+        ``reasoning`` carries what the model said about its own thinking, one
+        entry per thought. It is empty unless the caller asked for it — a
+        reasoning model with ``Reasoning(summary="auto")`` in its
+        ``model_settings`` — and empty on a turn the model had nothing to say
+        about, which is normal rather than a loss.
     """
     if session is None:
         raise ValueError("'session' is required")
@@ -173,6 +185,7 @@ async def chat(
             "session_id": session.session_id,
             "tools_called": [],
             "usage": _usage_to_dict(result),
+            "reasoning": run_reasoning_texts(result),
         }
     except Exception as e:
         payload = run_error_payload(e)
@@ -211,12 +224,20 @@ async def chat_with_hooks(
             {"event": "tool_start", "data": {"tool": "...", ...}}
             {"event": "tool_end",   "data": {"tool": "...", ...}}
             {"event": "finalizing", "data": {"message": "..."}}
+            {"event": "reasoning",  "data": {"summary": ["...", "..."]}}
             {"event": "answer",     "data": {"response": "...", "tools_called": [...]}}
             {"event": "error",      "data": {"error": "...", "error_kind": "..."}}
 
         ``error_kind`` is a ``RunErrorKind`` value naming why the run failed; a
         guardrail tripwire adds a ``guardrail`` entry naming the check that
         rejected the run.
+
+        The ``reasoning`` event carries what the model said about its own
+        thinking, one entry per thought. Because this path runs the agent to
+        completion rather than streaming its tokens, the whole summary arrives
+        at once, just before the answer — ``chat_streamed()`` is the path that
+        delivers it as it is written. It is skipped entirely when the caller did
+        not ask for a summary, or on a turn the model had nothing to say about.
 
         The ``answer`` payload owns its ``tools_called`` list: it is copied out
         of the hooks accumulator rather than aliased to it, so the payload is a
@@ -275,6 +296,10 @@ async def chat_with_hooks(
         result = await task
         response = result.final_output
         await session.add_items([{"role": "assistant", "content": response}])
+
+        summary = run_reasoning_texts(result)
+        if summary:
+            yield reasoning_event(summary)
 
         yield {
             "event": "answer",

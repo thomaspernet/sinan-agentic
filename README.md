@@ -101,10 +101,10 @@ async for event in chat_streamed("What's the weather?", "weather_assistant", ses
 
 ### Streaming the model's reasoning
 
-A reasoning model can narrate its own thinking, and both streaming paths —
+A reasoning model can narrate its own thinking, and the token-streaming paths —
 `chat_streamed()` and `BaseAgentRunner.execute(streaming=True)` — forward that
 narration as it is written. Ask for it on the agent's `model_settings`; nothing
-else is needed, and an agent that does not ask for it streams exactly as before.
+else is needed, and an agent that does not ask for it behaves exactly as before.
 
 ```python
 from agents import Agent, ModelSettings
@@ -143,8 +143,11 @@ reasoning events at all — normal, rather than a dropped event, so a consumer
 must render that case. What arrives is the model's own summary of its thinking,
 not its raw internal tokens.
 
-Outside the streamed paths, `BaseAgentRunner.last_reasoning` holds the same
-summaries for the run that just finished.
+The other two paths report the same summaries, but whole rather than as they
+are written, since neither streams the model's tokens: `chat()` returns them as
+a `reasoning` list beside the response, and `chat_with_hooks()` yields one
+`reasoning` event just before the answer. `BaseAgentRunner.last_reasoning`
+holds them after a non-streamed run.
 
 ### Reporting a failed run
 
