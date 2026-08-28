@@ -16,9 +16,10 @@ constructing the filter by hand at every agent.
 This module carries the same choice as data — how many turns to keep intact, the
 size above which an output is trimmed, how much of it to preserve, and which
 tools are eligible. ``build_tool_output_trimmer`` translates it into the SDK
-filter at the point each path assembles its ``RunConfig``, so trimming stays
-declarative in ``agents.yaml`` and reaches every execution branch that runs
-through the SDK — the runner's own, and the chat service's.
+filter, which ``core.run_config.build_model_input_filter`` then places in the
+one filter slot each path's ``RunConfig`` has, so trimming stays declarative in
+``agents.yaml`` and reaches every execution branch that runs through the SDK —
+the runner's own, and the chat service's.
 
 Trimming is off unless declared: it removes content the model would otherwise
 have seen, so no agent gets it implicitly.
@@ -92,10 +93,10 @@ class ToolOutputTrimConfig(BaseModel):
 def build_tool_output_trimmer(trim: ToolOutputTrimConfig | None) -> ToolOutputTrimmer | None:
     """Translate a declared trim policy into the SDK filter a run installs.
 
-    Both run-config-building paths call this — ``BaseAgentRunner._build_run_config()``
-    and :func:`sinan_agentic_core.core.run_config.build_run_config` — so a declared
-    policy reaches ``RunConfig.call_model_input_filter`` the same way whichever path
-    assembled the config.
+    :func:`sinan_agentic_core.core.run_config.build_model_input_filter` calls this,
+    and both run-config-building paths go through that function for the single
+    ``call_model_input_filter`` slot, so a declared policy reaches the run the same
+    way whichever path assembled the config.
 
     Args:
         trim: The agent's declared policy, or None when it opts out.

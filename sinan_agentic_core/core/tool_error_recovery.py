@@ -5,8 +5,8 @@ wasting turns in a loop. ToolErrorRecovery solves this by:
 
 1. Tracking tool errors and the arguments that caused them (Capability hooks)
 2. Detecting repeated identical calls (same tool + same args)
-3. Injecting progressive recovery guidance into the agent's instructions
-   before each LLM call (via Capability.instructions)
+3. Steering the agent with progressive recovery guidance before each LLM
+   call (via Capability.instructions)
 
 ToolErrorRecovery is a Capability — wire it via
 ``AgentDefinition.capabilities`` or pass to ``execute()`` directly.
@@ -92,8 +92,8 @@ class ToolErrorRecovery(Capability):
 
     Detects error patterns (repeated calls, identical arguments) and builds
     an instruction section that tells the agent what went wrong and how to
-    recover. The instruction section is injected dynamically before each
-    LLM call, so the agent always has up-to-date error awareness.
+    recover. The section is rebuilt before each LLM call and delivered as a
+    trailing input item, so the agent always has up-to-date error awareness.
 
     Attributes:
         mcp_hints: Recovery hints for MCP tool names the registry does not know.
@@ -209,7 +209,7 @@ class ToolErrorRecovery(Capability):
         )
 
     def build_instruction_section(self) -> str:
-        """Build dynamic instruction text about recent tool errors.
+        """Build the steering text about recent tool errors.
 
         Returns guidance appropriate to the current state:
         - First failure: show error + recovery hint
@@ -217,8 +217,8 @@ class ToolErrorRecovery(Capability):
         - Repeated failure (same args): escalate — tell agent to stop
 
         Returns:
-            Instruction text to append to the agent's system prompt,
-            or empty string if no errors are tracked.
+            Instruction text to steer the next model call with, or empty
+            string if no errors are tracked.
         """
         if not self._errors:
             return ""

@@ -3,8 +3,9 @@
 A ``Capability`` is a single, focused behavior that can be attached to an
 agent (turn budgeting, tool-error recovery, memory, audit logging, ...)
 without editing the runner. The runtime invokes the lifecycle methods at
-the appropriate moments and merges instruction fragments into the system
-prompt before each LLM call.
+the appropriate moments and delivers instruction fragments as a trailing
+input item on each LLM call — see :mod:`.steering` for why they ride at the
+tail of the input rather than in the system prompt.
 
 The shape mirrors OpenAI Agents SDK ``sandbox.Capability`` (clone, bind,
 instructions) so future interop is cheap, but this class does not depend
@@ -44,11 +45,19 @@ class Capability:
     on_event: Callable[[dict[str, Any]], None] | None = None
 
     def instructions(self, ctx: RunContextWrapper[Any]) -> str | None:
-        """Contribute a fragment to the system prompt for the next turn.
+        """Contribute a steering fragment for the next model call.
 
-        Return ``None`` to contribute nothing. The runtime joins fragments
-        from all attached capabilities and appends them to the agent's
-        base instructions before each LLM call.
+        Return ``None`` to contribute nothing. Before each LLM call the runtime
+        joins the fragments from all attached capabilities and appends them to
+        the model input as one trailing item — the system prompt keeps the
+        string resolved when the agent was built, so the conversation in front
+        of the fragments stays a cacheable prefix. The item is ephemeral and
+        never written to the session. See :mod:`.steering`.
+
+        ``ctx`` wraps the context object the caller passed to ``execute()``.
+        Its ``usage`` is empty rather than reporting the run so far: the SDK's
+        filter payload carries the context object, not the run's own wrapper
+        around it.
         """
         return None
 

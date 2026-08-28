@@ -9,7 +9,7 @@ Also retains run_agent() for backward compatibility.
 import copy
 import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from agents import (
@@ -57,11 +57,10 @@ from .reasoning import (
     reasoning_summary_texts,
     run_reasoning_texts,
 )
-from .run_config import tool_input_pre_approval
+from .run_config import build_model_input_filter, tool_input_pre_approval
 from .run_errors import FALLBACK_RECOVERABLE_KINDS, classify_run_error
 from .stream_preview import tool_output_preview
 from .tool_error_recovery import ToolErrorRecovery, build_tool_error_recovery
-from .tool_output_trim import build_tool_output_trimmer
 from .turn_budget import TurnBudget
 from .turn_budget_tool import request_extension_tool
 from .usage import aggregate_usage, completion_usage_record, last_input_tokens
@@ -385,8 +384,6 @@ class BaseAgentRunner:
             prompt_cache_key=prompt_cache_key,
         )
 
-        self._apply_dynamic_instructions(agent, capabilities)
-
         logger.info(f"Running agent: {agent_name}")
 
         run_kwargs: dict[str, Any] = {
@@ -401,7 +398,7 @@ class BaseAgentRunner:
         if hooks:
             run_kwargs["hooks"] = hooks
 
-        run_config = self._build_run_config(agent_def)
+        run_config = self._build_run_config(agent_def, capabilities)
         if run_config is not None:
             run_kwargs["run_config"] = run_config
 
@@ -467,7 +464,7 @@ class BaseAgentRunner:
         if hooks:
             run_kwargs["hooks"] = hooks
 
-        run_config = self._build_run_config(agent_def)
+        run_config = self._build_run_config(agent_def, capabilities)
         if run_config is not None:
             run_kwargs["run_config"] = run_config
 
@@ -660,8 +657,6 @@ class BaseAgentRunner:
             prompt_cache_key=prompt_cache_key,
         )
 
-        self._apply_dynamic_instructions(agent, capabilities)
-
         if input_text:
             await session.add_items([{"role": "user", "content": input_text}])
         history = await session.get_items()
@@ -679,7 +674,7 @@ class BaseAgentRunner:
         if hooks:
             run_kwargs["hooks"] = hooks
 
-        run_config = self._build_run_config(agent_def)
+        run_config = self._build_run_config(agent_def, capabilities)
         if run_config is not None:
             run_kwargs["run_config"] = run_config
 
@@ -918,7 +913,20 @@ class BaseAgentRunner:
             if agent_def.as_tool_parameters is not None:
                 as_tool_kwargs["parameters"] = agent_def.as_tool_parameters
 
-            sub_run_config = self._build_run_config(agent_def)
+            # The sub-agent's capabilities steer its model calls through its run
+            # config, so they are assembled before the config that carries them.
+            sub_caps: list[Capability] = []
+            budget = agent_def.as_tool_turn_budget
+            if budget:
+                budget.reset()
+                sub_caps.append(budget)
+                tool_agent.tools.append(request_extension_tool)
+                as_tool_kwargs["hooks"] = _CompositeHooks(sub_caps)
+                as_tool_kwargs["max_turns"] = budget.absolute_max
+            elif agent_def.as_tool_max_turns is not None:
+                as_tool_kwargs["max_turns"] = agent_def.as_tool_max_turns
+
+            sub_run_config = self._build_run_config(agent_def, sub_caps)
             if sub_run_config is not None:
                 as_tool_kwargs["run_config"] = sub_run_config
 
@@ -926,17 +934,6 @@ class BaseAgentRunner:
             # run_config but has no error_handlers parameter, so a
             # sub-agent's invalid structured output still raises. Wire it
             # the moment the SDK exposes it.
-
-            budget = agent_def.as_tool_turn_budget
-            if budget:
-                budget.reset()
-                sub_caps: list[Capability] = [budget]
-                self._apply_dynamic_instructions(tool_agent, sub_caps)
-                tool_agent.tools.append(request_extension_tool)
-                as_tool_kwargs["hooks"] = _CompositeHooks(sub_caps)
-                as_tool_kwargs["max_turns"] = budget.absolute_max
-            elif agent_def.as_tool_max_turns is not None:
-                as_tool_kwargs["max_turns"] = agent_def.as_tool_max_turns
 
             agent_tools.append(tool_agent.as_tool(**as_tool_kwargs))
 
@@ -971,7 +968,11 @@ class BaseAgentRunner:
 
         return tools
 
-    def _build_run_config(self, agent_def: Any) -> RunConfig | None:
+    def _build_run_config(
+        self,
+        agent_def: Any,
+        capabilities: Sequence[Capability] = (),
+    ) -> RunConfig | None:
         """Build the SDK run config for an agent, or None when defaults apply.
 
         Declaring a tool-input guardrail opts the agent into running those
@@ -981,9 +982,16 @@ class BaseAgentRunner:
         Declaring ``tool_output_trim`` installs the SDK's tool-output filter,
         which shrinks oversized outputs from older turns before each model call.
 
+        Running with capabilities installs steering, which appends their
+        instruction fragments to the input of each model call. Both want the one
+        ``call_model_input_filter`` slot, so :func:`build_model_input_filter`
+        decides what it holds rather than this method choosing between them.
+
         Args:
             agent_def: Agent definition whose guardrails and trim policy decide
                 the config
+            capabilities: The run's capabilities, already cloned and reset.
+                Empty — as on ``run_agent()``, which runs none — steers nothing.
 
         Returns:
             Configured RunConfig, or None when no setting differs from the default
@@ -993,9 +1001,9 @@ class BaseAgentRunner:
         if self.guardrail_registry.has_category(agent_def.guardrails, GuardrailCategory.TOOL_INPUT):
             config_kwargs["tool_execution"] = tool_input_pre_approval()
 
-        trimmer = build_tool_output_trimmer(agent_def.tool_output_trim)
-        if trimmer is not None:
-            config_kwargs["call_model_input_filter"] = trimmer
+        model_input_filter = build_model_input_filter(agent_def.tool_output_trim, capabilities)
+        if model_input_filter is not None:
+            config_kwargs["call_model_input_filter"] = model_input_filter
 
         if not config_kwargs:
             return None
@@ -1179,43 +1187,6 @@ class BaseAgentRunner:
         return effective
 
     @staticmethod
-    def _apply_dynamic_instructions(
-        agent: Agent,
-        capabilities: list[Capability],
-    ) -> None:
-        """Wrap agent.instructions to merge in capability fragments per turn.
-
-        The SDK evaluates callable instructions before each LLM call, so
-        capability sections update dynamically as state evolves.
-        """
-        if not capabilities:
-            return
-
-        base_instructions = agent.instructions
-
-        if callable(base_instructions):
-            original_fn = base_instructions
-
-            def dynamic_instructions(
-                ctx_wrapper: RunContextWrapper[Any], agent_obj: Agent[Any]
-            ) -> str:
-                base = original_fn(ctx_wrapper, agent_obj)
-                if not isinstance(base, str):
-                    base = str(base)
-                return _merge_capability_instructions(base, ctx_wrapper, capabilities)
-
-            agent.instructions = dynamic_instructions
-        else:
-            static_text = base_instructions or ""
-
-            def dynamic_from_static(
-                ctx_wrapper: RunContextWrapper[Any], agent_obj: Agent[Any]
-            ) -> str:
-                return _merge_capability_instructions(static_text, ctx_wrapper, capabilities)
-
-            agent.instructions = dynamic_from_static
-
-    @staticmethod
     def _build_hooks(
         capabilities: list[Capability],
     ) -> RunHooks | None:
@@ -1321,20 +1292,6 @@ class _CollectingSessionWrapper:
 # ------------------------------------------------------------------ #
 # Module-level helpers
 # ------------------------------------------------------------------ #
-
-
-def _merge_capability_instructions(
-    base: str,
-    ctx_wrapper: RunContextWrapper[Any],
-    capabilities: list[Capability],
-) -> str:
-    """Append each capability's current instruction fragment to base."""
-    parts = [base]
-    for cap in capabilities:
-        fragment = cap.instructions(ctx_wrapper)
-        if fragment:
-            parts.append(fragment)
-    return "\n\n".join(parts)
 
 
 class _CompositeHooks(RunHooks):
