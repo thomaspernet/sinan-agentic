@@ -7,7 +7,11 @@ from agents import ModelRetrySettings, ModelSettings
 from pydantic import ValidationError
 
 from sinan_agentic_core.core.model_retry import ModelRetryConfig
-from sinan_agentic_core.core.model_settings import apply_declared_model_settings
+from sinan_agentic_core.core.model_settings import (
+    PROMPT_CACHE_KEY_FIELD,
+    apply_declared_model_settings,
+    apply_prompt_cache_key,
+)
 
 
 class TestNothingDeclared:
@@ -99,3 +103,62 @@ class TestBothDeclared:
         assert settings.retry is not None
         assert settings.retry.max_retries == 4
         assert settings.timeout == 30.0
+
+
+class TestPromptCacheKeyOverlay:
+    """A caller pins the cache shard; the SDK forwards it from ``extra_args``."""
+
+    def test_no_key_and_no_settings_stays_none(self) -> None:
+        assert apply_prompt_cache_key(None, None) is None
+
+    def test_no_key_returns_the_settings_untouched(self) -> None:
+        settings = ModelSettings(temperature=0.2)
+
+        assert apply_prompt_cache_key(settings, None) is settings
+
+    def test_a_key_lands_on_fresh_settings(self) -> None:
+        settings = apply_prompt_cache_key(None, "tenant-7")
+
+        assert settings is not None
+        assert settings.extra_args == {PROMPT_CACHE_KEY_FIELD: "tenant-7"}
+
+    def test_a_key_lands_beside_the_settings_already_computed(self) -> None:
+        settings = apply_prompt_cache_key(ModelSettings(temperature=0.2), "tenant-7")
+
+        assert settings is not None
+        assert settings.temperature == 0.2
+        assert settings.extra_args == {PROMPT_CACHE_KEY_FIELD: "tenant-7"}
+
+    def test_other_extra_args_survive(self) -> None:
+        settings = apply_prompt_cache_key(
+            ModelSettings(extra_args={"safety_identifier": "abc"}), "tenant-7"
+        )
+
+        assert settings is not None
+        assert settings.extra_args == {
+            "safety_identifier": "abc",
+            PROMPT_CACHE_KEY_FIELD: "tenant-7",
+        }
+
+    def test_the_caller_settings_are_not_mutated(self) -> None:
+        """The overlay hands back new settings rather than editing what it was given."""
+        original = ModelSettings(extra_args={"safety_identifier": "abc"})
+
+        apply_prompt_cache_key(original, "tenant-7")
+
+        assert original.extra_args == {"safety_identifier": "abc"}
+
+    def test_a_key_the_caller_already_set_wins(self) -> None:
+        original = ModelSettings(extra_args={PROMPT_CACHE_KEY_FIELD: "caller-own"})
+
+        settings = apply_prompt_cache_key(original, "tenant-7")
+
+        assert settings is original
+
+    def test_a_key_the_caller_set_in_extra_body_wins(self) -> None:
+        """The SDK reads both, so writing a second one would send two values."""
+        original = ModelSettings(extra_body={PROMPT_CACHE_KEY_FIELD: "caller-own"})
+
+        settings = apply_prompt_cache_key(original, "tenant-7")
+
+        assert settings is original

@@ -186,7 +186,7 @@ All three chat functions and `run_workflow()` report the same set. Neither tripw
 
 ## Token Usage Tracking
 
-All three chat functions and `BaseAgentRunner.run_agent()` return token usage automatically.
+Every path that runs a model reports the same record — the chat functions return it, `BaseAgentRunner.run_agent()` returns it, and `execute()` leaves it on `runner.last_usage`. It carries what the provider billed for every model call of the run, the rescue call `execute(fallback_on_overflow=True)` makes included.
 
 ```python
 result = await chat("What's the weather?", "weather_assistant", session)
@@ -205,6 +205,26 @@ async for event in chat_streamed("Hello", "my_agent", session):
     if event["event"] == "answer":
         print(f"Tokens used: {event['data']['usage']['total_tokens']}")
 ```
+
+`cached_tokens` is the count the provider served from its prompt cache, summed over the run's calls. A zero therefore means the cache was genuinely cold, not that the number went uncounted — which is what makes it usable as evidence when tuning a prompt for cache hits.
+
+### Pinning the prompt cache shard
+
+OpenAI prompt caching is prefix-based, and the provider shards its cache by key: two calls that share a leading span reuse it only when they route to the same shard. The SDK derives a key from the conversation, session, or group id, but only for an official OpenAI client — an Azure deployment gets none.
+
+Pass `prompt_cache_key` to name the shard yourself. It reaches every model call of the run, the overflow rescue call included, and the three chat functions accept it for the same reason.
+
+```python
+output = await runner.execute(
+    "weather_assistant", context, session,
+    prompt_cache_key=f"tenant:{tenant_id}",
+)
+
+result = await chat("What's the weather?", "weather_assistant", session,
+                    prompt_cache_key=f"tenant:{tenant_id}")
+```
+
+A key you already placed in the agent's own `ModelSettings` — under `extra_args` or `extra_body` — wins: the framework leaves it alone rather than sending a second, conflicting value.
 
 ## Dynamic Context
 
