@@ -548,6 +548,7 @@ class TestBaseAgentRunnerIntegration:
         mock_result = Mock()
         mock_result.final_output = "test output"
         mock_result.new_items = []
+        mock_result.raw_responses = []
 
         with patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls:
             mock_runner_cls.run = AsyncMock(return_value=mock_result)

@@ -110,6 +110,7 @@ class TestCustomCapabilityIntegration:
         mock_result = Mock()
         mock_result.final_output = "ok"
         mock_result.new_items = []
+        mock_result.raw_responses = []
 
         captured_hooks: dict[str, Any] = {}
         captured_agent: dict[str, Any] = {}
@@ -170,6 +171,7 @@ class TestCustomCapabilityIntegration:
         mock_result = Mock()
         mock_result.final_output = "ok"
         mock_result.new_items = []
+        mock_result.raw_responses = []
 
         captured: dict[str, Any] = {}
 
@@ -208,6 +210,7 @@ class TestCapabilityStateIsolation:
         mock_result = Mock()
         mock_result.final_output = "ok"
         mock_result.new_items = []
+        mock_result.raw_responses = []
 
         captured_clones: list[LoggingCapability] = []
 
