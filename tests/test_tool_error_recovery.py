@@ -20,6 +20,7 @@ from sinan_agentic_core.core.tool_error_recovery import (
     ToolErrorRecoveryConfig,
     build_tool_error_recovery,
 )
+from tests.conftest import drive_model_input_filter
 
 # ------------------------------------------------------------------ #
 # ToolErrorRecovery — basic tracking
@@ -482,27 +483,39 @@ class TestBaseAgentRunnerIntegration:
         ):
             return BaseAgentRunner()
 
-    def test_apply_dynamic_instructions_with_recovery(self, runner):
+    def test_the_recovery_section_steers_the_next_model_call(self, runner):
         recovery = ToolErrorRecovery()
         recovery.record_tool_result("t", json.dumps({"error": "fail"}))
 
-        agent = Mock()
-        agent.instructions = "Base instructions."
-        runner._apply_dynamic_instructions(agent, [recovery])
+        run_config = runner._build_run_config(
+            runner._get_agent_definition("test_agent"), [recovery]
+        )
+        steered = drive_model_input_filter(
+            run_config.call_model_input_filter, instructions="Base instructions."
+        )
 
-        assert callable(agent.instructions)
-        result = agent.instructions(Mock(), Mock())
-        assert "Base instructions." in result
-        assert "Tool Error Recovery" in result
+        assert steered.instructions == "Base instructions."
+        assert "Tool Error Recovery" in steered.input[-1]["content"]
 
-    def test_apply_dynamic_instructions_no_capabilities(self, runner):
-        agent = Mock()
-        agent.instructions = "Static."
-        runner._apply_dynamic_instructions(agent, [])
-        # Should NOT replace with callable
-        assert agent.instructions == "Static."
+    def test_a_clean_recovery_appends_nothing(self, runner):
+        """No errors tracked means no fragment, so the input is left alone."""
+        run_config = runner._build_run_config(
+            runner._get_agent_definition("test_agent"), [ToolErrorRecovery()]
+        )
+        steered = drive_model_input_filter(
+            run_config.call_model_input_filter,
+            instructions="Base instructions.",
+            input_items=[{"role": "user", "content": "hi"}],
+        )
 
-    def test_apply_dynamic_instructions_both_budget_and_recovery(self, runner):
+        assert steered.input == [{"role": "user", "content": "hi"}]
+
+    def test_a_run_without_capabilities_installs_no_filter(self, runner):
+        agent_def = runner._get_agent_definition("test_agent")
+
+        assert runner._build_run_config(agent_def, []) is None
+
+    def test_budget_and_recovery_share_one_steering_item(self, runner):
         from sinan_agentic_core.core.turn_budget import TurnBudget
 
         budget = TurnBudget(default_turns=10)
@@ -510,14 +523,15 @@ class TestBaseAgentRunnerIntegration:
         recovery = ToolErrorRecovery()
         recovery.record_tool_result("t", json.dumps({"error": "fail"}))
 
-        agent = Mock()
-        agent.instructions = "Base."
-        runner._apply_dynamic_instructions(agent, [budget, recovery])
+        run_config = runner._build_run_config(
+            runner._get_agent_definition("test_agent"), [budget, recovery]
+        )
+        steered = drive_model_input_filter(run_config.call_model_input_filter, instructions="Base.")
 
-        result = agent.instructions(Mock(), Mock())
-        assert "Base." in result
-        assert "remaining" in result  # budget section
-        assert "Tool Error Recovery" in result  # recovery section
+        assert len(steered.input) == 1
+        steering = steered.input[-1]["content"]
+        assert "remaining" in steering  # budget section
+        assert "Tool Error Recovery" in steering  # recovery section
 
     def test_build_hooks_none_when_no_capabilities(self):
         from sinan_agentic_core.core.base_runner import BaseAgentRunner

@@ -26,6 +26,7 @@ from agents.testing import UnconsumedModelSteps, assistant_message, function_cal
 from pydantic import BaseModel
 
 from sinan_agentic_core.core.base_runner import BaseAgentRunner
+from sinan_agentic_core.core.capabilities.steering import STEERING_ITEM_ROLE
 from sinan_agentic_core.core.model_retry import ModelRetryConfig
 from sinan_agentic_core.core.tool_error_recovery import ToolErrorRecovery
 from sinan_agentic_core.core.turn_budget import TurnBudget
@@ -38,6 +39,19 @@ from tests.conftest import scripted_run
 WEATHER_CALL_ID = "call-weather"
 FAILING_CALL_ID = "call-failing"
 TOOL_FAILURE = json.dumps({"error": "upstream is down"})
+
+
+def _steering_text(call) -> str:
+    """The steering item's text from a recorded model call, or "" when absent.
+
+    A call the capabilities had nothing to say on carries no steering item, so a
+    test asserting a fragment is *absent* reads an empty string rather than an
+    item that is not there.
+    """
+    trailing = call.input[-1] if call.input else {}
+    if trailing.get("role") != STEERING_ITEM_ROLE:
+        return ""
+    return str(trailing["content"])
 
 
 class Extraction(BaseModel):
@@ -225,7 +239,7 @@ class TestTurnBudgetOnARealRun:
         assert budget.turns_used == 2
 
     async def test_the_budget_section_reaches_the_next_model_call(self, runner, context, session):
-        """Dynamic instructions are re-evaluated per turn, so the model sees the count."""
+        """The steering item is rebuilt per call, so the model sees the count."""
         budget = TurnBudget(default_turns=5, absolute_max=5)
 
         with scripted_run(
@@ -237,7 +251,7 @@ class TestTurnBudgetOnARealRun:
                 "assistant", context, session, turn_budget=budget, input_text="weather?"
             )
 
-        assert "remaining" in model.last_call.system_instructions
+        assert "remaining" in _steering_text(model.last_call)
 
     async def test_the_absolute_max_is_the_ceiling_the_sdk_enforces(self, runner, context, session):
         """The budget's hardest ceiling becomes the SDK's ``max_turns``."""
@@ -292,7 +306,129 @@ class TestToolErrorRecoveryOnARealRun:
                 "assistant", context, session, error_recovery=recovery, input_text="weather?"
             )
 
-        assert "Tool Error Recovery" in model.last_call.system_instructions
+        assert "Tool Error Recovery" in _steering_text(model.last_call)
+
+
+# ------------------------------------------------------------------ #
+# Prompt stability and steering placement
+# ------------------------------------------------------------------ #
+
+
+class TestThePromptStaysStableAcrossAModelCall:
+    """The reason the fragments moved: a byte-identical prompt is cacheable.
+
+    A provider reuses only the longest leading span a later request shares with
+    an earlier one, and the system prompt is serialized first. These drive the
+    real SDK over a run of several tool calls and read back what it actually
+    sent, which is the only place the per-call difference would show.
+    """
+
+    @staticmethod
+    async def _run_with_three_tool_calls(runner, context, session, **execute_kwargs):
+        with scripted_run(
+            runner,
+            [function_call("weather", {"city": "Paris"}, call_id=f"{WEATHER_CALL_ID}-1")],
+            [function_call("failing_lookup", {"city": "Rome"}, call_id=FAILING_CALL_ID)],
+            [function_call("weather", {"city": "Oslo"}, call_id=f"{WEATHER_CALL_ID}-2")],
+            [assistant_message("It is sunny in Paris.")],
+        ) as model:
+            await runner.execute(
+                "assistant", context, session, input_text="weather?", **execute_kwargs
+            )
+        return model
+
+    async def test_every_call_of_one_run_sends_the_same_instructions(
+        self, runner, context, session
+    ):
+        budget = TurnBudget(default_turns=9, absolute_max=9)
+        recovery = ToolErrorRecovery()
+
+        model = await self._run_with_three_tool_calls(
+            runner, context, session, turn_budget=budget, error_recovery=recovery
+        )
+
+        sent = [call.system_instructions for call in model.calls]
+        assert len(sent) == 4
+        assert sent == [sent[0]] * len(sent)
+
+    async def test_the_volatile_fragments_ride_in_the_input_instead(self, runner, context, session):
+        """Both capabilities report changing state, and neither is in the prompt."""
+        budget = TurnBudget(default_turns=9, absolute_max=9)
+        recovery = ToolErrorRecovery()
+
+        model = await self._run_with_three_tool_calls(
+            runner, context, session, turn_budget=budget, error_recovery=recovery
+        )
+
+        assert "Turn budget" not in model.calls[0].system_instructions
+        assert "Turn budget" in _steering_text(model.calls[0])
+        # The recovery fragment only exists once a tool has failed, which is
+        # exactly the kind of mid-run change the prompt must not carry.
+        assert "Tool Error Recovery" not in _steering_text(model.calls[1])
+        assert "Tool Error Recovery" in _steering_text(model.calls[2])
+        assert "Tool Error Recovery" not in model.calls[2].system_instructions
+
+    async def test_the_budget_count_advances_between_calls(self, runner, context, session):
+        """A fragment that never changed would pass the stability test for free."""
+        budget = TurnBudget(default_turns=9, absolute_max=9)
+
+        model = await self._run_with_three_tool_calls(runner, context, session, turn_budget=budget)
+
+        steering = [_steering_text(call) for call in model.calls]
+        assert len(set(steering)) == len(steering)
+
+    async def test_the_steering_item_is_last_and_never_persisted(self, runner, context, session):
+        budget = TurnBudget(default_turns=9, absolute_max=9)
+
+        model = await self._run_with_three_tool_calls(runner, context, session, turn_budget=budget)
+
+        assert model.last_call.input[-1]["role"] == STEERING_ITEM_ROLE
+        stored = await session.get_items()
+        assert not any(item.get("role") == STEERING_ITEM_ROLE for item in stored)
+
+
+class TestSteeringReachesEveryExecutionBranch:
+    """The steering item is installed through the run config, which every
+    ``Runner``-calling branch builds — so each branch is asserted, not assumed."""
+
+    async def test_the_streamed_branch_steers(self, runner, context, session):
+        budget = TurnBudget(default_turns=5, absolute_max=5)
+
+        with scripted_run(
+            runner,
+            [function_call("weather", {"city": "Paris"}, call_id=WEATHER_CALL_ID)],
+            [assistant_message("It is sunny in Paris.")],
+        ) as model:
+            await runner.execute(
+                "assistant",
+                context,
+                session,
+                streaming=True,
+                turn_budget=budget,
+                input_text="weather?",
+            )
+
+        assert "Turn budget" in _steering_text(model.last_call)
+
+    async def test_the_fallback_branch_steers(self, runner, context, session):
+        """The branch that adds an overflow rescue still runs the SDK for the loop."""
+        budget = TurnBudget(default_turns=5, absolute_max=5)
+
+        with scripted_run(
+            runner,
+            [function_call("weather", {"city": "Paris"}, call_id=WEATHER_CALL_ID)],
+            [assistant_message("It is sunny in Paris.")],
+        ) as model:
+            await runner.execute(
+                "assistant",
+                context,
+                session,
+                fallback_on_overflow=True,
+                turn_budget=budget,
+                input_text="weather?",
+            )
+
+        assert "Turn budget" in _steering_text(model.last_call)
 
 
 # ------------------------------------------------------------------ #

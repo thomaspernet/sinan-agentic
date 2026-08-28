@@ -2036,6 +2036,63 @@ class TestBudgetAwareAgentAsTool:
         agent_def = AgentDefinition(name="test", description="test", instructions="test")
         assert agent_def.as_tool_turn_budget is None
 
+    async def test_the_sub_agents_run_config_carries_its_budget(self, runner):
+        """The sub-agent's budget steers its own model calls, not the parent's."""
+        from sinan_agentic_core.core.capabilities.steering import CapabilitySteering
+        from sinan_agentic_core.core.turn_budget import TurnBudget
+
+        budget = TurnBudget(default_turns=5, absolute_max=10)
+        runner.agent_registry.register(
+            AgentDefinition(
+                name="steered_sub_agent",
+                description="sub with budget",
+                instructions="sub",
+                as_tool_turn_budget=budget,
+            )
+        )
+
+        built = []
+        real_build_run_config = runner._build_run_config
+
+        def spy(agent_def, capabilities=()):
+            run_config = real_build_run_config(agent_def, capabilities)
+            built.append((agent_def.name, run_config))
+            return run_config
+
+        with patch.object(runner, "_build_run_config", spy):
+            await runner._build_tools(
+                ["steered_sub_agent"], AgentContext(database_connector=Mock())
+            )
+
+        names = [name for name, _ in built]
+        assert names == ["steered_sub_agent"]
+        assert isinstance(built[0][1].call_model_input_filter, CapabilitySteering)
+
+    async def test_a_budgetless_sub_agent_steers_nothing(self, runner):
+        runner.agent_registry.register(
+            AgentDefinition(
+                name="unsteered_sub_agent",
+                description="sub without budget",
+                instructions="sub",
+                as_tool_max_turns=8,
+            )
+        )
+
+        built = []
+        real_build_run_config = runner._build_run_config
+
+        def spy(agent_def, capabilities=()):
+            run_config = real_build_run_config(agent_def, capabilities)
+            built.append(run_config)
+            return run_config
+
+        with patch.object(runner, "_build_run_config", spy):
+            await runner._build_tools(
+                ["unsteered_sub_agent"], AgentContext(database_connector=Mock())
+            )
+
+        assert built == [None]
+
 
 # ------------------------------------------------------------------ #
 # Structured error function

@@ -888,13 +888,13 @@ Keying off the class rather than the wording means an upstream release that rewo
 `BaseAgentRunner._build_tools()` automatically:
 1. Passes `as_tool_parameters` to `agent.as_tool(parameters=...)` when defined
 2. Passes `structured_tool_error` as `failure_error_function` for all agent-as-tool calls
-3. If `as_tool_turn_budget` is set, wires up `TurnBudgetHooks` and dynamic instructions (see [Turn budget for sub-agents](#turn-budget-for-sub-agents-agent-as-tool))
+3. If `as_tool_turn_budget` is set, wires up the sub-agent's own hooks and steering (see [Turn budget for sub-agents](#turn-budget-for-sub-agents-agent-as-tool))
 
 No manual wiring needed - just set `as_tool_parameters` on your `AgentDefinition`.
 
 ## Extending sinan-agentic — Custom Capabilities
 
-`Capability` is the extension point for cross-cutting agent behavior. Write a subclass, attach it to an `AgentDefinition`, and the runtime calls its lifecycle hooks (and merges its instruction fragments into the system prompt) for every run. `TurnBudget`, `ToolErrorRecovery`, and `ToolTracer` are themselves `Capability` subclasses - see them for reference.
+`Capability` is the extension point for cross-cutting agent behavior. Write a subclass, attach it to an `AgentDefinition`, and the runtime calls its lifecycle hooks (and appends its instruction fragments to the model input) for every run. `TurnBudget`, `ToolErrorRecovery`, and `ToolTracer` are themselves `Capability` subclasses - see them for reference.
 
 ```python
 from agents import RunContextWrapper, Tool
@@ -926,12 +926,12 @@ For the full lifecycle reference, the protocol surface, and migration notes for 
 
 ## Tool Error Recovery
 
-When a tool returns an error, agents often retry with identical parameters, wasting turns in a loop. `ToolErrorRecovery` solves this by tracking tool errors and injecting progressive recovery guidance into the agent's instructions - the same dynamic-instructions pattern used by `TurnBudget`.
+When a tool returns an error, agents often retry with identical parameters, wasting turns in a loop. `ToolErrorRecovery` solves this by tracking tool errors and steering the next model call with progressive recovery guidance - the same capability-steering pattern used by `TurnBudget`.
 
 ### How it works
 
 1. **`on_tool_end` hook** tracks tool results. When a result contains `{"error": "..."}`, the tool name, arguments, and error are recorded.
-2. **Dynamic instructions** inject a `## Tool Error Recovery` section before each LLM call, telling the agent what failed and how to recover.
+2. **Capability steering** appends a `## Tool Error Recovery` section to the model input before each LLM call, telling the agent what failed and how to recover.
 3. **Progressive escalation** - guidance gets more directive with each repeated failure:
    - **1st failure**: Show the error and recovery hint
    - **2nd failure (same args)**: Warn that the agent is repeating the same failing call
@@ -1011,11 +1011,11 @@ output = await runner.execute(
 )
 ```
 
-The runner composes both hook sets into a single `_CompositeHooks` and chains both dynamic instruction sections.
+The runner composes both hook sets into a single `_CompositeHooks` and joins both steering sections into the one trailing input item.
 
 ### What the agent sees
 
-After a tool error, the agent's system prompt includes:
+After a tool error, the input the agent is sent ends with:
 
 ```text
 ## Tool Error Recovery
@@ -1428,15 +1428,15 @@ print(budget.extensions_used)   # 1
 print(budget.extension_reasons) # ["Need to process 5 remaining papers"]
 ```
 
-### How instructions are injected
+### How the budget reaches the model
 
 When a `TurnBudget` is provided, the runner:
 
 1. Sets the SDK's `max_turns` to `budget.absolute_max` (hard safety ceiling)
 2. Carries `budget` on the run context via `set_turn_budget()` (read back with `get_turn_budget()`)
 3. Adds the `request_extension` tool to the agent
-4. Wraps agent instructions as a dynamic callable that appends budget status each turn
-5. Uses `TurnBudgetHooks` (a `RunHooks` subclass) to count turns via `on_llm_start`
+4. Appends budget status to the model input before each call, through the run config's `call_model_input_filter`
+5. Counts turns through the capability's `on_llm_start` hook
 
 If using `InstructionBuilder`, the `turn_budget_section()` method is included in the default section order and automatically reads the budget from context.
 
@@ -1470,9 +1470,9 @@ register_agent(AgentDefinition(
 
 When `as_tool_turn_budget` is set, `_build_tools()` automatically:
 1. Resets the budget for each parent agent creation
-2. Makes the sub-agent's instructions dynamic (budget status injected each turn)
+2. Steers the sub-agent's own model calls with its budget status, through the run config `.as_tool(run_config=...)` receives
 3. Adds the `request_extension` tool to the sub-agent
-4. Passes `TurnBudgetHooks` to `.as_tool(hooks=...)` for turn tracking
+4. Passes the sub-agent's hooks to `.as_tool(hooks=...)` for turn tracking
 5. Sets `max_turns` to `budget.absolute_max` (overrides `as_tool_max_turns`)
 
 If `as_tool_turn_budget` is not set, the runner falls back to `as_tool_max_turns` (plain hard cap).
@@ -1532,13 +1532,14 @@ sinan_agentic_core/
 │   ├── base_runner.py            # BaseAgentRunner
 │   ├── capabilities/             # Capability protocol (pluggable agent behaviors)
 │   │   ├── __init__.py
-│   │   └── base.py               # Capability base class + lifecycle hooks
+│   │   ├── base.py               # Capability base class + lifecycle hooks
+│   │   └── steering.py           # Delivers instruction fragments at the tail of the model input
 │   ├── errors.py                 # structured_tool_error for agent-as-tool failures
 │   ├── output_recovery.py        # invalid_final_output handler (salvages structured output)
 │   ├── run_config.py             # build_run_config() — run-level SDK settings for a built agent
 │   ├── tool_error_recovery.py    # ToolErrorRecovery capability
 │   ├── tool_tracer.py            # ToolTracer capability (non-streaming tool-call tracing)
-│   ├── turn_budget.py            # TurnBudget capability + TurnBudgetHooks
+│   ├── turn_budget.py            # TurnBudget capability
 │   └── turn_budget_tool.py       # request_extension tool (agent self-approval)
 ├── instructions/
 │   └── builder.py           # InstructionBuilder base class

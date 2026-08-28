@@ -15,6 +15,7 @@ from unittest.mock import Mock, patch
 import httpx2
 import pytest
 from agents import (
+    Agent,
     GuardrailFunctionOutput,
     InputGuardrail,
     InputGuardrailResult,
@@ -28,6 +29,7 @@ from agents import (
     output_guardrail,
     set_tracing_disabled,
 )
+from agents.run_config import CallModelData, ModelInputData
 from agents.testing import ScriptedModel
 from openai import APIStatusError, BadRequestError
 from openai.types.completion_usage import (
@@ -310,6 +312,41 @@ def scripted_run(runner: Any, *steps: Any) -> Iterator[ScriptedModel]:
         yield model
 
     model.assert_complete()
+
+
+def drive_model_input_filter(
+    model_input_filter: Any,
+    *,
+    instructions: str | None = None,
+    input_items: Sequence[Any] = (),
+    context: Any = None,
+) -> ModelInputData:
+    """Drive a run config's ``call_model_input_filter`` the way the SDK drives it.
+
+    The SDK hands the filter a ``CallModelData`` immediately before each model
+    call and sends whatever ``ModelInputData`` comes back
+    (``agents.run_internal.turn_preparation.maybe_filter_model_input``). A test
+    that only inspects the installed filter object asserts what was configured;
+    driving it asserts what a model would actually receive.
+
+    Args:
+        model_input_filter: The filter read off a built ``RunConfig``.
+        instructions: What the system prompt resolved to for this call.
+        input_items: The conversation the SDK is about to send. Forwarded by
+            identity, so a caller can assert the filter left its items alone.
+        context: The run's context object.
+
+    Returns:
+        The model input the filter produced.
+    """
+    data: CallModelData[Any] = CallModelData(
+        model_data=ModelInputData(input=list(input_items), instructions=instructions),
+        agent=Agent(name="filtered_agent"),
+        context=context,
+    )
+    filtered = model_input_filter(data)
+    assert isinstance(filtered, ModelInputData)
+    return filtered
 
 
 def _declared_members(annotation: object) -> tuple[object, ...]:

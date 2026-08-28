@@ -3,20 +3,40 @@
 from __future__ import annotations
 
 import copy
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 from agents import (
     Agent,
+    RunContextWrapper,
     ToolGuardrailFunctionOutput,
     WebSearchTool,
     function_tool,
     tool_input_guardrail,
 )
+from agents.extensions import ToolOutputTrimmer
 
-from sinan_agentic_core.core.run_config import build_run_config, tool_input_pre_approval
+from sinan_agentic_core.core.capabilities import Capability
+from sinan_agentic_core.core.capabilities.steering import (
+    STEERING_ITEM_ROLE,
+    CapabilitySteering,
+)
+from sinan_agentic_core.core.run_config import (
+    build_model_input_filter,
+    build_run_config,
+    tool_input_pre_approval,
+)
 from sinan_agentic_core.core.tool_output_trim import ToolOutputTrimConfig
 from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
+from tests.conftest import drive_model_input_filter
+
+
+class Speaking(Capability):
+    """A capability with one fixed fragment, enough to place the steering item."""
+
+    def instructions(self, ctx: RunContextWrapper[Any]) -> str | None:
+        return "stay on task"
 
 
 @pytest.fixture
@@ -109,6 +129,15 @@ class TestBuildRunConfig:
         assert run_config.call_model_input_filter is None
         assert run_config.model is None
 
+    def test_capabilities_install_the_steering_filter(self, trim_registry):
+        run_config = build_run_config(Agent(name="plain_agent"), [Speaking()])
+
+        assert isinstance(run_config.call_model_input_filter, CapabilitySteering)
+
+    def test_no_capabilities_steer_nothing(self, trim_registry):
+        """The chat service passes none, so its runs are unchanged."""
+        assert build_run_config(Agent(name="plain_agent")) is None
+
 
 class TestDeclaredToolOutputTrim:
     """Trimming has no slot on ``Agent``, so it is resolved through the registry.
@@ -151,6 +180,50 @@ class TestDeclaredToolOutputTrim:
         assert first is not second
 
 
+class TestBuildModelInputFilter:
+    """The one ``call_model_input_filter`` slot, shared by trimming and steering."""
+
+    def test_neither_declared_installs_nothing(self):
+        assert build_model_input_filter(None, []) is None
+
+    def test_trimming_alone_installs_the_trimmer(self):
+        built = build_model_input_filter(ToolOutputTrimConfig(recent_turns=3), [])
+
+        assert isinstance(built, ToolOutputTrimmer)
+
+    def test_steering_alone_installs_the_steering_filter(self):
+        assert isinstance(build_model_input_filter(None, [Speaking()]), CapabilitySteering)
+
+    def test_declaring_both_runs_both(self):
+        built = build_model_input_filter(
+            ToolOutputTrimConfig(recent_turns=1, max_output_chars=10, preview_chars=4),
+            [Speaking()],
+        )
+
+        steered = drive_model_input_filter(built, input_items=_TRIMMABLE_CONVERSATION)
+
+        assert steered.input[-1]["content"] == "stay on task"
+        assert _tool_output(steered.input) != _LONG_TOOL_OUTPUT
+
+    def test_trimming_runs_first_so_steering_stays_last(self):
+        """Trimming reads the real conversation, not one steering has extended."""
+        built = build_model_input_filter(
+            ToolOutputTrimConfig(recent_turns=1, max_output_chars=10, preview_chars=4),
+            [Speaking()],
+        )
+
+        steered = drive_model_input_filter(built, input_items=_TRIMMABLE_CONVERSATION)
+
+        assert steered.input[-1]["role"] == STEERING_ITEM_ROLE
+        assert len(steered.input) == len(_TRIMMABLE_CONVERSATION) + 1
+
+    def test_each_call_returns_fresh_callables(self):
+        first = build_model_input_filter(ToolOutputTrimConfig(), [Speaking()])
+        second = build_model_input_filter(ToolOutputTrimConfig(), [Speaking()])
+
+        assert first is not second
+
+
 class TestToolInputPreApproval:
     def test_enables_pre_approval(self):
         assert tool_input_pre_approval().pre_approval_tool_input_guardrails is True
@@ -166,3 +239,27 @@ class TestToolInputPreApproval:
 
         assert first is not second
         assert second.max_function_tool_concurrency is None
+
+
+# A conversation the trimmer will actually shorten: two user messages, so its
+# one-message window leaves the first turn's oversized tool output eligible.
+_LONG_TOOL_OUTPUT = "x" * 400
+
+_TRIMMABLE_CONVERSATION: list[dict[str, Any]] = [
+    {"role": "user", "content": "first question"},
+    {
+        "type": "function_call",
+        "call_id": "call-1",
+        "name": "search",
+        "arguments": "{}",
+    },
+    {"type": "function_call_output", "call_id": "call-1", "output": _LONG_TOOL_OUTPUT},
+    {"role": "user", "content": "second question"},
+]
+
+
+def _tool_output(items: list[Any]) -> str:
+    """The single tool output in a filtered conversation."""
+    outputs = [item["output"] for item in items if item.get("type") == "function_call_output"]
+    assert len(outputs) == 1
+    return str(outputs[0])
