@@ -193,7 +193,7 @@ class TurnBudget(Capability):
         self.extension_reasons.clear()
 
     def instructions(self, ctx: RunContextWrapper[Any]) -> str | None:
-        """Capability hook — return the current budget instruction fragment."""
+        """Capability hook — return the current budget steering fragment."""
         return self.build_instruction_section()
 
     def on_llm_start(

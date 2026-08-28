@@ -9,7 +9,7 @@ Also retains run_agent() for backward compatibility.
 import copy
 import inspect
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from agents import (
@@ -22,10 +22,9 @@ from agents import (
     RunErrorHandlers,
     RunHooks,
     Runner,
-    Usage,
 )
 from agents.items import TResponseInputItem
-from openai.types.responses import ResponseCompletedEvent, ResponseTextDeltaEvent
+from openai.types.responses import ResponseTextDeltaEvent
 
 from ..llm import resolve_openai_client
 from ..models import outputs as output_models
@@ -42,7 +41,11 @@ from ..utils.turn_budget_context import set_turn_budget
 from .capabilities import Capability
 from .errors import structured_tool_error
 from .model_retry import build_model_retry_settings
-from .model_settings import apply_declared_model_settings
+from .model_settings import (
+    PROMPT_CACHE_KEY_FIELD,
+    apply_declared_model_settings,
+    apply_prompt_cache_key,
+)
 from .output_recovery import (
     build_output_schema,
     invalid_final_output_handlers,
@@ -54,13 +57,13 @@ from .reasoning import (
     reasoning_summary_texts,
     run_reasoning_texts,
 )
-from .run_config import tool_input_pre_approval
+from .run_config import build_model_input_filter, tool_input_pre_approval
 from .run_errors import FALLBACK_RECOVERABLE_KINDS, classify_run_error
 from .stream_preview import tool_output_preview
 from .tool_error_recovery import ToolErrorRecovery, build_tool_error_recovery
-from .tool_output_trim import build_tool_output_trimmer
 from .turn_budget import TurnBudget
 from .turn_budget_tool import request_extension_tool
+from .usage import aggregate_usage, completion_usage_record, last_input_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +164,7 @@ class BaseAgentRunner:
         model_override: str | None = None,
         model_settings_override: ModelSettings | None = None,
         capabilities: list[Capability] | None = None,
+        prompt_cache_key: str | None = None,
     ) -> Agent:
         """Create an agent instance with proper tools and configuration.
 
@@ -171,6 +175,8 @@ class BaseAgentRunner:
             model_settings_override: If set, replaces the computed model settings.
             capabilities: Cloned per-run capabilities to expose tools from.
                 If None, falls back to ``agent_def.capabilities`` (no clone).
+            prompt_cache_key: Prompt-cache shard this agent's model calls route
+                to. Left off, the provider shards by whatever the SDK generates.
 
         Returns:
             Configured Agent instance
@@ -182,7 +188,7 @@ class BaseAgentRunner:
         ctx_wrapper = RunContextWrapper(context)
 
         instructions = await self._build_instructions(agent_def, ctx_wrapper)
-        agent_tools = await self._build_tools(agent_def.tools, context)
+        agent_tools = await self._build_tools(agent_def.tools, context, prompt_cache_key)
         hosted = self._build_hosted_tools(agent_def.hosted_tools)
         agent_tools.extend(hosted)
         for cap in capabilities or agent_def.capabilities:
@@ -191,7 +197,7 @@ class BaseAgentRunner:
         agent_tools = attach_tool_input_guardrails(
             agent_tools, agent_guardrails.tool_input_guardrails
         )
-        handoffs = await self._build_handoffs(agent_def.handoffs, context)
+        handoffs = await self._build_handoffs(agent_def.handoffs, context, prompt_cache_key)
         output_type = self._resolve_output_type(agent_def.output_dataclass)
 
         model_settings: ModelSettings | None
@@ -205,6 +211,7 @@ class BaseAgentRunner:
             model_retry=agent_def.model_retry,
             model_timeout=agent_def.model_timeout,
         )
+        model_settings = apply_prompt_cache_key(model_settings, prompt_cache_key)
 
         effective_model = model_override or agent_def.model
 
@@ -250,6 +257,7 @@ class BaseAgentRunner:
         error_recovery: ToolErrorRecovery | bool | None = None,
         model_override: str | None = None,
         model_settings_override: ModelSettings | None = None,
+        prompt_cache_key: str | None = None,
     ) -> Any:
         """Run an agent and return its final_output directly.
 
@@ -279,6 +287,12 @@ class BaseAgentRunner:
             error_recovery: Optional tool error recovery. Pass True to auto-create
                 with defaults. Can also be supplied via
                 ``AgentDefinition.capabilities``.
+            prompt_cache_key: Prompt-cache shard every model call of this run
+                routes to, the rescue call the overflow fallback makes included.
+                Sibling runs that share a leading prompt span reuse the
+                provider's cached prefix only when they share a key. Left off,
+                the provider shards by whatever the SDK generates — which is
+                nothing at all for an Azure client.
 
         Returns:
             Agent's final_output (dataclass, dict, or string)
@@ -318,6 +332,7 @@ class BaseAgentRunner:
                 capabilities=capabilities,
                 model_override=model_override,
                 model_settings_override=model_settings_override,
+                prompt_cache_key=prompt_cache_key,
             )
         elif fallback_on_overflow:
             return await self._execute_with_fallback(
@@ -330,6 +345,7 @@ class BaseAgentRunner:
                 capabilities=capabilities,
                 model_override=model_override,
                 model_settings_override=model_settings_override,
+                prompt_cache_key=prompt_cache_key,
             )
         else:
             return await self._execute_basic(
@@ -341,6 +357,7 @@ class BaseAgentRunner:
                 capabilities=capabilities,
                 model_override=model_override,
                 model_settings_override=model_settings_override,
+                prompt_cache_key=prompt_cache_key,
             )
 
     async def _execute_basic(
@@ -353,6 +370,7 @@ class BaseAgentRunner:
         capabilities: list[Capability] | None = None,
         model_override: str | None = None,
         model_settings_override: ModelSettings | None = None,
+        prompt_cache_key: str | None = None,
     ) -> Any:
         """Run agent via Runner.run() and return final_output."""
         capabilities = capabilities or []
@@ -363,9 +381,8 @@ class BaseAgentRunner:
             model_override=model_override,
             model_settings_override=model_settings_override,
             capabilities=capabilities,
+            prompt_cache_key=prompt_cache_key,
         )
-
-        self._apply_dynamic_instructions(agent, capabilities)
 
         logger.info(f"Running agent: {agent_name}")
 
@@ -381,7 +398,7 @@ class BaseAgentRunner:
         if hooks:
             run_kwargs["hooks"] = hooks
 
-        run_config = self._build_run_config(agent_def)
+        run_config = self._build_run_config(agent_def, capabilities)
         if run_config is not None:
             run_kwargs["run_config"] = run_config
 
@@ -391,7 +408,7 @@ class BaseAgentRunner:
 
         result = await Runner.run(**run_kwargs)
 
-        self.last_usage = self._aggregate_usage(result)
+        self.last_usage = aggregate_usage(result)
         self.last_reasoning = run_reasoning_texts(result)
         logger.info(f"Agent '{agent_name}' completed successfully")
         return result.final_output
@@ -407,6 +424,7 @@ class BaseAgentRunner:
         capabilities: list[Capability] | None = None,
         model_override: str | None = None,
         model_settings_override: ModelSettings | None = None,
+        prompt_cache_key: str | None = None,
     ) -> Any:
         """Run agent with automatic fallback on context overflow.
 
@@ -428,6 +446,7 @@ class BaseAgentRunner:
             model_override=model_override,
             model_settings_override=model_settings_override,
             capabilities=capabilities,
+            prompt_cache_key=prompt_cache_key,
         )
 
         collecting = _CollectingSessionWrapper(session)
@@ -445,7 +464,7 @@ class BaseAgentRunner:
         if hooks:
             run_kwargs["hooks"] = hooks
 
-        run_config = self._build_run_config(agent_def)
+        run_config = self._build_run_config(agent_def, capabilities)
         if run_config is not None:
             run_kwargs["run_config"] = run_config
 
@@ -455,7 +474,7 @@ class BaseAgentRunner:
 
         try:
             run_result = await Runner.run(**run_kwargs)
-            self.last_usage = self._aggregate_usage(run_result)
+            self.last_usage = aggregate_usage(run_result)
             self.last_reasoning = run_reasoning_texts(run_result)
             logger.info(f"Agent '{agent_name}' completed successfully")
             return run_result.final_output
@@ -527,6 +546,14 @@ class BaseAgentRunner:
                 "messages": messages,
                 "temperature": 0.3,
             }
+            # NOTE: the key reaches every other branch through
+            # ModelSettings.extra_args, which the SDK's model adapters splat into
+            # the request. This branch bypasses those adapters, so it names the
+            # provider parameter directly — chat.completions.create accepts
+            # prompt_cache_key (openai 3.3.1) — rather than leaving the rescue as
+            # the one model call of the run routed to a different cache shard.
+            if prompt_cache_key is not None:
+                kwargs[PROMPT_CACHE_KEY_FIELD] = prompt_cache_key
             if output_schema is not None:
                 kwargs["response_format"] = {
                     "type": "json_schema",
@@ -542,14 +569,7 @@ class BaseAgentRunner:
             # Capture fallback usage from the direct LLM call
             fallback_usage: dict[str, Any] | None = None
             if response.usage:
-                fallback_usage = {
-                    "requests": 1,
-                    "input_tokens": response.usage.prompt_tokens or 0,
-                    "output_tokens": response.usage.completion_tokens or 0,
-                    "total_tokens": response.usage.total_tokens or 0,
-                    "input_tokens_details": {"cached_tokens": 0},
-                    "output_tokens_details": {"reasoning_tokens": 0},
-                }
+                fallback_usage = completion_usage_record(response.usage)
                 self.last_usage = fallback_usage
 
             for cap in capabilities:
@@ -587,6 +607,7 @@ class BaseAgentRunner:
         capabilities: list[Capability] | None = None,
         model_override: str | None = None,
         model_settings_override: ModelSettings | None = None,
+        prompt_cache_key: str | None = None,
     ) -> Any:
         """Run agent with token-level streaming via Runner.run_streamed().
 
@@ -633,9 +654,8 @@ class BaseAgentRunner:
             model_override=model_override,
             model_settings_override=model_settings_override,
             capabilities=capabilities,
+            prompt_cache_key=prompt_cache_key,
         )
-
-        self._apply_dynamic_instructions(agent, capabilities)
 
         if input_text:
             await session.add_items([{"role": "user", "content": input_text}])
@@ -654,7 +674,7 @@ class BaseAgentRunner:
         if hooks:
             run_kwargs["hooks"] = hooks
 
-        run_config = self._build_run_config(agent_def)
+        run_config = self._build_run_config(agent_def, capabilities)
         if run_config is not None:
             run_kwargs["run_config"] = run_config
 
@@ -667,23 +687,11 @@ class BaseAgentRunner:
         tools_called: list[str] = []
         reasoning_said: list[str] = []
 
-        total_input_tokens = 0
-        total_output_tokens = 0
-        last_input_tokens = 0
-        request_count = 0
-
         async for event in result.stream_events():
             if event.type == "raw_response_event":
                 if isinstance(event.data, ResponseTextDeltaEvent):
                     if on_event and event.data.delta:
                         on_event({"event": "text_delta", "data": {"delta": event.data.delta}})
-                elif isinstance(event.data, ResponseCompletedEvent):
-                    resp_usage = getattr(event.data.response, "usage", None)
-                    if resp_usage:
-                        total_input_tokens += resp_usage.input_tokens or 0
-                        total_output_tokens += resp_usage.output_tokens or 0
-                        last_input_tokens = resp_usage.input_tokens or 0
-                        request_count += 1
                 else:
                     reasoning = reasoning_stream_event(event.data)
                     if on_event and reasoning:
@@ -739,15 +747,9 @@ class BaseAgentRunner:
         response = result.final_output
         await session.add_items([{"role": "assistant", "content": response}])
 
-        stream_usage = Usage(
-            requests=request_count,
-            input_tokens=total_input_tokens,
-            output_tokens=total_output_tokens,
-            total_tokens=total_input_tokens + total_output_tokens,
-        )
-        usage = self._build_usage_dict(stream_usage)
+        usage = aggregate_usage(result)
         # Last response's input_tokens = actual context window usage (not sum)
-        usage["last_input_tokens"] = last_input_tokens
+        usage["last_input_tokens"] = last_input_tokens(result)
         self.last_usage = usage
         self.last_reasoning = reasoning_said
 
@@ -769,36 +771,6 @@ class BaseAgentRunner:
     # ------------------------------------------------------------------ #
     # run_agent() — backward-compatible entry point
     # ------------------------------------------------------------------ #
-
-    @staticmethod
-    def _build_usage_dict(usage: Usage) -> dict[str, Any]:
-        """Convert a Usage object to a plain dict."""
-        return {
-            "requests": usage.requests,
-            "input_tokens": usage.input_tokens,
-            "output_tokens": usage.output_tokens,
-            "total_tokens": usage.total_tokens,
-            "input_tokens_details": {
-                "cached_tokens": usage.input_tokens_details.cached_tokens,
-            },
-            "output_tokens_details": {
-                "reasoning_tokens": usage.output_tokens_details.reasoning_tokens,
-            },
-        }
-
-    @staticmethod
-    def _aggregate_usage(result: Any) -> dict[str, Any]:
-        """Aggregate token usage from a non-streaming RunResult."""
-        usage = Usage()
-        try:
-            raw_responses = getattr(result, "raw_responses", None) or []
-            for response in raw_responses:
-                resp_usage = getattr(response, "usage", None)
-                if resp_usage:
-                    usage.add(resp_usage)
-        except TypeError:
-            pass
-        return BaseAgentRunner._build_usage_dict(usage)
 
     async def run_agent(
         self,
@@ -853,7 +825,7 @@ class BaseAgentRunner:
 
         return {
             "output": result.final_output if hasattr(result, "final_output") else result,
-            "usage": self._aggregate_usage(result),
+            "usage": aggregate_usage(result),
         }
 
     # ------------------------------------------------------------------ #
@@ -901,12 +873,17 @@ class BaseAgentRunner:
             instructions = await result if inspect.isawaitable(result) else result
         return str(instructions)
 
-    async def _build_tools(self, tool_names: list[str], context: Any) -> list[Any]:
+    async def _build_tools(
+        self, tool_names: list[str], context: Any, prompt_cache_key: str | None = None
+    ) -> list[Any]:
         """Build agent tools list, handling regular tools and agents-as-tools.
 
         Args:
             tool_names: List of tool names from agent definition
             context: Context for agent-as-tool creation
+            prompt_cache_key: Prompt-cache shard the run routes to. A sub-agent
+                invoked as a tool is part of the same run, so it routes to the
+                same shard.
 
         Returns:
             List of configured tool functions
@@ -926,6 +903,7 @@ class BaseAgentRunner:
             tool_agent = await self.create_agent(
                 agent_name=tool_name,
                 context=context,
+                prompt_cache_key=prompt_cache_key,
             )
             as_tool_kwargs: dict[str, Any] = {
                 "tool_name": tool_name,
@@ -935,7 +913,20 @@ class BaseAgentRunner:
             if agent_def.as_tool_parameters is not None:
                 as_tool_kwargs["parameters"] = agent_def.as_tool_parameters
 
-            sub_run_config = self._build_run_config(agent_def)
+            # The sub-agent's capabilities steer its model calls through its run
+            # config, so they are assembled before the config that carries them.
+            sub_caps: list[Capability] = []
+            budget = agent_def.as_tool_turn_budget
+            if budget:
+                budget.reset()
+                sub_caps.append(budget)
+                tool_agent.tools.append(request_extension_tool)
+                as_tool_kwargs["hooks"] = _CompositeHooks(sub_caps)
+                as_tool_kwargs["max_turns"] = budget.absolute_max
+            elif agent_def.as_tool_max_turns is not None:
+                as_tool_kwargs["max_turns"] = agent_def.as_tool_max_turns
+
+            sub_run_config = self._build_run_config(agent_def, sub_caps)
             if sub_run_config is not None:
                 as_tool_kwargs["run_config"] = sub_run_config
 
@@ -943,17 +934,6 @@ class BaseAgentRunner:
             # run_config but has no error_handlers parameter, so a
             # sub-agent's invalid structured output still raises. Wire it
             # the moment the SDK exposes it.
-
-            budget = agent_def.as_tool_turn_budget
-            if budget:
-                budget.reset()
-                sub_caps: list[Capability] = [budget]
-                self._apply_dynamic_instructions(tool_agent, sub_caps)
-                tool_agent.tools.append(request_extension_tool)
-                as_tool_kwargs["hooks"] = _CompositeHooks(sub_caps)
-                as_tool_kwargs["max_turns"] = budget.absolute_max
-            elif agent_def.as_tool_max_turns is not None:
-                as_tool_kwargs["max_turns"] = agent_def.as_tool_max_turns
 
             agent_tools.append(tool_agent.as_tool(**as_tool_kwargs))
 
@@ -988,7 +968,11 @@ class BaseAgentRunner:
 
         return tools
 
-    def _build_run_config(self, agent_def: Any) -> RunConfig | None:
+    def _build_run_config(
+        self,
+        agent_def: Any,
+        capabilities: Sequence[Capability] = (),
+    ) -> RunConfig | None:
         """Build the SDK run config for an agent, or None when defaults apply.
 
         Declaring a tool-input guardrail opts the agent into running those
@@ -998,9 +982,16 @@ class BaseAgentRunner:
         Declaring ``tool_output_trim`` installs the SDK's tool-output filter,
         which shrinks oversized outputs from older turns before each model call.
 
+        Running with capabilities installs steering, which appends their
+        instruction fragments to the input of each model call. Both want the one
+        ``call_model_input_filter`` slot, so :func:`build_model_input_filter`
+        decides what it holds rather than this method choosing between them.
+
         Args:
             agent_def: Agent definition whose guardrails and trim policy decide
                 the config
+            capabilities: The run's capabilities, already cloned and reset.
+                Empty — as on ``run_agent()``, which runs none — steers nothing.
 
         Returns:
             Configured RunConfig, or None when no setting differs from the default
@@ -1010,9 +1001,9 @@ class BaseAgentRunner:
         if self.guardrail_registry.has_category(agent_def.guardrails, GuardrailCategory.TOOL_INPUT):
             config_kwargs["tool_execution"] = tool_input_pre_approval()
 
-        trimmer = build_tool_output_trimmer(agent_def.tool_output_trim)
-        if trimmer is not None:
-            config_kwargs["call_model_input_filter"] = trimmer
+        model_input_filter = build_model_input_filter(agent_def.tool_output_trim, capabilities)
+        if model_input_filter is not None:
+            config_kwargs["call_model_input_filter"] = model_input_filter
 
         if not config_kwargs:
             return None
@@ -1039,12 +1030,16 @@ class BaseAgentRunner:
 
         return invalid_final_output_handlers()
 
-    async def _build_handoffs(self, handoff_names: list[str], context: Any) -> list[Any]:
+    async def _build_handoffs(
+        self, handoff_names: list[str], context: Any, prompt_cache_key: str | None = None
+    ) -> list[Any]:
         """Build agent handoffs list.
 
         Args:
             handoff_names: List of handoff agent names from agent definition
             context: Context for handoff agent creation
+            prompt_cache_key: Prompt-cache shard the run routes to. A handed-off
+                agent continues the same run, so it routes to the same shard.
 
         Returns:
             List of configured handoff agent instances
@@ -1059,6 +1054,7 @@ class BaseAgentRunner:
             handoff_agent = await self.create_agent(
                 agent_name=handoff_name,
                 context=context,
+                prompt_cache_key=prompt_cache_key,
             )
             handoffs.append(handoff_agent)
 
@@ -1191,43 +1187,6 @@ class BaseAgentRunner:
         return effective
 
     @staticmethod
-    def _apply_dynamic_instructions(
-        agent: Agent,
-        capabilities: list[Capability],
-    ) -> None:
-        """Wrap agent.instructions to merge in capability fragments per turn.
-
-        The SDK evaluates callable instructions before each LLM call, so
-        capability sections update dynamically as state evolves.
-        """
-        if not capabilities:
-            return
-
-        base_instructions = agent.instructions
-
-        if callable(base_instructions):
-            original_fn = base_instructions
-
-            def dynamic_instructions(
-                ctx_wrapper: RunContextWrapper[Any], agent_obj: Agent[Any]
-            ) -> str:
-                base = original_fn(ctx_wrapper, agent_obj)
-                if not isinstance(base, str):
-                    base = str(base)
-                return _merge_capability_instructions(base, ctx_wrapper, capabilities)
-
-            agent.instructions = dynamic_instructions
-        else:
-            static_text = base_instructions or ""
-
-            def dynamic_from_static(
-                ctx_wrapper: RunContextWrapper[Any], agent_obj: Agent[Any]
-            ) -> str:
-                return _merge_capability_instructions(static_text, ctx_wrapper, capabilities)
-
-            agent.instructions = dynamic_from_static
-
-    @staticmethod
     def _build_hooks(
         capabilities: list[Capability],
     ) -> RunHooks | None:
@@ -1333,20 +1292,6 @@ class _CollectingSessionWrapper:
 # ------------------------------------------------------------------ #
 # Module-level helpers
 # ------------------------------------------------------------------ #
-
-
-def _merge_capability_instructions(
-    base: str,
-    ctx_wrapper: RunContextWrapper[Any],
-    capabilities: list[Capability],
-) -> str:
-    """Append each capability's current instruction fragment to base."""
-    parts = [base]
-    for cap in capabilities:
-        fragment = cap.instructions(ctx_wrapper)
-        if fragment:
-            parts.append(fragment)
-    return "\n\n".join(parts)
 
 
 class _CompositeHooks(RunHooks):

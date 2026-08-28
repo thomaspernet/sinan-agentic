@@ -87,8 +87,8 @@ class ChatResponse:
         session_id: Session ID for conversation continuity
         tools_called: List of tool names that were invoked
         error: Error message if success is False
-        usage: Token usage dict with requests, input_tokens, output_tokens,
-            total_tokens, input_tokens_details, output_tokens_details
+        usage: Token usage for the turn, in the record shape
+            ``core.usage.usage_record`` builds
     """
 
     success: bool
