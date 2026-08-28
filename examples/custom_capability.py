@@ -1,8 +1,8 @@
 """Example: Writing a custom Capability.
 
 A Capability is a pluggable, stateful behavior attached to an agent. The
-runtime invokes its lifecycle hooks at the right moments and merges any
-instruction fragments into the system prompt before each LLM call.
+runtime invokes its lifecycle hooks at the right moments and appends any
+instruction fragments to the model input before each LLM call.
 
 This example defines `ToolCallLogger`, a capability that prints every tool
 call as it happens, and runs an agent end-to-end with the capability

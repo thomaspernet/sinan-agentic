@@ -15,6 +15,7 @@ from unittest.mock import Mock, patch
 import httpx2
 import pytest
 from agents import (
+    Agent,
     GuardrailFunctionOutput,
     InputGuardrail,
     InputGuardrailResult,
@@ -28,8 +29,15 @@ from agents import (
     output_guardrail,
     set_tracing_disabled,
 )
+from agents.run_config import CallModelData, ModelInputData
 from agents.testing import ScriptedModel
 from openai import APIStatusError, BadRequestError
+from openai.types.completion_usage import (
+    CompletionTokensDetails,
+    CompletionUsage,
+    PromptTokensDetails,
+)
+from openai.types.responses.response_usage import InputTokensDetails, OutputTokensDetails
 
 from sinan_agentic_core.core.run_errors import CONTEXT_OVERFLOW_ERROR_CODE
 from sinan_agentic_core.models.context import AgentContext
@@ -86,6 +94,56 @@ def make_context_overflow_error(
             "code": CONTEXT_OVERFLOW_ERROR_CODE,
         },
     )
+
+
+def make_completion_usage(
+    *,
+    prompt_tokens: int = 100,
+    completion_tokens: int = 20,
+    cached_tokens: int = 0,
+    reasoning_tokens: int = 0,
+) -> CompletionUsage:
+    """Build the usage a chat-completions response carries.
+
+    The recovery branch reads the provider's own type, not a stand-in: both
+    detail blocks are optional there and every count inside them is nullable, so
+    a hand-rolled stub can report a shape the provider never sends. Pass the
+    detail counts and the real model validates them.
+    """
+    return CompletionUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetails(cached_tokens=cached_tokens),
+        completion_tokens_details=CompletionTokensDetails(reasoning_tokens=reasoning_tokens),
+    )
+
+
+def make_model_response(
+    *,
+    input_tokens: int = 100,
+    output_tokens: int = 20,
+    cached_tokens: int = 0,
+    reasoning_tokens: int = 0,
+) -> Mock:
+    """One entry of a run's ``raw_responses``, carrying a real SDK ``Usage``.
+
+    The details are what the provider reports back — a run reports its cached
+    prefix only because each response carried the count — so they are validated
+    by the SDK's own model rather than attached to a bare mock.
+    """
+    response = Mock()
+    response.usage = Usage(
+        requests=1,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+        input_tokens_details=InputTokensDetails.model_validate(
+            {"cached_tokens": cached_tokens, "cache_write_tokens": 0}
+        ),
+        output_tokens_details=OutputTokensDetails(reasoning_tokens=reasoning_tokens),
+    )
+    return response
 
 
 def registered_input_guardrail(name: str) -> InputGuardrail[Any]:
@@ -254,6 +312,41 @@ def scripted_run(runner: Any, *steps: Any) -> Iterator[ScriptedModel]:
         yield model
 
     model.assert_complete()
+
+
+def drive_model_input_filter(
+    model_input_filter: Any,
+    *,
+    instructions: str | None = None,
+    input_items: Sequence[Any] = (),
+    context: Any = None,
+) -> ModelInputData:
+    """Drive a run config's ``call_model_input_filter`` the way the SDK drives it.
+
+    The SDK hands the filter a ``CallModelData`` immediately before each model
+    call and sends whatever ``ModelInputData`` comes back
+    (``agents.run_internal.turn_preparation.maybe_filter_model_input``). A test
+    that only inspects the installed filter object asserts what was configured;
+    driving it asserts what a model would actually receive.
+
+    Args:
+        model_input_filter: The filter read off a built ``RunConfig``.
+        instructions: What the system prompt resolved to for this call.
+        input_items: The conversation the SDK is about to send. Forwarded by
+            identity, so a caller can assert the filter left its items alone.
+        context: The run's context object.
+
+    Returns:
+        The model input the filter produced.
+    """
+    data: CallModelData[Any] = CallModelData(
+        model_data=ModelInputData(input=list(input_items), instructions=instructions),
+        agent=Agent(name="filtered_agent"),
+        context=context,
+    )
+    filtered = model_input_filter(data)
+    assert isinstance(filtered, ModelInputData)
+    return filtered
 
 
 def _declared_members(annotation: object) -> tuple[object, ...]:

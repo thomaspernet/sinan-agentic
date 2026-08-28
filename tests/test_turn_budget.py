@@ -19,6 +19,7 @@ from sinan_agentic_core.core.turn_budget import (
     build_turn_budget,
 )
 from sinan_agentic_core.utils import get_turn_budget, set_turn_budget
+from tests.conftest import drive_model_input_filter
 
 # ------------------------------------------------------------------ #
 # TurnBudget dataclass
@@ -383,30 +384,36 @@ class TestBaseAgentRunnerTurnBudget:
         ):
             return BaseAgentRunner()
 
-    def test_apply_dynamic_instructions_from_static(self, runner):
-        agent = Mock()
-        agent.instructions = "Static instructions."
+    def test_the_budget_steers_through_the_run_config_filter(self, runner):
+        agent_def = runner._get_agent_definition("test_agent")
         budget = TurnBudget(default_turns=10)
         budget.turns_used = 8
 
-        runner._apply_dynamic_instructions(agent, [budget])
+        run_config = runner._build_run_config(agent_def, [budget])
+        steered = drive_model_input_filter(
+            run_config.call_model_input_filter, instructions="Static instructions."
+        )
 
-        assert callable(agent.instructions)
-        result = agent.instructions(Mock(), Mock())
-        assert "Static instructions." in result
-        assert "remaining" in result and "10" in result
+        assert "remaining" in steered.input[-1]["content"]
+        assert "10" in steered.input[-1]["content"]
 
-    def test_apply_dynamic_instructions_from_callable(self, runner):
-        agent = Mock()
-        agent.instructions = lambda ctx, a: "Dynamic base."
+    def test_the_resolved_instructions_reach_the_model_untouched(self, runner):
+        """The budget rides at the tail; the prompt stays what the agent resolved."""
+        agent_def = runner._get_agent_definition("test_agent")
         budget = TurnBudget(default_turns=5)
 
-        runner._apply_dynamic_instructions(agent, [budget])
+        run_config = runner._build_run_config(agent_def, [budget])
+        steered = drive_model_input_filter(
+            run_config.call_model_input_filter, instructions="Resolved base."
+        )
 
-        assert callable(agent.instructions)
-        result = agent.instructions(Mock(), Mock())
-        assert "Dynamic base." in result
-        assert "5 turns" in result
+        assert steered.instructions == "Resolved base."
+        assert "5 turns" in steered.input[-1]["content"]
+
+    def test_a_budgetless_run_installs_no_filter(self, runner):
+        agent_def = runner._get_agent_definition("test_agent")
+
+        assert runner._build_run_config(agent_def, []) is None
 
     async def test_execute_basic_with_budget(self, runner):
         from sinan_agentic_core.core.base_runner import _CompositeHooks
@@ -418,6 +425,7 @@ class TestBaseAgentRunnerTurnBudget:
         mock_result = Mock()
         mock_result.final_output = "test output"
         mock_result.new_items = []
+        mock_result.raw_responses = []
 
         with patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls:
             mock_runner_cls.run = AsyncMock(return_value=mock_result)

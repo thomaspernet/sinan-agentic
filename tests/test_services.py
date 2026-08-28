@@ -10,6 +10,7 @@ from agents import (
     Agent,
     MaxTurnsExceeded,
     ModelRefusalError,
+    ModelSettings,
     ToolGuardrailFunctionOutput,
     Usage,
     function_tool,
@@ -19,7 +20,6 @@ from pydantic import BaseModel
 
 from sinan_agentic_core.core.output_recovery import recover_invalid_final_output
 from sinan_agentic_core.core.run_errors import RunErrorKind
-from sinan_agentic_core.services.chat import _usage_to_dict
 from sinan_agentic_core.services.events import (
     AgentCompleteEvent,
     AgentStartEvent,
@@ -383,48 +383,6 @@ class TestStreamingRunHooks:
 
         assert "search" not in second.tool_friendly_names
         assert "search" not in declared
-
-
-# -- _usage_to_dict ------------------------------------------------------------
-
-
-class TestUsageToDict:
-    def test_single_response(self, mock_run_result):
-        usage = _usage_to_dict(mock_run_result)
-        assert usage["requests"] == 1
-        assert usage["input_tokens"] == 100
-        assert usage["output_tokens"] == 50
-        assert usage["total_tokens"] == 150
-        assert usage["input_tokens_details"]["cached_tokens"] == 0
-        assert usage["output_tokens_details"]["reasoning_tokens"] == 0
-
-    def test_multiple_responses(self):
-        """Usage.add() aggregates across multiple responses."""
-        from agents import Usage
-
-        u1 = Usage(requests=1, input_tokens=100, output_tokens=40, total_tokens=140)
-        u2 = Usage(requests=1, input_tokens=200, output_tokens=60, total_tokens=260)
-
-        r1 = Mock()
-        r1.usage = u1
-        r2 = Mock()
-        r2.usage = u2
-
-        result = Mock()
-        result.raw_responses = [r1, r2]
-
-        usage = _usage_to_dict(result)
-        assert usage["requests"] == 2
-        assert usage["input_tokens"] == 300
-        assert usage["output_tokens"] == 100
-        assert usage["total_tokens"] == 400
-
-    def test_empty_responses(self):
-        result = Mock()
-        result.raw_responses = []
-        usage = _usage_to_dict(result)
-        assert usage["requests"] == 0
-        assert usage["total_tokens"] == 0
 
 
 # -- chat() with mocked Runner ------------------------------------------------
@@ -1645,3 +1603,95 @@ class TestGuardrailTripwireReachesEveryChatFunction:
             await self._streamed_failure(),
         ]
         assert reports.count(reports[0]) == len(reports)
+
+
+class TestThePromptCacheKeyReachesTheChatEntryPoints:
+    """A caller pins the cache shard; all three entry points route the turn to it."""
+
+    KEY = "tenant-7"
+
+    @staticmethod
+    def _get_chat_module():
+        import sys
+
+        return sys.modules["sinan_agentic_core.services.chat"]
+
+    @classmethod
+    async def _agent_the_sdk_ran(cls, entry_point, *, agent=None, **kwargs):
+        """Run one turn through *entry_point*; return the agent handed to the SDK."""
+        chat_mod = cls._get_chat_module()
+        session = AgentSession(session_id="test")
+
+        with (
+            patch.object(chat_mod, "create_agent_from_registry", return_value=Agent(name="cached")),
+            patch.object(chat_mod, "Runner") as mock_runner,
+        ):
+            mock_runner.run = AsyncMock(return_value=_run_result())
+            mock_runner.run_streamed = Mock(return_value=_streamed_result())
+
+            call_kwargs: dict[str, Any] = {"session": session, **kwargs}
+            if agent is None:
+                call_kwargs["agent_name"] = "cached"
+            else:
+                call_kwargs["agent"] = agent
+
+            outcome = entry_point(chat_mod, "Hi", **call_kwargs)
+            if hasattr(outcome, "__aiter__"):
+                [event async for event in outcome]
+            else:
+                await outcome
+
+            # Two of the three entry points run through Runner.run and the
+            # third through Runner.run_streamed; only one is ever called.
+            call = mock_runner.run_streamed.call_args or mock_runner.run.call_args
+        return call.kwargs["starting_agent"]
+
+    ENTRY_POINTS = [
+        pytest.param(lambda mod, msg, **kw: mod.chat(msg, **kw), id="chat"),
+        pytest.param(lambda mod, msg, **kw: mod.chat_with_hooks(msg, **kw), id="chat_with_hooks"),
+        pytest.param(lambda mod, msg, **kw: mod.chat_streamed(msg, **kw), id="chat_streamed"),
+    ]
+
+    @pytest.mark.parametrize("entry_point", ENTRY_POINTS)
+    async def test_a_registry_resolved_agent_carries_it(self, entry_point):
+        agent = await self._agent_the_sdk_ran(entry_point, prompt_cache_key=self.KEY)
+
+        assert agent.model_settings.extra_args == {"prompt_cache_key": self.KEY}
+
+    @pytest.mark.parametrize("entry_point", ENTRY_POINTS)
+    async def test_a_pre_built_agent_carries_it_too(self, entry_point):
+        """A caller's own agent runs on the same terms as a registry-resolved one."""
+        agent = await self._agent_the_sdk_ran(
+            entry_point, agent=Agent(name="prebuilt"), prompt_cache_key=self.KEY
+        )
+
+        assert agent.model_settings.extra_args == {"prompt_cache_key": self.KEY}
+
+    @pytest.mark.parametrize("entry_point", ENTRY_POINTS)
+    async def test_the_callers_own_agent_is_not_mutated(self, entry_point):
+        """The key lands on a clone, so the agent a caller reuses stays as declared."""
+        caller_agent = Agent(name="prebuilt")
+
+        await self._agent_the_sdk_ran(entry_point, agent=caller_agent, prompt_cache_key=self.KEY)
+
+        assert caller_agent.model_settings.extra_args is None
+
+    @pytest.mark.parametrize("entry_point", ENTRY_POINTS)
+    async def test_a_key_the_caller_already_set_wins(self, entry_point):
+        caller_agent = Agent(
+            name="prebuilt",
+            model_settings=ModelSettings(extra_args={"prompt_cache_key": "caller-own"}),
+        )
+
+        agent = await self._agent_the_sdk_ran(
+            entry_point, agent=caller_agent, prompt_cache_key=self.KEY
+        )
+
+        assert agent.model_settings.extra_args == {"prompt_cache_key": "caller-own"}
+
+    @pytest.mark.parametrize("entry_point", ENTRY_POINTS)
+    async def test_a_turn_without_a_key_declares_no_extra_args(self, entry_point):
+        """Left off, the SDK is free to generate its own key for the run."""
+        agent = await self._agent_the_sdk_ran(entry_point)
+
+        assert agent.model_settings.extra_args is None

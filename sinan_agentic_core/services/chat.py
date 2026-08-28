@@ -15,6 +15,12 @@ shrunk before each model call, and an agent with a structured ``output_type``
 recovers a final message whose payload is valid but wrapped in prose or a
 code fence instead of failing the run.
 
+All three also accept ``prompt_cache_key``, which pins the provider's
+prompt-cache shard the turn routes to. Turns of one conversation reuse a cached
+prompt prefix only when they share a key, and the SDK generates one only for an
+official OpenAI client — so a consumer on Azure, or one grouping turns its own
+way, names it here.
+
 A failure never reaches the caller as an exception, so each of the three
 reports *why* it failed: the caught error is classified into a
 ``RunErrorKind`` and travels as ``error_kind`` beside the rendered message.
@@ -48,9 +54,10 @@ import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from agents import Agent, ItemHelpers, Runner, Usage
+from agents import Agent, ItemHelpers, Runner
 from openai.types.responses import ResponseTextDeltaEvent
 
+from ..core.model_settings import apply_prompt_cache_key
 from ..core.output_recovery import build_error_handlers
 from ..core.reasoning import (
     reasoning_event,
@@ -61,6 +68,7 @@ from ..core.reasoning import (
 from ..core.run_config import build_run_config
 from ..core.run_errors import run_error_payload
 from ..core.stream_preview import tool_output_preview
+from ..core.usage import aggregate_usage
 from ..registry.agent_factory import create_agent_from_registry
 from ..session import AgentSession
 from .hooks import StreamingRunHooks
@@ -72,13 +80,19 @@ def _resolve_agent(
     agent: Agent | None,
     agent_name: str | None,
     model_override: str | None = None,
+    prompt_cache_key: str | None = None,
 ) -> Agent:
     """Return a ready-to-run Agent, either pre-built or from the registry.
+
+    A prompt cache key is applied after the agent is resolved, so it reaches a
+    pre-built agent and a registry-resolved one on the same terms. The caller's
+    own agent is never mutated — the key lands on a clone.
 
     Args:
         agent: Pre-built Agent instance (takes priority).
         agent_name: Registry name, used when *agent* is ``None``.
         model_override: Override model (only applies to registry lookup).
+        prompt_cache_key: Prompt-cache shard this agent's model calls route to.
 
     Returns:
         An ``Agent`` instance.
@@ -87,37 +101,17 @@ def _resolve_agent(
         ValueError: If neither *agent* nor *agent_name* is provided.
     """
     if agent is not None:
-        return agent
-    if agent_name is not None:
-        return create_agent_from_registry(agent_name, model_override)
-    raise ValueError("Provide either 'agent' (pre-built) or 'agent_name' (registry lookup)")
+        resolved = agent
+    elif agent_name is not None:
+        resolved = create_agent_from_registry(agent_name, model_override)
+    else:
+        raise ValueError("Provide either 'agent' (pre-built) or 'agent_name' (registry lookup)")
 
-
-def _usage_to_dict(result: Any) -> dict[str, Any]:
-    """Aggregate token usage from all LLM responses in a run result.
-
-    Args:
-        result: A ``RunResult`` or ``RunResultStreaming`` with ``raw_responses``.
-
-    Returns:
-        Dict with token counts: requests, input_tokens, output_tokens,
-        total_tokens, input_tokens_details, output_tokens_details.
-    """
-    usage = Usage()
-    for response in result.raw_responses:
-        usage.add(response.usage)
-    return {
-        "requests": usage.requests,
-        "input_tokens": usage.input_tokens,
-        "output_tokens": usage.output_tokens,
-        "total_tokens": usage.total_tokens,
-        "input_tokens_details": {
-            "cached_tokens": usage.input_tokens_details.cached_tokens,
-        },
-        "output_tokens_details": {
-            "reasoning_tokens": usage.output_tokens_details.reasoning_tokens,
-        },
-    }
+    if prompt_cache_key is None:
+        return resolved
+    return resolved.clone(
+        model_settings=apply_prompt_cache_key(resolved.model_settings, prompt_cache_key)
+    )
 
 
 async def chat(
@@ -127,6 +121,7 @@ async def chat(
     context: Any = None,
     model_override: str | None = None,
     agent: Agent | None = None,
+    prompt_cache_key: str | None = None,
 ) -> dict[str, Any]:
     """Run a single chat turn (non-streaming).
 
@@ -139,6 +134,9 @@ async def chat(
         model_override: Use a different model than the agent definition.
         agent: Pre-built ``Agent`` instance. When provided, *agent_name* and
             *model_override* are ignored.
+        prompt_cache_key: Prompt-cache shard this turn's model calls route to.
+            Turns of one conversation reuse the provider's cached prompt prefix
+            only when they share a key.
 
     Returns:
         ``{"success": True, "response": str, "session_id": str, "tools_called": list,
@@ -157,7 +155,7 @@ async def chat(
     if session is None:
         raise ValueError("'session' is required")
     try:
-        resolved = _resolve_agent(agent, agent_name, model_override)
+        resolved = _resolve_agent(agent, agent_name, model_override, prompt_cache_key)
 
         await session.add_items([{"role": "user", "content": message}])
         history = await session.get_items()
@@ -184,7 +182,7 @@ async def chat(
             "response": response,
             "session_id": session.session_id,
             "tools_called": [],
-            "usage": _usage_to_dict(result),
+            "usage": aggregate_usage(result),
             "reasoning": run_reasoning_texts(result),
         }
     except Exception as e:
@@ -201,6 +199,7 @@ async def chat_with_hooks(
     tool_friendly_names: dict[str, str] | None = None,
     model_override: str | None = None,
     agent: Agent | None = None,
+    prompt_cache_key: str | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Chat with real-time tool-call notifications via ``RunHooks``.
 
@@ -216,6 +215,9 @@ async def chat_with_hooks(
         tool_friendly_names: Optional ``tool_name → display name`` mapping.
         model_override: Use a different model than the agent definition.
         agent: Pre-built ``Agent`` instance.
+        prompt_cache_key: Prompt-cache shard this turn's model calls route to.
+            Turns of one conversation reuse the provider's cached prompt prefix
+            only when they share a key.
 
     Yields:
         Event dicts with an ``"event"`` key and a ``"data"`` dict::
@@ -253,7 +255,7 @@ async def chat_with_hooks(
     try:
         yield {"event": "thinking", "data": {"message": "Analyzing your question..."}}
 
-        resolved = _resolve_agent(agent, agent_name, model_override)
+        resolved = _resolve_agent(agent, agent_name, model_override, prompt_cache_key)
         await session.add_items([{"role": "user", "content": message}])
         history = await session.get_items()
 
@@ -306,7 +308,7 @@ async def chat_with_hooks(
             "data": {
                 "response": response,
                 "tools_called": list(hooks.tools_called),
-                "usage": _usage_to_dict(result),
+                "usage": aggregate_usage(result),
             },
         }
     except Exception as e:
@@ -322,6 +324,7 @@ async def chat_streamed(
     context: Any = None,
     model_override: str | None = None,
     agent: Agent | None = None,
+    prompt_cache_key: str | None = None,
 ) -> AsyncGenerator[dict[str, Any], None]:
     """Chat with token-level streaming via ``Runner.run_streamed()``.
 
@@ -337,6 +340,9 @@ async def chat_streamed(
         model_override: Use a different model than the agent definition.
         agent: Pre-built ``Agent`` instance. When provided, *agent_name* and
             *model_override* are ignored.
+        prompt_cache_key: Prompt-cache shard this turn's model calls route to.
+            Turns of one conversation reuse the provider's cached prompt prefix
+            only when they share a key.
 
     Yields:
         Event dicts::
@@ -377,7 +383,7 @@ async def chat_streamed(
     if session is None:
         raise ValueError("'session' is required")
     try:
-        resolved = _resolve_agent(agent, agent_name, model_override)
+        resolved = _resolve_agent(agent, agent_name, model_override, prompt_cache_key)
         await session.add_items([{"role": "user", "content": message}])
         history = await session.get_items()
 
@@ -453,7 +459,7 @@ async def chat_streamed(
             "data": {
                 "response": response,
                 "tools_called": list(tools_called),
-                "usage": _usage_to_dict(result),
+                "usage": aggregate_usage(result),
             },
         }
     except Exception as e:

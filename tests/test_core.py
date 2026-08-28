@@ -14,7 +14,6 @@ from agents import (
     ModelRetrySettings,
     ModelSettings,
     ToolGuardrailFunctionOutput,
-    Usage,
     function_tool,
     input_guardrail,
     output_guardrail,
@@ -48,8 +47,10 @@ from sinan_agentic_core.registry.guardrail_registry import (
 from sinan_agentic_core.registry.tool_registry import ToolDefinition, ToolRegistry
 from sinan_agentic_core.session.agent_session import AgentSession
 from tests.conftest import (
+    make_completion_usage,
     make_context_overflow_error,
     make_input_tripwire_error,
+    make_model_response,
     make_output_tripwire_error,
     registered_input_guardrail,
     registered_output_guardrail,
@@ -159,21 +160,6 @@ class TestSetupHelpers:
         history = [{"role": "user", "content": "hello"}]
         session = runner.setup_session(session_id="h1", initial_history=history)
         assert session.session_id == "h1"
-
-
-class TestAggregateUsage:
-    def test_single_response(self, runner, mock_run_result):
-        usage = runner._aggregate_usage(mock_run_result)
-        assert usage["requests"] == 1
-        assert usage["input_tokens"] == 100
-        assert usage["output_tokens"] == 50
-        assert usage["total_tokens"] == 150
-
-    def test_empty_responses(self, runner):
-        result = Mock()
-        result.raw_responses = []
-        usage = runner._aggregate_usage(result)
-        assert usage["total_tokens"] == 0
 
 
 # ------------------------------------------------------------------ #
@@ -489,6 +475,213 @@ class TestExecuteStreaming:
             await runner._execute_streamed("basic_agent", ctx, session, lambda e: None, 30, "hello")
             call_kwargs = mock_runner_cls.run_streamed.call_args.kwargs
             assert call_kwargs["max_turns"] == 30
+
+
+class TestThePromptCacheKeyReachesEveryModelCall:
+    """A caller pins the cache shard; every branch of the run routes to it."""
+
+    KEY = "tenant-7"
+
+    @staticmethod
+    def _streamed_result():
+        result = Mock()
+        result.final_output = "answer"
+        result.new_items = []
+        result.raw_responses = []
+
+        async def stream_events():
+            return
+            yield
+
+        result.stream_events = stream_events
+        return result
+
+    @classmethod
+    async def _agent_the_sdk_ran(cls, runner, **execute_kwargs):
+        """Run one turn through ``execute()``; return the agent handed to the SDK."""
+        ctx = AgentContext(database_connector=Mock())
+        session = AgentSession(session_id="test")
+
+        with patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls:
+            mock_runner_cls.run = AsyncMock(return_value=cls._streamed_result())
+            mock_runner_cls.run_streamed = Mock(return_value=cls._streamed_result())
+            await runner.execute("basic_agent", ctx, session, **execute_kwargs)
+
+            call = (
+                mock_runner_cls.run_streamed.call_args
+                if execute_kwargs.get("streaming")
+                else mock_runner_cls.run.call_args
+            )
+        return call.kwargs["starting_agent"]
+
+    async def test_the_non_streamed_path_carries_it(self, runner):
+        agent = await self._agent_the_sdk_ran(runner, prompt_cache_key=self.KEY)
+
+        assert agent.model_settings.extra_args == {"prompt_cache_key": self.KEY}
+
+    async def test_the_streamed_path_carries_it(self, runner):
+        agent = await self._agent_the_sdk_ran(
+            runner, streaming=True, on_event=lambda e: None, prompt_cache_key=self.KEY
+        )
+
+        assert agent.model_settings.extra_args == {"prompt_cache_key": self.KEY}
+
+    async def test_the_fallback_path_carries_it(self, runner):
+        agent = await self._agent_the_sdk_ran(
+            runner, fallback_on_overflow=True, prompt_cache_key=self.KEY
+        )
+
+        assert agent.model_settings.extra_args == {"prompt_cache_key": self.KEY}
+
+    async def test_a_run_without_a_key_declares_no_extra_args(self, runner):
+        """Left off, the SDK is free to generate its own key for the run."""
+        agent = await self._agent_the_sdk_ran(runner)
+
+        assert agent.model_settings is None or agent.model_settings.extra_args is None
+
+    async def test_a_key_the_caller_placed_in_settings_is_left_untouched(self, runner):
+        agent = await self._agent_the_sdk_ran(
+            runner,
+            model_settings_override=ModelSettings(extra_args={"prompt_cache_key": "caller-own"}),
+            prompt_cache_key=self.KEY,
+        )
+
+        assert agent.model_settings.extra_args == {"prompt_cache_key": "caller-own"}
+
+    async def test_the_rescue_call_names_the_key_as_a_provider_parameter(self, runner):
+        """That branch bypasses the SDK adapters that would forward extra_args."""
+        ctx = AgentContext(database_connector=Mock())
+        session = AgentSession(session_id="test")
+
+        completion = Mock()
+        completion.choices = [Mock()]
+        completion.choices[0].message.content = "Rescued output"
+        completion.usage = make_completion_usage()
+
+        with (
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("sinan_agentic_core.core.base_runner.resolve_openai_client") as mock_resolve,
+        ):
+            mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
+            client = AsyncMock()
+            client.chat.completions.create = AsyncMock(return_value=completion)
+            mock_resolve.return_value = client
+
+            await runner.execute(
+                "basic_agent",
+                ctx,
+                session,
+                fallback_on_overflow=True,
+                prompt_cache_key=self.KEY,
+            )
+
+        assert client.chat.completions.create.call_args.kwargs["prompt_cache_key"] == self.KEY
+
+    async def test_a_rescue_call_without_a_key_omits_the_parameter(self, runner):
+        ctx = AgentContext(database_connector=Mock())
+        session = AgentSession(session_id="test")
+
+        completion = Mock()
+        completion.choices = [Mock()]
+        completion.choices[0].message.content = "Rescued output"
+        completion.usage = make_completion_usage()
+
+        with (
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
+            patch("sinan_agentic_core.core.base_runner.resolve_openai_client") as mock_resolve,
+        ):
+            mock_runner_cls.run = AsyncMock(side_effect=MaxTurnsExceeded("Max turns (10) exceeded"))
+            client = AsyncMock()
+            client.chat.completions.create = AsyncMock(return_value=completion)
+            mock_resolve.return_value = client
+
+            await runner.execute("basic_agent", ctx, session, fallback_on_overflow=True)
+
+        assert "prompt_cache_key" not in client.chat.completions.create.call_args.kwargs
+
+
+class TestStreamedRunsReportTheProvidersCachedTokens:
+    """A streamed run is billed the same way a non-streamed one is, and reports it."""
+
+    @staticmethod
+    async def _stream(runner, responses):
+        """Stream one turn whose run recorded *responses*; return the answer payload."""
+        ctx = AgentContext(database_connector=Mock())
+        session = AgentSession(session_id="test")
+        events = []
+
+        mock_result = Mock()
+        mock_result.final_output = "Streamed answer"
+        mock_result.new_items = []
+        mock_result.raw_responses = responses
+
+        async def mock_stream_events():
+            return
+            yield
+
+        mock_result.stream_events = mock_stream_events
+
+        with (
+            patch.object(runner, "create_agent", new_callable=AsyncMock, return_value=Mock()),
+            patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls,
+        ):
+            mock_runner_cls.run_streamed = Mock(return_value=mock_result)
+            await runner._execute_streamed(
+                "basic_agent", ctx, session, lambda e: events.append(e), 10, "hello"
+            )
+
+        return next(e for e in events if e["event"] == "answer")["data"]
+
+    async def test_the_runner_records_the_count_the_provider_returned(self, runner):
+        await self._stream(runner, [make_model_response(cached_tokens=256)])
+
+        assert runner.last_usage["input_tokens_details"]["cached_tokens"] == 256
+
+    async def test_the_answer_event_carries_the_same_count(self, runner):
+        """The metric is only usable as evidence if a stream consumer sees it."""
+        data = await self._stream(runner, [make_model_response(cached_tokens=256)])
+
+        assert data["usage"]["input_tokens_details"]["cached_tokens"] == 256
+
+    async def test_the_count_accumulates_over_every_response_of_the_run(self, runner):
+        await self._stream(
+            runner,
+            [
+                make_model_response(input_tokens=100, cached_tokens=0),
+                make_model_response(input_tokens=400, cached_tokens=256),
+                make_model_response(input_tokens=700, cached_tokens=512),
+            ],
+        )
+
+        assert runner.last_usage["requests"] == 3
+        assert runner.last_usage["input_tokens"] == 1200
+        assert runner.last_usage["input_tokens_details"]["cached_tokens"] == 768
+
+    async def test_reasoning_tokens_are_reported_too(self, runner):
+        """The streamed record carries every detail the non-streamed one does."""
+        await self._stream(runner, [make_model_response(reasoning_tokens=9)])
+
+        assert runner.last_usage["output_tokens_details"]["reasoning_tokens"] == 9
+
+    async def test_the_last_calls_input_is_reported_beside_the_sum(self, runner):
+        """Summed input counts the replayed history once per call; the window did not."""
+        await self._stream(
+            runner,
+            [
+                make_model_response(input_tokens=100),
+                make_model_response(input_tokens=400),
+                make_model_response(input_tokens=700),
+            ],
+        )
+
+        assert runner.last_usage["input_tokens"] == 1200
+        assert runner.last_usage["last_input_tokens"] == 700
+
+    async def test_a_run_with_no_responses_reports_a_cold_zero(self, runner):
+        await self._stream(runner, [])
+
+        assert runner.last_usage["input_tokens_details"]["cached_tokens"] == 0
+        assert runner.last_usage["last_input_tokens"] == 0
 
 
 class TestStreamedAnswerOwnsItsUsageRecord:
@@ -1316,7 +1509,7 @@ class TestFallbackCapabilitiesOwnTheirUsageRecord:
         await self._rescue(
             runner,
             [recorder],
-            Mock(prompt_tokens=100, completion_tokens=20, total_tokens=120),
+            make_completion_usage(),
         )
         return recorder.usages[0]
 
@@ -1345,7 +1538,7 @@ class TestFallbackCapabilitiesOwnTheirUsageRecord:
         await self._rescue(
             runner,
             [first, second],
-            Mock(prompt_tokens=100, completion_tokens=20, total_tokens=120),
+            make_completion_usage(),
         )
 
         assert first.usages[0] is not second.usages[0]
@@ -1360,6 +1553,41 @@ class TestFallbackCapabilitiesOwnTheirUsageRecord:
 
         assert recorder.usages == [None]
         assert runner.last_usage is None
+
+
+class TestTheRescueCallReportsTheProvidersCachedTokens:
+    """The rescue call is a model call too, and its cached prefix is billed the same."""
+
+    @staticmethod
+    async def _rescue_usage(runner, provider_usage):
+        """Drive the recovery branch once; return the record the runner kept."""
+        await TestFallbackCapabilitiesOwnTheirUsageRecord._rescue(runner, [], provider_usage)
+        return runner.last_usage
+
+    async def test_the_cached_count_comes_from_the_response(self, runner):
+        usage = await self._rescue_usage(runner, make_completion_usage(cached_tokens=256))
+
+        assert usage["input_tokens_details"]["cached_tokens"] == 256
+
+    async def test_the_reasoning_count_comes_from_the_response(self, runner):
+        usage = await self._rescue_usage(runner, make_completion_usage(reasoning_tokens=9))
+
+        assert usage["output_tokens_details"]["reasoning_tokens"] == 9
+
+    async def test_a_cold_cache_still_reads_as_zero(self, runner):
+        usage = await self._rescue_usage(runner, make_completion_usage())
+
+        assert usage["input_tokens_details"]["cached_tokens"] == 0
+
+    async def test_the_totals_come_from_the_response(self, runner):
+        usage = await self._rescue_usage(
+            runner, make_completion_usage(prompt_tokens=800, completion_tokens=30)
+        )
+
+        assert usage["requests"] == 1
+        assert usage["input_tokens"] == 800
+        assert usage["output_tokens"] == 30
+        assert usage["total_tokens"] == 830
 
 
 class TestFallbackReadersOwnTheCollectedItems:
@@ -1808,6 +2036,63 @@ class TestBudgetAwareAgentAsTool:
         agent_def = AgentDefinition(name="test", description="test", instructions="test")
         assert agent_def.as_tool_turn_budget is None
 
+    async def test_the_sub_agents_run_config_carries_its_budget(self, runner):
+        """The sub-agent's budget steers its own model calls, not the parent's."""
+        from sinan_agentic_core.core.capabilities.steering import CapabilitySteering
+        from sinan_agentic_core.core.turn_budget import TurnBudget
+
+        budget = TurnBudget(default_turns=5, absolute_max=10)
+        runner.agent_registry.register(
+            AgentDefinition(
+                name="steered_sub_agent",
+                description="sub with budget",
+                instructions="sub",
+                as_tool_turn_budget=budget,
+            )
+        )
+
+        built = []
+        real_build_run_config = runner._build_run_config
+
+        def spy(agent_def, capabilities=()):
+            run_config = real_build_run_config(agent_def, capabilities)
+            built.append((agent_def.name, run_config))
+            return run_config
+
+        with patch.object(runner, "_build_run_config", spy):
+            await runner._build_tools(
+                ["steered_sub_agent"], AgentContext(database_connector=Mock())
+            )
+
+        names = [name for name, _ in built]
+        assert names == ["steered_sub_agent"]
+        assert isinstance(built[0][1].call_model_input_filter, CapabilitySteering)
+
+    async def test_a_budgetless_sub_agent_steers_nothing(self, runner):
+        runner.agent_registry.register(
+            AgentDefinition(
+                name="unsteered_sub_agent",
+                description="sub without budget",
+                instructions="sub",
+                as_tool_max_turns=8,
+            )
+        )
+
+        built = []
+        real_build_run_config = runner._build_run_config
+
+        def spy(agent_def, capabilities=()):
+            run_config = real_build_run_config(agent_def, capabilities)
+            built.append(run_config)
+            return run_config
+
+        with patch.object(runner, "_build_run_config", spy):
+            await runner._build_tools(
+                ["unsteered_sub_agent"], AgentContext(database_connector=Mock())
+            )
+
+        assert built == [None]
+
 
 # ------------------------------------------------------------------ #
 # Structured error function
@@ -2034,7 +2319,7 @@ class TestGuardrailCategoryWiring:
 
     async def test_execute_basic_passes_run_config(self, guardrail_runner):
         session = AgentSession(session_id="s1")
-        result = Mock(final_output="ok", new_items=[], context_wrapper=Mock(usage=Usage()))
+        result = Mock(final_output="ok", new_items=[], raw_responses=[])
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -2048,7 +2333,7 @@ class TestGuardrailCategoryWiring:
 
     async def test_execute_basic_omits_run_config_without_tool_guardrails(self, guardrail_runner):
         session = AgentSession(session_id="s1")
-        result = Mock(final_output="ok", new_items=[], context_wrapper=Mock(usage=Usage()))
+        result = Mock(final_output="ok", new_items=[], raw_responses=[])
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -2596,7 +2881,7 @@ class TestToolOutputTrimWiring:
         assert run_config.call_model_input_filter.max_output_chars == 4000
 
     async def test_execute_basic_passes_the_filter(self, trim_runner, context):
-        result = Mock(final_output="ok", new_items=[], context_wrapper=Mock(usage=Usage()))
+        result = Mock(final_output="ok", new_items=[], raw_responses=[])
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -2607,7 +2892,7 @@ class TestToolOutputTrimWiring:
         assert run_config.call_model_input_filter.max_output_chars == 4000
 
     async def test_execute_with_fallback_passes_the_filter(self, trim_runner, context):
-        result = Mock(final_output="ok", new_items=[], context_wrapper=Mock(usage=Usage()))
+        result = Mock(final_output="ok", new_items=[], raw_responses=[])
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)

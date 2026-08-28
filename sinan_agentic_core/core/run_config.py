@@ -15,6 +15,11 @@ registry-resolved one. Pre-approval is read off the agent's own tools; trimming
 has no slot on ``Agent``, so it is read off the definition registered under the
 agent's name.
 
+``RunConfig`` has a single ``call_model_input_filter`` slot and two things want
+it — the declared tool-output trimmer and capability steering — so both
+run-config-building paths go through :func:`build_model_input_filter` for it
+rather than each deciding what the slot holds.
+
 Usage:
     from sinan_agentic_core import build_run_config
     from agents import Runner
@@ -26,28 +31,41 @@ Usage:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import replace
 from typing import Any
 
 from agents import Agent, RunConfig, ToolExecutionConfig
+from agents.extensions import ToolOutputTrimmer
+from agents.run_config import CallModelData, CallModelInputFilter, ModelInputData
 
 from ..registry.agent_registry import resolve_agent_definition
 from ..registry.guardrail_registry import has_tool_input_guardrails
+from .capabilities import Capability, CapabilitySteering, build_capability_steering
 from .tool_output_trim import ToolOutputTrimConfig, build_tool_output_trimmer
 
 
-def build_run_config(agent: Agent) -> RunConfig | None:
+def build_run_config(
+    agent: Agent,
+    capabilities: Sequence[Capability] = (),
+) -> RunConfig | None:
     """Build the SDK run config *agent* needs, or None when defaults apply.
 
     An agent whose function tools carry tool-input guardrails runs with
     pre-approval on, so a rejected call never reaches a human approver. An agent
     whose definition declares ``tool_output_trim`` runs with the SDK's
     tool-output filter, so bulky outputs from older turns shrink before each
-    model call instead of growing the input until the run overflows.
+    model call instead of growing the input until the run overflows. A run given
+    capabilities runs with steering, so their fragments reach the model at the
+    tail of the input.
 
     Args:
         agent: A built agent, from the registry factory or assembled by hand.
             The trim policy is looked up by ``agent.name``, so an agent
             assembled by hand picks up the policy declared for that name.
+        capabilities: The run's capabilities, already cloned and reset by
+            whoever owns the run. Left empty — as the chat service leaves it,
+            having no capabilities to run — nothing is steered.
 
     Returns:
         Configured RunConfig, or None when no setting differs from the default.
@@ -57,14 +75,62 @@ def build_run_config(agent: Agent) -> RunConfig | None:
     if _has_tool_input_guardrails(agent):
         config_kwargs["tool_execution"] = tool_input_pre_approval()
 
-    trimmer = build_tool_output_trimmer(_declared_tool_output_trim(agent))
-    if trimmer is not None:
-        config_kwargs["call_model_input_filter"] = trimmer
+    model_input_filter = build_model_input_filter(_declared_tool_output_trim(agent), capabilities)
+    if model_input_filter is not None:
+        config_kwargs["call_model_input_filter"] = model_input_filter
 
     if not config_kwargs:
         return None
 
     return RunConfig(**config_kwargs)
+
+
+def build_model_input_filter(
+    trim: ToolOutputTrimConfig | None,
+    capabilities: Sequence[Capability],
+) -> CallModelInputFilter | None:
+    """Build the one filter a run installs in ``call_model_input_filter``, or None.
+
+    Both run-config-building paths call this — ``BaseAgentRunner._build_run_config``
+    and :func:`build_run_config` — so declaring trimming and running with
+    capabilities install both filters whichever path assembled the config, rather
+    than the second silently taking the slot from the first.
+
+    Trimming runs first. It decides what to shrink from the items it is handed
+    and measures its untouched window in user messages, so it reads the real
+    conversation rather than one a steering item has already extended. Steering
+    then appends to whatever trimming returned, which leaves its item last in
+    the input on every call.
+
+    Args:
+        trim: The agent's declared trim policy, or None when it opts out.
+        capabilities: The run's capabilities. Empty means nothing to steer with.
+
+    Returns:
+        The filter to install, or None when neither part applies. Each call
+        builds fresh callables, so no two runs share filter state.
+    """
+    trimmer = build_tool_output_trimmer(trim)
+    steering = build_capability_steering(capabilities)
+
+    if steering is None:
+        return trimmer
+    if trimmer is None:
+        return steering
+
+    return _TrimThenSteer(trimmer, steering)
+
+
+class _TrimThenSteer:
+    """Trim tool outputs, then append the steering item to what trimming left."""
+
+    def __init__(self, trimmer: ToolOutputTrimmer, steering: CapabilitySteering) -> None:
+        self._trimmer = trimmer
+        self._steering = steering
+
+    def __call__(self, data: CallModelData[Any]) -> ModelInputData:
+        trimmed = replace(data, model_data=self._trimmer(data))
+        return self._steering(trimmed)
 
 
 def tool_input_pre_approval() -> ToolExecutionConfig:

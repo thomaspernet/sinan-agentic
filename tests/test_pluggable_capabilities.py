@@ -5,8 +5,8 @@ Verifies the capability pipeline:
   without any ``base_runner.py`` edits.
 - Capability state is isolated across sequential ``execute()`` calls (clones
   + reset).
-- ``_CompositeHooks`` and ``_apply_dynamic_instructions`` are generic over
-  capabilities (no TurnBudget/ToolErrorRecovery names).
+- ``_CompositeHooks`` and ``CapabilitySteering`` are generic over capabilities
+  (no TurnBudget/ToolErrorRecovery names).
 """
 
 from __future__ import annotations
@@ -20,9 +20,11 @@ from agents import RunContextWrapper, Tool
 
 from sinan_agentic_core.core import base_runner as base_runner_module
 from sinan_agentic_core.core.capabilities import Capability
+from sinan_agentic_core.core.capabilities import steering as steering_module
 from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
 from sinan_agentic_core.registry.guardrail_registry import GuardrailRegistry
 from sinan_agentic_core.registry.tool_registry import ToolRegistry
+from tests.conftest import drive_model_input_filter
 
 
 class LoggingCapability(Capability):
@@ -110,6 +112,7 @@ class TestCustomCapabilityIntegration:
         mock_result = Mock()
         mock_result.final_output = "ok"
         mock_result.new_items = []
+        mock_result.raw_responses = []
 
         captured_hooks: dict[str, Any] = {}
         captured_agent: dict[str, Any] = {}
@@ -164,17 +167,21 @@ class TestCustomCapabilityIntegration:
         assert declarative_cap.tool_ends == []
         assert declarative_cap.llm_starts == 0
 
-    async def test_capability_instructions_are_merged(self, runner_with_capability_agent) -> None:
+    async def test_capability_instructions_steer_the_model_call(
+        self, runner_with_capability_agent
+    ) -> None:
         runner, _ = runner_with_capability_agent
 
         mock_result = Mock()
         mock_result.final_output = "ok"
         mock_result.new_items = []
+        mock_result.raw_responses = []
 
         captured: dict[str, Any] = {}
 
         async def fake_run(**kwargs):
             captured["agent"] = kwargs["starting_agent"]
+            captured["run_config"] = kwargs.get("run_config")
             return mock_result
 
         with patch("sinan_agentic_core.core.base_runner.Runner") as mock_runner_cls:
@@ -192,13 +199,16 @@ class TestCustomCapabilityIntegration:
                     input_text="hello",
                 )
 
-        # ``_apply_dynamic_instructions`` wraps the agent's instructions with a
-        # callable that merges every capability fragment.
-        wrapped = captured["agent"].instructions
-        assert callable(wrapped)
-        rendered = wrapped(RunContextWrapper(context=None), captured["agent"])
-        assert "Base instructions." in rendered
-        assert "[logging]" in rendered
+        # The agent keeps the instructions it was built with; the fragment rides
+        # in the run config's filter instead.
+        assert captured["agent"].instructions == "Base instructions."
+
+        steered = drive_model_input_filter(
+            captured["run_config"].call_model_input_filter,
+            instructions="Base instructions.",
+        )
+        assert steered.instructions == "Base instructions."
+        assert "[logging]" in steered.input[-1]["content"]
 
 
 class TestCapabilityStateIsolation:
@@ -208,6 +218,7 @@ class TestCapabilityStateIsolation:
         mock_result = Mock()
         mock_result.final_output = "ok"
         mock_result.new_items = []
+        mock_result.raw_responses = []
 
         captured_clones: list[LoggingCapability] = []
 
@@ -260,15 +271,15 @@ class TestCapabilityStateIsolation:
 
 
 class TestCompositeHooksGeneric:
-    """Verify ``_CompositeHooks`` and the dynamic-instructions builder no
-    longer reference TurnBudget or ToolErrorRecovery by name."""
+    """Verify ``_CompositeHooks`` and the steering filter no longer reference
+    TurnBudget or ToolErrorRecovery by name."""
 
     def test_composite_hooks_source_has_no_turn_budget_branch(self) -> None:
         src = inspect.getsource(base_runner_module._CompositeHooks)
         assert "TurnBudget" not in src
         assert "ToolErrorRecovery" not in src
 
-    def test_dynamic_instructions_helper_has_no_capability_branches(self) -> None:
-        src = inspect.getsource(base_runner_module._merge_capability_instructions)
+    def test_steering_filter_has_no_capability_branches(self) -> None:
+        src = inspect.getsource(steering_module.CapabilitySteering)
         assert "TurnBudget" not in src
         assert "ToolErrorRecovery" not in src

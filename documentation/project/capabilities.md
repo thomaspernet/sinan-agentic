@@ -2,7 +2,7 @@
 
 `Capability` is the extension point for cross-cutting agent behavior - turn
 budgets, tool-error recovery, audit logging, memory, compaction, anything
-that needs to react to lifecycle events or contribute to the system prompt.
+that needs to react to lifecycle events or steer the next model call.
 
 Before this primitive existed, every new behavior meant editing
 `base_runner.py` and adding another bespoke `RunHooks` adapter. Now adding a
@@ -19,15 +19,15 @@ A capability is a stateful object with two roles:
 
 1. **React to lifecycle events** via `on_*` hook methods. Default
    implementations are no-ops, so subclasses override only what they need.
-2. **Contribute to the system prompt** via `instructions(ctx)`, which returns
-   a fragment merged into the agent's instructions before each LLM call.
-   Return `None` to contribute nothing this turn.
+2. **Steer the next model call** via `instructions(ctx)`, which returns a
+   fragment appended to the model input before each LLM call. Return `None`
+   to contribute nothing this turn.
 
 The full surface lives in `sinan_agentic_core/core/capabilities/base.py`:
 
 | Method | When it fires |
 |---|---|
-| `instructions(ctx)` | Before each LLM call - return a fragment or `None` |
+| `instructions(ctx)` | Before each LLM call - return a steering fragment or `None` |
 | `on_agent_start(ctx, agent)` | Run begins |
 | `on_agent_end(ctx, agent, output)` | Run ends with a final output |
 | `on_handoff(ctx, from_agent, to_agent)` | Control hands off between agents |
@@ -57,8 +57,8 @@ runner.execute(...)
    |-- _build_run_capabilities():  for each declared cap -> cap.clone()
    |                               then cap.reset() on every effective cap
    |
-   |-- _apply_dynamic_instructions(): wraps agent.instructions so each turn
-   |                                  appends instructions(ctx) fragments
+   |-- _build_run_config(caps):     installs CapabilitySteering in the run
+   |                                config's one call_model_input_filter slot
    |
    |-- _CompositeHooks(caps):       routes SDK RunHooks events to every
    |                                capability's matching on_* method
@@ -67,8 +67,9 @@ runner.execute(...)
 Runner.run(...)
    |
    |-- on_agent_start  -> A.on_agent_start, B.on_agent_start
+   |-- (before each model call) CapabilitySteering appends A.instructions +
+   |   B.instructions to the input as one trailing item
    |-- on_llm_start    -> A.on_llm_start, B.on_llm_start
-   |   (system prompt now includes A.instructions + B.instructions fragments)
    |-- on_tool_start / on_tool_end -> ...
    |-- on_llm_end
    |-- on_agent_end
@@ -143,7 +144,7 @@ path (see below).
 
 ### Adding instructions
 
-A capability that contributes to the prompt overrides `instructions`:
+A capability that steers the model overrides `instructions`:
 
 ```python
 class TimeAwareness(Capability):
@@ -155,8 +156,20 @@ class TimeAwareness(Capability):
 ```
 
 The runtime joins fragments from every attached capability with double
-newlines and appends them to the agent's base instructions before each LLM
-call. Order matches `AgentDefinition.capabilities`.
+newlines and appends them to the model input as one trailing item before each
+LLM call. Order matches `AgentDefinition.capabilities`.
+
+The fragments deliberately do not go into the system prompt. A provider
+serializes the system prompt first and caches only a byte-identical leading
+span, so a fragment that changes between two calls of one run - a budget
+counting down, a recovery tracker gaining an entry - would push the whole
+conversation behind it out of the cacheable prefix. At the tail the prefix
+stays stable, and the steering lands where a model follows it most reliably.
+The item is ephemeral: it is built per call and never written to the session.
+
+The same filter warns when the resolved instructions differ between two model
+calls of one run, which catches drift a consumer's own instruction callable or
+another filter introduces.
 
 ### Exposing tools
 
@@ -228,15 +241,15 @@ to inspect. Declarative capabilities are cloned, so the template stays
 clean across runs.
 
 The runner merges both sources into a single effective list, calls
-`reset()` on each one, then composes them into a single
-`_CompositeHooks` (`base_runner.py:1051-1090`).
+`reset()` on each one, then composes them into a single `_CompositeHooks`
+for lifecycle events and a single `CapabilitySteering` for fragment delivery.
 
 ## Built-in capabilities
 
 | Capability | What it does |
 |---|---|
-| `TurnBudget` | Soft turn budget with self-extension. Counts turns via `on_llm_start`, injects budget status via `instructions`, exposes `request_extension` via `tools()`. |
-| `ToolErrorRecovery` | Tracks tool errors, detects repeated identical calls, injects progressive recovery guidance via `instructions`. |
+| `TurnBudget` | Soft turn budget with self-extension. Counts turns via `on_llm_start`, reports budget status via `instructions`, exposes `request_extension` via `tools()`. |
+| `ToolErrorRecovery` | Tracks tool errors, detects repeated identical calls, reports progressive recovery guidance via `instructions`. |
 
 Both are first-class `Capability` subclasses. The README sections on
 [Turn Budget](../../README.md#turn-budget-soft-turn-management) and
@@ -314,10 +327,11 @@ register_agent(AgentDefinition(
 ## Reference
 
 - Protocol: `sinan_agentic_core/core/capabilities/base.py`
-- Composition: `BaseAgentRunner._build_run_capabilities` in
-  `sinan_agentic_core/core/base_runner.py:875`
-- Hook adapter: `_CompositeHooks` in
-  `sinan_agentic_core/core/base_runner.py:1051`
+- Fragment delivery: `sinan_agentic_core/core/capabilities/steering.py`, placed
+  in the run config's filter slot by
+  `sinan_agentic_core/core/run_config.py`'s `build_model_input_filter`
+- Composition: `BaseAgentRunner._build_run_capabilities` and
+  `_CompositeHooks` in `sinan_agentic_core/core/base_runner.py`
 - Built-ins: `sinan_agentic_core/core/turn_budget.py`,
   `sinan_agentic_core/core/tool_error_recovery.py`
 - Runnable example: `examples/custom_capability.py`
