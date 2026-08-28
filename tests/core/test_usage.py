@@ -88,10 +88,6 @@ class TestAggregatingARun:
 
         assert aggregate_usage(result)["total_tokens"] == 0
 
-    def test_a_result_that_does_not_carry_responses_reports_zeros(self) -> None:
-        """A bare mock's ``raw_responses`` is not iterable; a run still reports."""
-        assert aggregate_usage(Mock())["total_tokens"] == 0
-
 
 class TestTheContextWindowHighWaterMark:
     def test_the_last_call_input_is_reported_not_the_sum(self) -> None:

@@ -20,7 +20,6 @@ from pydantic import BaseModel
 
 from sinan_agentic_core.core.output_recovery import recover_invalid_final_output
 from sinan_agentic_core.core.run_errors import RunErrorKind
-from sinan_agentic_core.core.usage import aggregate_usage
 from sinan_agentic_core.services.events import (
     AgentCompleteEvent,
     AgentStartEvent,
@@ -384,48 +383,6 @@ class TestStreamingRunHooks:
 
         assert "search" not in second.tool_friendly_names
         assert "search" not in declared
-
-
-# -- aggregate_usage ------------------------------------------------------------
-
-
-class TestUsageToDict:
-    def test_single_response(self, mock_run_result):
-        usage = aggregate_usage(mock_run_result)
-        assert usage["requests"] == 1
-        assert usage["input_tokens"] == 100
-        assert usage["output_tokens"] == 50
-        assert usage["total_tokens"] == 150
-        assert usage["input_tokens_details"]["cached_tokens"] == 0
-        assert usage["output_tokens_details"]["reasoning_tokens"] == 0
-
-    def test_multiple_responses(self):
-        """Usage.add() aggregates across multiple responses."""
-        from agents import Usage
-
-        u1 = Usage(requests=1, input_tokens=100, output_tokens=40, total_tokens=140)
-        u2 = Usage(requests=1, input_tokens=200, output_tokens=60, total_tokens=260)
-
-        r1 = Mock()
-        r1.usage = u1
-        r2 = Mock()
-        r2.usage = u2
-
-        result = Mock()
-        result.raw_responses = [r1, r2]
-
-        usage = aggregate_usage(result)
-        assert usage["requests"] == 2
-        assert usage["input_tokens"] == 300
-        assert usage["output_tokens"] == 100
-        assert usage["total_tokens"] == 400
-
-    def test_empty_responses(self):
-        result = Mock()
-        result.raw_responses = []
-        usage = aggregate_usage(result)
-        assert usage["requests"] == 0
-        assert usage["total_tokens"] == 0
 
 
 # -- chat() with mocked Runner ------------------------------------------------

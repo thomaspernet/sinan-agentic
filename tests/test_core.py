@@ -14,7 +14,6 @@ from agents import (
     ModelRetrySettings,
     ModelSettings,
     ToolGuardrailFunctionOutput,
-    Usage,
     function_tool,
     input_guardrail,
     output_guardrail,
@@ -37,7 +36,6 @@ from sinan_agentic_core.core.model_retry import ModelRetryConfig
 from sinan_agentic_core.core.output_recovery import recover_invalid_final_output
 from sinan_agentic_core.core.stream_preview import tool_output_preview
 from sinan_agentic_core.core.tool_output_trim import ToolOutputTrimConfig
-from sinan_agentic_core.core.usage import aggregate_usage
 from sinan_agentic_core.models.context import AgentContext
 from sinan_agentic_core.registry.agent_registry import AgentDefinition, AgentRegistry
 from sinan_agentic_core.registry.guardrail_registry import (
@@ -162,21 +160,6 @@ class TestSetupHelpers:
         history = [{"role": "user", "content": "hello"}]
         session = runner.setup_session(session_id="h1", initial_history=history)
         assert session.session_id == "h1"
-
-
-class TestAggregateUsage:
-    def test_single_response(self, mock_run_result):
-        usage = aggregate_usage(mock_run_result)
-        assert usage["requests"] == 1
-        assert usage["input_tokens"] == 100
-        assert usage["output_tokens"] == 50
-        assert usage["total_tokens"] == 150
-
-    def test_empty_responses(self):
-        result = Mock()
-        result.raw_responses = []
-        usage = aggregate_usage(result)
-        assert usage["total_tokens"] == 0
 
 
 # ------------------------------------------------------------------ #
@@ -2279,7 +2262,7 @@ class TestGuardrailCategoryWiring:
 
     async def test_execute_basic_passes_run_config(self, guardrail_runner):
         session = AgentSession(session_id="s1")
-        result = Mock(final_output="ok", new_items=[], context_wrapper=Mock(usage=Usage()))
+        result = Mock(final_output="ok", new_items=[], raw_responses=[])
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -2293,7 +2276,7 @@ class TestGuardrailCategoryWiring:
 
     async def test_execute_basic_omits_run_config_without_tool_guardrails(self, guardrail_runner):
         session = AgentSession(session_id="s1")
-        result = Mock(final_output="ok", new_items=[], context_wrapper=Mock(usage=Usage()))
+        result = Mock(final_output="ok", new_items=[], raw_responses=[])
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -2841,7 +2824,7 @@ class TestToolOutputTrimWiring:
         assert run_config.call_model_input_filter.max_output_chars == 4000
 
     async def test_execute_basic_passes_the_filter(self, trim_runner, context):
-        result = Mock(final_output="ok", new_items=[], context_wrapper=Mock(usage=Usage()))
+        result = Mock(final_output="ok", new_items=[], raw_responses=[])
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)
@@ -2852,7 +2835,7 @@ class TestToolOutputTrimWiring:
         assert run_config.call_model_input_filter.max_output_chars == 4000
 
     async def test_execute_with_fallback_passes_the_filter(self, trim_runner, context):
-        result = Mock(final_output="ok", new_items=[], context_wrapper=Mock(usage=Usage()))
+        result = Mock(final_output="ok", new_items=[], raw_responses=[])
 
         with patch(
             "sinan_agentic_core.core.base_runner.Runner.run", new=AsyncMock(return_value=result)

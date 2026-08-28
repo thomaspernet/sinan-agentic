@@ -122,9 +122,6 @@ def last_input_tokens(result: Any) -> int:
 
 
 def _responses(result: Any) -> list[Any]:
-    """The run's model responses, or an empty list when it carries none."""
-    raw_responses = getattr(result, "raw_responses", None) or []
-    try:
-        return list(raw_responses)
-    except TypeError:
-        return []
+    """The run's model responses — empty only when the run made no model call."""
+    responses: list[Any] = result.raw_responses
+    return responses
