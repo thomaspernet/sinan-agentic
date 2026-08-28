@@ -58,7 +58,7 @@ Check prior quality check results to see if this is a re-check (run `devwatch is
 ```bash
 devwatch --repo "$REPO" issue-history <ISSUE> --phase quality
 ```
-If prior quality checks exist, note what failed before — verify those items are now fixed.
+If prior quality checks exist, this is a **re-check** — its scope is pinned by the *Re-check contract* in step 4. Note what failed before; you will verify those items class-by-class.
 
 ### Reviewer context — the author's implement notes
 
@@ -107,6 +107,19 @@ The mandatory-reads block already loaded every checklist this skill needs. Walk 
 
 For each item in each checklist, verify it against the actual diff. Do not skip items.
 
+### Report the class, exhaustively — never just the first instance
+
+A FAIL report is a complete work order. When an item fails on some instance, name the **class** of the defect ("prose still naming the deleted X", "read surface missing the Y gate", "duplicate of helper Z") and sweep the whole tree for every other instance of that class — with ignore rules off (`rg --no-ignore --hidden`; git-ignored surfaces such as `.claude/` and deployed docs are review surface too) across source, tests, `*.md`/`*.mdx` docs, config files and comments, `.claude/rules/*.md`, and the opposite-side twin (backend ↔ frontend) — **before** writing the report. Enumerate every instance found inside the same FAIL item. Reporting one instance per round is what makes issues loop: the fix clears the named site, and the next round rediscovers a sibling one directory over. The fix round must be able to reach PASS by clearing exactly what your report lists.
+
+### Re-check contract (when prior quality checks exist)
+
+A re-check is not a fresh review of the whole branch with fresh eyes. Its scope is:
+
+1. **Verify every previously failed item is fixed** — including that the fix cleared the *class*, not just the named instance (run the class sweep yourself to confirm).
+2. **Fully review the delta diff** since the previous check. Fixes mint new review surface — new docstrings, tests, helpers — graded on the same terms as any code.
+3. **Late findings on unchanged code**: a finding on code already present and unchanged at the previous check must be labeled `NEW — present since round <n>, missed earlier`. If it is prose-only (a stale mirror, an enumerated count, a doc sentence), record it as a `follow_up` note in the run report and list it in the report body — it does **not** flip the verdict by itself. Behavior, test, security, and duplication findings block regardless of when they were found.
+4. **Stable rubric**: walk the same checklists every round. Do not re-derive a different item set, and do not introduce a criterion at round N that rounds 1..N-1 did not apply — if a new criterion genuinely must enter, label it as new and non-blocking for this branch, and note it for the docs.
+
 When the author's implement notes (section 2) flagged risks or decisions, give those items extra scrutiny here — the digest points you straight at where the author was unsure or made a deliberate trade-off.
 
 ## 5. Determine status
@@ -114,12 +127,24 @@ When the author's implement notes (section 2) flagged risks or decisions, give t
 - **PASS**: every checklist item passes
 - **FAIL**: one or more items fail
 
+On a re-check, a prose-only late finding on unchanged code, recorded as a follow-up under the *Re-check contract*, does not count as a failing item.
+
+### Gate fixes — when every failing item is prose-grade
+
+The proofreader may fix punctuation; it never rewrites an argument. If — and only if — **every** failing item is prose-grade, fix them yourself instead of failing the round:
+
+- **Prose-grade** means: comment and docstring wording, stale prose references, enumerated rosters or counts, typos, auto-fixable lint. Nothing that changes behavior, tests, or logic, and nothing that requires a decision the author should make.
+- **All-or-nothing.** If even one failing item is behavior, test, security, logic, or duplication-of-logic, fix nothing — report every item, the prose-grade ones included, as one FAIL work order. Never split a round between the gate's edits and the author's.
+- **Your own rules apply to your own edits.** Run the class sweep (ignore rules off) on each fix so the family is cleared, mint no new rosters or counts, and re-run whatever your edits could disturb (typecheck, lint, affected tests) before declaring the verdict.
+- **Honest trace.** Commit the fixes as one commit prefixed `chore(gate):` — e.g. `chore(gate): prose fixes from quality round <N> (#<ISSUE>)` — and push the branch so the pipeline sees them. The verdict is **PASS — gate fixes applied**; the report lists each self-applied fix as a `GATE-FIXED:` line under its checklist item, and the run report `notes` records one `consideration` per fix. A reader must always be able to see exactly what shipped without an author review.
+- **Cap.** If the fixes would touch more than a handful of files, or you find yourself editing anything that executes, stop — that is not punctuation. Fail the round instead.
+
 ## 6. Build the report
 
 Build a markdown report following this structure:
 
 ```
-## Code Quality Check — PASS / FAIL
+## Code Quality Check — PASS / FAIL   (a gate-fix pass reads "PASS — gate fixes applied")
 
 **Issue**: #<N> — <title> (or "No issue specified")
 **Branch**: <branch-name>
@@ -129,6 +154,7 @@ Build a markdown report following this structure:
 ### General Checklist
 - [x] <item description>
 - [ ] FAIL: <what's wrong, file, line>
+- [x] GATE-FIXED: <what was wrong, file, line — fixed and committed by this check>
 
 ### Python / TypeScript Checklist
 - [x] <item description>
@@ -195,8 +221,10 @@ If no issue number was provided, just print the report to the terminal.
 
 **If PASS**: tell the user "Quality check passed. Ready for `/submit-pr`."
 
+**If PASS with gate fixes**: tell the user "Quality check passed — prose-grade findings fixed and committed at the gate (`chore(gate):`). Ready for `/submit-pr`."
+
 **If FAIL**: tell the user "Quality check failed. Fix the issues listed above, then run `/check-code-quality <N>` again. Do NOT proceed to `/submit-pr` until all checks pass."
 
 ## Boundary
 
-This skill reviews and reports. It does NOT fix issues, commit, push, or create PRs. It is a gate — the agent must not proceed to `/submit-pr` if the check fails.
+This skill reviews and reports. Its only write to the branch is the gate-fix path in step 5 — prose-grade fixes only, all-or-nothing, committed as `chore(gate):` and enumerated in the report. Beyond that it does NOT fix issues, commit, push, or create PRs. It is a gate — the agent must not proceed to `/submit-pr` if the check fails.

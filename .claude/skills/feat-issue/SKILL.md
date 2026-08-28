@@ -96,6 +96,8 @@ Available arguments (run `devwatch issue-history --help` to see all):
   - `devwatch --repo "$REPO" issue-history <ISSUE> --comments` — read quality failure reports and fix summaries
   - Use the failed check items as your primary guide for what to fix
   - Do NOT just re-validate against the original AC — address the specific feedback
+  - Treat every failed item as an **instance of a class**, not a one-off. Before fixing the named site, sweep the whole tree for every other instance of the same class — with ignore rules off (`rg --no-ignore --hidden`; git-ignored surfaces such as `.claude/` and deployed docs count) across source, tests, `*.md`/`*.mdx` docs, config files and comments, `.claude/rules/*.md`, and the opposite-side twin (backend ↔ frontend) — and clear them all in this round. Loops happen when a fix clears the one named site and the next check finds its sibling one directory over. Then re-read the prose your own fix writes before recording completion: a fresh docstring that enumerates a roster or a count is the most common way a fix round mints the next round's FAIL.
+  - The branch may already carry `chore(gate):` commits — prose-grade fixes the quality gate applied itself under its gate-fix contract (see check-code-quality). They are part of the baseline: build on them; never revert or re-apply them.
 - **If no prior runs exist**: this is a first implementation. Proceed normally.
 
 ## Workflow detection
@@ -202,6 +204,15 @@ workflow stays ``active``.
 If RUN_ID is unavailable, omit ``--run-id``. Do not call
 ``agent-comment`` for the no-op — the close comment already explains the
 outcome on the issue.
+
+## Pre-completion self-review — pass the gate here first
+
+The quality gate grades your diff against the completion checklists the mandatory reads loaded (the general checklist plus the language-specific one for every language the diff touches) — the same documents, item by item. Most gate failures are avoidable at this desk. Before wrapping up:
+
+1. **Walk the checklists against your own diff.** Every item, general first, then per-language. Fix what fails now — never record completion with a known-failing item.
+2. **Ask one question of everything the diff touched or added — "where else does this same thing live?" — and search with ignore rules off.** Every change has a family: a sentence elsewhere restating the old behavior, a second copy of a literal or derivation this very diff introduced, any other instance of a shape you fixed once. Grep the whole tree for the old names, the old contract wording, and each literal or shape the diff *adds* — with `rg --no-ignore --hidden` or `grep -r`, never plain `rg`/`git grep`: ignore-respecting search silently skips git-ignored surfaces (`.claude/`, deployed docs, generated config), which is exactly where stale references survive a sweep. The hit list is the rest of your to-do list — repoint, delete, or consolidate every member, preferring a deferral to one authoritative home over an enumerated roster or count, so the next change has nothing to go stale. Record the sweep in the run report `notes` (a `consideration` naming what was searched and what was cleared) so the reviewer can verify it instead of redoing it.
+3. **Walk the fan-out of every edited function.** List its branches and its callers, and confirm the change reached each symmetric sibling — the other scope, the other opener, the matching config path. A fix applied to one of two twin paths is the most common behavior FAIL, and no text search surfaces it; only the walk does.
+4. **Your own additions are review surface too.** Docstrings, tests, and helpers authored in this round are graded by the same checklists — no enumerated counts in new prose, no magic strings or dead assertions in new tests.
 
 ## Wrap up
 

@@ -3,17 +3,19 @@ description: "Update documentation for the workflow root #$ARGUMENTS after its i
 capability: core
 ---
 
-Update the docs affected by the change that just shipped for workflow root #$ARGUMENTS.
+Update the documentation pages affected by the change that just shipped for workflow root #$ARGUMENTS.
 
-This is the workflow's single **Documentation** ship step (#2801, epic #2800). It runs once, post-merge, against the merged integration diff — there is no per-child docs pass and no `--epic` mode anymore. The argument is the workflow's root: an epic issue, or a self-rooted single issue. Either way you document **whatever that root describes** against the change that landed on the dev branch.
+This is the workflow's single **Documentation** ship step (#2801, epic #2800). It runs once, post-merge, against the merged integration diff. The argument is the workflow's root: an epic issue, or a self-rooted single issue. Either way you document **whatever that root describes** against the change that landed on the dev branch.
+
+Documentation is a Page, not a file (epic #2014). You read the merged diff, resolve which page covers what changed, and write that page. **Take no other git action** — no branch, no commit, no push. The working tree you read must be exactly as clean when you finish as when you started.
+
+The post-merge ordering is kept deliberately. It is no longer a constraint imposed by `git diff` — a page reads as stale the moment a file under its globs changes, with no merge commit needed — it is a choice: document what actually shipped, rather than what a child intended before it was re-scoped or reverted.
 
 ## Mandatory reads — do this first
 
-Run:
+The `MANDATORY CONTEXT` block in your priming lists every doc and rule this step must read, each with its uuid. Open the ones this work needs with `read_doc(uuid=...)` and `read_rule(uuid=...)` before writing anything. The block carries titles and descriptions only — never bodies — so those two tools are how you read one.
 
-    devwatch --repo "$REPO" doc-read --skill add-documentation --display
-
-The output contains every doc you must read; treat it as if you opened each file directly. Do not proceed with the skill body until done.
+There is no command to run and no tree to scan: the set is resolved from the library's own edges, so a doc named there exists and a doc that does not exist cannot be named.
 
 **Standing authorization**: posting the `devwatch agent-report`, `devwatch agent-update`, and `devwatch agent-comment` calls described below (run report + status update + single completion comment on the root issue) is part of this skill's contract. Run them without asking for confirmation.
 
@@ -23,7 +25,7 @@ Extract the root issue number and optional run ID from `$ARGUMENTS`:
 - `$ARGUMENTS` = `"42"` -> ISSUE=42, RUN_ID=(none)
 - `$ARGUMENTS` = `"42 --run 7"` -> ISSUE=42, RUN_ID=7
 
-ISSUE is the workflow root. There is no `--epic` flag — every workflow runs the same documentation step.
+ISSUE is the workflow root. Every workflow runs the same documentation step.
 
 ## Detect repo
 
@@ -46,6 +48,7 @@ The integration branch has already merged into the dev branch — this step runs
    git checkout "$DEV_BRANCH"
    git pull --ff-only origin "$DEV_BRANCH"
    ```
+   This is the whole of the git this step takes, and all of it is a read: you are moving to the ref the change landed on so you can see it.
 2. Read the root issue body as the spec — it describes what shipped (an epic body, or a single issue), not a single child:
    ```bash
    gh issue view <ISSUE> --repo "$REPO" --json title,body,labels
@@ -59,13 +62,25 @@ The integration branch has already merged into the dev branch — this step runs
    MERGE_SHA=$(echo "$PR" | jq -r .mergeCommit.oid)
    git diff "${MERGE_SHA}^1..${MERGE_SHA}" --name-only
    ```
-   If no merged integration PR is found (a `devonly` workflow merges straight into dev with no PR), fall back to `devwatch --repo "$REPO" check-docs --issue <ISSUE>` — when `<ISSUE>` is an epic it diffs the integration branch against dev; otherwise it diffs the issue's merged change. Either source gives you the changed-file set.
+   If no merged integration PR is found (a `devonly` workflow merges straight into dev with no PR), fall back to `devwatch --repo "$REPO" check-docs --issue <ISSUE>` — when `<ISSUE>` is an epic it diffs the integration branch against dev; otherwise it diffs the issue's merged change. Either source gives you the changed-file set. That branch has no merge commit to name, so name the ref you read instead:
+   ```bash
+   MERGE_SHA="$(git rev-parse HEAD)"
+   ```
+   `MERGE_SHA` is set on both branches, because the completion record below names it either way.
+
+## Resolve which pages cover it
+
+Call `documentation_coverage` — it returns every documentation page of the project with the code globs it covers, whether it is `current` or `stale`, and the paths that changed under it since it was last written or last confirmed accurate. It also returns `never_written`: directories holding changed code no page covers at all.
+
+Match your changed-file set against each page's `covers` globs. A page whose globs match a file you just saw in the merged diff is a page this pass has to decide about. A page the coverage already calls `stale` for paths outside your diff was made stale by earlier work — leave it; this pass documents what this root shipped.
+
+`repos_unread` names checkouts that could not be read. A page covering only those reads as current on a question nobody managed to ask, so say so in the completion comment rather than treating it as clean.
 
 ## Intelligence (what you decide)
 
 ### Reviewer context — the author's implement notes
 
-Before deciding which docs are stale, read the shipping workflow's run-report notes and use them to focus the pass (epic #2913). Each child's `implement` agent recorded `risk` notes ("watch this") and `consideration` notes ("deliberately didn't do X because Y") while the work was fresh — exactly the hand-off that points you at the behaviour or API a doc may now misrepresent. This is **read-only** context enrichment: it sharpens where you look; it is never posted anywhere.
+Before deciding which pages are stale, read the shipping workflow's run-report notes and use them to focus the pass (epic #2913). Each child's `implement` agent recorded `risk` notes ("watch this") and `consideration` notes ("deliberately didn't do X because Y") while the work was fresh — exactly the hand-off that points you at the behaviour or API a page may now misrepresent. This is **read-only** context enrichment: it sharpens where you look; it is never posted anywhere.
 
 Resolve the workflow that owns this root, then read its rollup digest (every shipped member's notes — you document the whole merged change, so the workflow-scoped report is the right scope):
 
@@ -78,49 +93,46 @@ fi
 
 `get-report` prints a category-grouped markdown digest (`### Risks` / `### Decisions` / `### Follow-ups`) assembled from the notes earlier agents recorded, or nothing when there are no notes.
 
-- **Empty digest (or no workflow resolved) → skip.** No author context; map the changed files to docs as usual. Do not add a context block.
-- **Non-empty digest → focus the pass.** Treat each **Risks** and **Decisions** entry as a pointer to a surface whose behaviour or contract may have shifted — check the docs for those surfaces first. **Follow-ups** are deferred work, not shipped behaviour; do not document them as if they landed.
+- **Empty digest (or no workflow resolved) → skip.** No author context; map the changed files to pages as usual. Do not add a context block.
+- **Non-empty digest → focus the pass.** Treat each **Risks** and **Decisions** entry as a pointer to a surface whose behaviour or contract may have shifted — check the pages for those surfaces first. **Follow-ups** are deferred work, not shipped behaviour; do not document them as if they landed.
 
-Do **not** post these notes to GitHub. This step's only writes are the docs commit and the single completion comment below.
+Then, for each page the coverage flagged:
 
-Map every changed file to its docs page using the doc map in CLAUDE.md. Then, for each flagged doc:
+1. Read the page: `read(uuid=<page uuid>)`.
+2. Read the changed code that landed under its globs.
+3. Decide: is the merged behavior, architecture, or API now misrepresented, or is the change internal?
+4. **If it is misrepresented**, rewrite the page: `update_page_content(page_uuid=<uuid>, content=<full markdown>)`. Prefer one cohesive update per surface over N narrow per-file edits — read the root body as the "what shipped and why" spec, not a file-by-file history.
+5. **If the change was internal** — a refactor, a rename, anything that does not alter what the page says — call `mark_documentation_current(page_uuid=<uuid>)`. This is the other answer a stale page has, and it is not the same as doing nothing: it records that somebody re-read the page against the change, which is what keeps "confirmed accurate" distinguishable from "nobody looked".
 
-1. Read the doc.
-2. Read the changed code that landed.
-3. Decide: is the merged behavior, architecture, or APIs now misrepresented, or is the change internal?
-4. If stale: update the doc content to match what shipped. Prefer one cohesive update per surface over N narrow per-file edits — read the root body as the "what shipped and why" spec, not a file-by-file history.
-5. If not stale: skip.
+Every page the coverage flagged for a path in your diff gets one of those two answers. Leaving one unanswered is the state this step exists to remove.
 
-Before committing, run the documentation checklist against your changes if one exists.
+Do not create pages for `never_written` areas. Which page should exist, and where it belongs in the tree, is a decision made in the Documentation view — report the areas in the completion comment so a reader can act on them.
 
-## Commit and push
+Before finishing, run the documentation checklist against your changes if one exists.
+
+## Wrap up
 
 1. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to every title, body, and comment below.
 
-The commit and push are mechanical — there is nothing to decide, so you do **not** run raw `git`. `devwatch commit-docs` owns the git for **both** doc modes: it resolves whether this project keeps docs in a standalone repo (external-docs mode) or inside the code repo (in-repo mode), stages exactly the files you pass — never `git add -A` — commits, and pushes to the right branch. Because your Bash call is `devwatch …` and never a raw `git push origin main`, the `--permission-mode auto` classifier never gates it, so this step runs unattended start to finish.
-
-**If you updated no docs**, there is nothing to commit — skip `commit-docs` and set `DOC_SHA="$(git rev-parse HEAD)"` for the completion record below.
-
-**Otherwise**, pass the docs you edited as a comma-separated `--files` list. The absolute paths you gave to Edit/Write are the simplest to pass — `commit-docs` stages them against the correct git root for this project's doc mode and prints the doc-commit SHA:
+2. Confirm the working tree is clean. Nothing this step does touches a file, so anything staged or modified is something to explain, not to commit:
 
 ```bash
-RESULT="$(devwatch --repo "$REPO" commit-docs --issue <ISSUE> --files "<abs-path-1>,<abs-path-2>")"
-DOC_SHA="$(echo "$RESULT" | jq -r .sha)"
+git status --porcelain
 ```
 
 Emit the run report (advisory — a failed post must never fail the step). Write the
-fixed JSON skeleton, filling `notes` with the docs you updated and any doc you
-considered but deliberately left as-is (with the reason). Use an empty array
-(`[]`) when no docs changed. Post it **before** the status flip below so the
-report exists when completion hooks fire.
+fixed JSON skeleton, filling `notes` with the pages you updated and any page you
+considered but deliberately recorded as still accurate (with the reason). Use an
+empty array (`[]`) when no page changed. Post it **before** the status flip below
+so the report exists when completion hooks fire.
 
 ```bash
 cat > /tmp/devwatch-report-<ISSUE>.json <<'JSON'
 {
   "schema_version": 1,
   "notes": [
-    {"category": "follow_up", "text": "Updated <surface> — <why>"},
-    {"category": "consideration", "text": "<surface considered but left as-is — why>"}
+    {"category": "follow_up", "text": "Updated <page> — <why>"},
+    {"category": "consideration", "text": "<page recorded as still accurate — why the change was internal>"}
   ]
 }
 JSON
@@ -132,25 +144,26 @@ devwatch --repo "$REPO" agent-report \
 ```
 Omit `--run-id` if RUN_ID is unavailable — the run is resolved from `DEVWATCH_AGENT_RUN_ID` instead.
 
-Record completion (omit `--run-id` if RUN_ID is unavailable). `DOC_SHA` was set in the Commit and push step above — the `commit-docs` output SHA when docs changed, or the dev branch HEAD when nothing changed.
+3. Record completion (omit `--run-id` if RUN_ID is unavailable). There is no doc commit to record — the pages are the artifact, so `--files` names them and `--commits` names the commit the pass read: the integration merge, or the dev branch's own tip when the workflow merged with no pull request.
 
 ```bash
 devwatch --repo "$REPO" agent-update \
   --run-id <RUN_ID> \
   --status completed \
   --summary "Docs updated for #<ISSUE>" \
-  --files "<comma-separated changed files>" \
-  --commits "$DOC_SHA"
+  --files "<comma-separated page names>" \
+  --commits "$MERGE_SHA"
 ```
 
-Post completion comment to the root issue. The body is your own prose, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
+4. Post completion comment to the root issue. The body is your own prose, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
 
 ```bash
 BODY=$(cat <<'BODY_EOF'
 ## Docs Updated
 
-**Summary**: <which docs were updated and why>
-**Files**: <changed files>
+**Summary**: <which pages were updated and why>
+**Confirmed accurate**: <pages whose change was internal, or "none">
+**Not covered by any page**: <directories from never_written, or "none">
 
 Docs are up to date for #<ISSUE>.
 BODY_EOF
@@ -163,4 +176,4 @@ devwatch --repo "$REPO" agent-comment \
 
 ## Boundary
 
-This command updates docs only. It does not modify application code, and it does not open a PR — the change has already merged.
+This command updates documentation pages only. It does not modify application code, it takes no git action beyond reading the merged diff, and it does not open a PR — the change has already merged.
