@@ -27,10 +27,21 @@ person says so. Present the name, the body, and the members it would claim.
 
 ## 4. Create it, once approved
 
-`gh issue create` with the `epic` label, then link each member to it with a
-`child-of` line in the member's own body. A member already claimed by another
-epic is left where it is and named in the report — moving it is a decision the
-approval did not cover.
+`gh issue create` with the `epic` label, then link each member to it. Read the
+member's current body first: the parser that turns a `child-of` line into a
+graph edge reads only the body's *last* `Links:` block, so a member already
+carrying one — a `blocks` or `supersedes` line from other work — gets the new
+line appended inside that same block, never a second header below it, which
+would silently drop what the first one held. A member with no block yet gets
+one:
+
+```
+Links:
+- child-of: #N
+```
+
+A member already claimed by another epic is left where it is and named in the
+report — moving it is a decision the approval did not cover.
 
 Always a fresh epic. Never promote a working issue into the container for its
 own siblings: an issue that is both the work and the group around it can never

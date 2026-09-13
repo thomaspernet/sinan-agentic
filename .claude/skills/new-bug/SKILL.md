@@ -24,9 +24,18 @@ on an empty payload" is.
 ## 3. Place it
 
 Read the description for a stated parent — "regression of #N", "found while
-building #N". A stated parent is confirmed once with the person and then written
-as a `child-of` link; a passing mention ("see #N") is not one, and is not
-linked. Nothing is linked without asking.
+building #N". A stated parent is confirmed once with the person and then
+written as a `child-of` link; a passing mention ("see #N") is not one, and is
+not linked. Nothing is linked without asking.
+
+A link is a trailing block, not a sentence — the parser that turns it into a
+graph edge reads only a line shaped exactly `child-of: #N` under its own
+`Links:` header, both required, and finds nothing from any other phrasing:
+
+```
+Links:
+- child-of: #N
+```
 
 Most bugs are one issue. Treat it as an epic only when the cause genuinely
 splits into three or more independent fixes that cannot share a branch — a long

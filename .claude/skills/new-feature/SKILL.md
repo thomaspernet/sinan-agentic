@@ -25,6 +25,15 @@ Read the description for a stated parent — "part of epic #N", "extends #N".
 Confirm it once with the person before writing a `child-of` link; a passing
 mention is not a parent and is not linked.
 
+A link is a trailing block, not a sentence — the parser that turns it into a
+graph edge reads only a line shaped exactly `child-of: #N` under its own
+`Links:` header, both required, and finds nothing from any other phrasing:
+
+```
+Links:
+- child-of: #N
+```
+
 Treat it as an epic when the acceptance criteria genuinely split into three or
 more workstreams that each deserve their own branch — and when they do, list
 that split in the body, because those become the children. A long single-area
