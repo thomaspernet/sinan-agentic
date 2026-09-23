@@ -2,6 +2,7 @@
 name: propagation-consolidate
 description: Gather the per-site issues one scan filed into a single umbrella per pattern, leaving recurring bug shapes individual.
 family: planning
+shipped-from: 31a0bdc647f926a2bc33c20d4638b7db2e6827ae59ae65908355566842574b66
 ---
 Gather the per-site issues one scan filed into a single umbrella per pattern.
 
@@ -70,9 +71,25 @@ Call `worklist_claim_item` with no arguments.
 - `claimed: true` — you are a step of a run. Do the work above against the
   claimed item's `title` and `attachments`, then settle with
   `worklist_set_item_status` and the item's `item_uuid`: `passed` when the step
-  did what it says, `halted` with a `halt_reason` when it could not run at all,
-  `manual_review` when it ran but nothing can vouch for the result.
+  did what it says, `failed` with a `halt_reason` when it did not, and
+  `skipped` when the question no longer exists. A step that decided its work
+  fails says so with the reason, never with `passed`.
 - `claimed: false` with `already_running` — another session has it. Stop.
+
+A `skipped` settle also says what became of this step's work, as an `outcome`
+with that outcome's evidence. A skip naming none is refused, and so is one
+whose outcome has nothing behind it: you are the only one who knows, and a bare
+skip leaves every reader after you guessing which of the three it was.
+
+- `already_delivered` — the work is already done, in this repository or
+  another. Give `references`, one per place it landed: a commit as
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. It is the one
+  outcome that says something shipped, and a run reads it to know this step
+  delivered even though nothing landed on its own branch.
+- `left_out` — the run decided not to do this work. Give `outcome_reason`, one
+  line saying why.
+- `not_needed` — the question turned out not to exist. Give `outcome_reason`,
+  one line saying why.
 
 A `halt_reason` is read by a person deciding what to do next, so write it as
 the blocker in words they can act on, not as an error string. Never leave a

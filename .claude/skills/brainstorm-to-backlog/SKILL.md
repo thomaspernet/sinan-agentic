@@ -2,6 +2,7 @@
 name: brainstorm-to-backlog
 description: Read a brainstorming session and propose the work its thinking arrived at, for a person to edit — or file it when asked.
 family: analysis
+shipped-from: ab11264b4a7020d06e229e0595e12909811becd926431fe84a3129bca9ac8552
 ---
 Read a brainstorming session and say what work its thinking arrived at —
 either as a proposal a person edits, or as the work itself. Where that work
@@ -14,9 +15,9 @@ conversion states which lane it took.
 
 You were launched from the moment a session's thinking is being filed as work,
 so the session is the attachment you were given. Propose unless the person
-asked you to file: a proposal opens in their composer and they change it
-before anything lands, which is the whole reason to run this rather than type
-it.
+asked you to file: a proposal waits on the session page, where they open it
+and change it before anything lands, which is the whole reason to run this
+rather than type it.
 
 ## 1. Read the session
 
@@ -57,9 +58,10 @@ would otherwise put in the rest.
 `propose_brainstorm_conversion` with the session's uuid, the title, the steps
 in the order they would be done, and the `lane` — `repository_issues` or
 `backlog_item` — when the session's thinking or the person has said which.
-Nothing is filed: the proposal lands in the composer the person has open,
-where it names the lane it suggests and they edit it, choose the lane, and
-confirm what actually gets filed. Proposing asks nothing of the project and is
+Nothing is filed: the proposal waits on the session, and its page names it in
+the File as work section, where the person opens it with "Review and file",
+sees the lane it suggests, edits it, chooses the lane, and confirms what
+actually gets filed. Proposing asks nothing of the project and is
 never refused for the lane it names.
 
 Each step is an object, `{"title": ..., "description": ...}`. Its `title` is one
@@ -78,7 +80,10 @@ the only copy of that detail.
 
 Then say what you proposed and what in the session it came from — one line per
 step, naming the note or document behind it. That is what the person is
-reviewing; a proposal with no provenance is one they have to re-derive.
+reviewing; a proposal with no provenance is one they have to re-derive. End the
+report with "Open the session, File as work" — where the proposal waits. The
+Backlog lists only filed work, so a person told to look anywhere else finds
+nothing and reads the proposal as lost.
 
 ## 4. File it only when asked
 
@@ -120,6 +125,17 @@ or `owner/name#N`, or `backlog_item_uuid`. Safe to repeat. A link that is wrong
 `brainstorm` line into an issue body to say where it came from: the link is the
 record, and `read_brainstorm_session` lists it under `work`.
 
+## 6. Name the steps that are not ready
+
+A backlog item runs once each of its steps is ready: bound to the skill that
+executes it, with every argument that skill requires answered. A step filed a
+moment ago is bound to nothing, so a conversion on the backlog lane leaves work
+that cannot run yet. After one, `read` the `backlog_item_uuid` it answered and
+end your report by naming each step whose `ready` is false, with its uuid, and
+pointing at `/prepare-backlog-step` as the skill that prepares it. The
+repository lane files issues rather than steps and has nothing to name here,
+and so does a proposal, which files nothing.
+
 ## Reporting back
 
 You are invoked either on demand — by a person who already knows what they want
@@ -138,6 +154,21 @@ Call `worklist_claim_item` with no arguments.
   `skipped` when the question no longer exists. A step that decided its work
   fails says so with the reason, never with `passed`.
 - `claimed: false` with `already_running` — another session has it. Stop.
+
+A `skipped` settle also says what became of this step's work, as an `outcome`
+with that outcome's evidence. A skip naming none is refused, and so is one
+whose outcome has nothing behind it: you are the only one who knows, and a bare
+skip leaves every reader after you guessing which of the three it was.
+
+- `already_delivered` — the work is already done, in this repository or
+  another. Give `references`, one per place it landed: a commit as
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. It is the one
+  outcome that says something shipped, and a run reads it to know this step
+  delivered even though nothing landed on its own branch.
+- `left_out` — the run decided not to do this work. Give `outcome_reason`, one
+  line saying why.
+- `not_needed` — the question turned out not to exist. Give `outcome_reason`,
+  one line saying why.
 
 A `halt_reason` is read by a person deciding what to do next, so write it as
 the blocker in words they can act on, not as an error string. Never leave a

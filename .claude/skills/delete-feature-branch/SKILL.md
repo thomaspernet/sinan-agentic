@@ -2,6 +2,7 @@
 name: delete-feature-branch
 description: Delete the branch a standalone run delivered once its merge into the development branch is proven and nothing downstream needs its diff.
 family: delivery
+shipped-from: 8e32d58192fc0f0bc9ec674bbeb353ee88232c12634227cca5c94072dae6d158
 ---
 Delete the branch this run delivered.
 
@@ -21,22 +22,20 @@ A branch whose merge you cannot establish is a halt, not a deletion.
 
 ## 2. Confirm nothing still needs its diff
 
-A repository that opens a pull request carries the diff on the merge commit, so
-the branch can go. A repository that opens none has only the branch to diff
-against, and its documentation stage runs *before* this one.
+Nothing this run still does reads the branch by name, so a proven merge is all
+this step waits for. A repository that opens a pull request carries the diff on
+the merge commit, and every repository keeps the tip this drop records. The
+documentation pass, the propagation scan and the rule pass are the run's
+tracks: each starts beside the pull request in a copy of the code of its own,
+pinned to the commits where the member landed, and may still be running or
+already settled when this step opens. A pinned copy holds commits rather than
+a branch, so dropping the branch takes nothing from a track still running.
+The documentation pass reads the run's story off the merge commit and falls
+back to that recorded tip once the name is gone.
 
-The chain to read is this run's, not the canvas's. The launch's *The run you
-were launched for* block lists the stages this run takes on, in order, each
-with how its record stands, and names separately the stages of the canvas this
-run left out; `delivery_run_chain` answers the same for a re-read mid-work. A
-canvas read lists every block whether or not this run selected it, so a stage
-the run left out reads there as one still ahead — and a stage that will never
-run is not a stage to wait for.
-
-A documentation stage this run takes on, standing ahead of this one and not yet
-run, makes this step early — settle `failed` and say so rather than removing
-the only thing left to read. A run that left its documentation stage out, and a
-chain that carries none, leave nothing waiting: prove the merge and drop it.
+So do not hold this step back for a documentation stage, whether it is running,
+settled or never taken on: a track that has not settled is no reason to settle
+`failed` here. Prove the merge and drop it.
 
 ## 3. Drop it through the run
 

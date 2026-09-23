@@ -3,41 +3,79 @@ name: release
 description: Cut the release the promoted work ships, against the published history read live.
 family: delivery
 capability: releasable
+shipped-from: c8bcbc574a79a8bf7c0a4bc4ef14afce634d48825219d61bd5f2bd1272c8ac94
 ---
 Cut the release the promoted work ships.
 
-## 1. Read what is already published
+## 1. Confirm the checks result
 
-`gh release list` — read it live rather than from anything cached. A stale
-history mints a version the repository already carries, which is a write that
-cannot be taken back.
+The checks ran once, before the work merged, and this stage reuses that result
+rather than running them again.
 
-## 2. Pick the version
+Where this repository's checks run is the launch's *Checks* line: `none`,
+`local_script` with the script it runs, or `gh_workflow` with the workflow
+file. Read it there, and never from whether the repository opens a pull
+request — a repository can open one that nothing verifies, and one that opens
+none can still declare a script.
 
-Derive the next version from the published history and the nature of the work
-that landed. A version that already exists is a halt, not an overwrite.
+The launch also states *Checks result recorded at the merge* — the result that
+verified the work this stage carries.
 
-## 3. Cut it
+`passing` is the go. A *Checks* line reading `none` means the repository
+declared nothing to verify, so there is no result to wait for. Anything else
+while checks are declared — `pending`, `failing`, or no result recorded — is a
+halt naming it. Do not run the check script, rerun a workflow, or read another
+commit's checks to stand in for the recorded result.
 
-Create the release against the promoted branch, with notes naming what changed
-for someone who did not follow the work. Confirm it published by reading it
-back.
+## 2. Read what is already published
 
-Do not cut a release for a repository whose writes have not flipped to this
-app — that refusal belongs to the service, and a step that works around it is
-writing on behalf of a system that has not stood down.
+`gh release list` — read it live rather than from anything cached, and decide
+from it and from the nature of the work that landed which part of the version
+advances: `major`, `minor` or `patch`.
+
+## 3. Cut it through the run
+
+Call `worklist_cut_release` with the tier this stage releases to and the bump
+you decided. The tier is not yours to choose: the stage you were launched for
+cuts for exactly one, and any other is refused naming both (#2642). The app
+derives the next version from the published history read live, cuts the
+release against the tier's branch, and records the tag on this stage in the
+same call — that record is what the stage's truth is read from, by probing
+the tag on origin. Do not cut with `gh` yourself: a tag cut that way records
+nothing, and the refusal for a repository whose writes have not flipped to
+this app belongs to the service. The app's own Ship view is the one exception
+— a cut there for the tier this stage stands at records on it too (#2641) —
+and it is no substitute for cutting here: it names no run.
+
+`changed: false` means the tag was already published — a re-run after a cut
+that landed — and the record names it: a settled success, not a halt.
+
+## 4. Confirm it
+
+Read the release back by the tag the call returned and confirm it points at
+the promoted branch's commit.
 
 ## Settling
 
 You were launched for one stage of this run as a whole, not for one document,
-so there is nothing to claim and nothing to look up. Every child of the run has
-already settled by the time this stage starts; the work below acts on what they
-landed.
+so there is nothing to claim. What the run is working — its repository, its
+epic and its integration branch — is stated in the launch's own *The run you
+were launched for* block; read them there, never from the checkout, which can
+hold several epic branches and proposals that are not this run's. Every child
+of the run has already settled by the time this stage starts; the work below
+acts on what they landed.
 
 Settle with `worklist_set_stage_status`, which takes no uuid — the run and the
 stage rode in with the launch: `passed` when the stage did what it says;
-`halted` with a `halt_reason` when it could not run at all; `manual_review`
-when it ran but nothing can vouch for the result.
+`failed` with a `halt_reason` when it could not — the reason in words a
+person can act on.
+
+Give the settle a `note`: a few sentences in your own words for a person
+reading the issue later — what you found, what you chose, and what you left.
+It is stored verbatim against this attempt, so write prose, not a status
+string and not a commit message. It is optional — a settle with no note is
+valid — and it is not the `halt_reason`: the reason says what stopped the
+unit, the note says what the work was.
 
 A `halt_reason` is read by a person deciding what to do next, so write it as
 the blocker in words they can act on — not as an error string. Never leave the

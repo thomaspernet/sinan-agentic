@@ -2,6 +2,7 @@
 name: new-bug
 description: File one bug as a GitHub issue — the observed behaviour, the steps that reproduce it, and criteria a reviewer can tick off.
 family: writing
+shipped-from: ce23adadc0258be3204d682fdb3796a3a7be0a88708a061f00a1412be6a98e7a
 ---
 File one bug as a GitHub issue.
 
@@ -37,6 +38,11 @@ Links:
 - child-of: #N
 ```
 
+A body that already carries a block — a `blocks` line naming other work —
+keeps that one block, and the `child-of` line is written as the block's first
+line, above whatever is already there. The edge is what the block is read for,
+so it is what a person opening the issue meets first.
+
 Most bugs are one issue. Treat it as an epic only when the cause genuinely
 splits into three or more independent fixes that cannot share a branch — a long
 reproduction is not the same thing as a wide one.
@@ -45,6 +51,15 @@ reproduction is not the same thing as a wide one.
 
 `gh issue create` with the title, the body, and the labels for its area and
 priority. Report the number.
+
+When the work came out of a brainstorming session, link each issue filed here
+to it once the issue exists: `link_brainstorm_work` with the session's uuid and
+the issue as `owner/name#N`. The link is what the issue and the session both
+read to say where the work came from, so it is written with the tool and never
+as a `brainstorm` line in the body. An issue filed a moment ago may not have
+reached the mirror yet, and the tool says so: call it again once the issue has
+arrived rather than straight away, and if it still has not, name the issue to
+the person to link from the session.
 
 Filing is the whole job. Do not fix the bug here — an issue and its fix reviewed
 together is an issue nothing reviewed.
@@ -72,9 +87,25 @@ Call `worklist_claim_item` with no arguments.
 - `claimed: true` — you are a step of a run. Do the work above against the
   claimed item's `title` and `attachments`, then settle with
   `worklist_set_item_status` and the item's `item_uuid`: `passed` when the step
-  did what it says, `halted` with a `halt_reason` when it could not run at all,
-  `manual_review` when it ran but nothing can vouch for the result.
+  did what it says, `failed` with a `halt_reason` when it did not, and
+  `skipped` when the question no longer exists. A step that decided its work
+  fails says so with the reason, never with `passed`.
 - `claimed: false` with `already_running` — another session has it. Stop.
+
+A `skipped` settle also says what became of this step's work, as an `outcome`
+with that outcome's evidence. A skip naming none is refused, and so is one
+whose outcome has nothing behind it: you are the only one who knows, and a bare
+skip leaves every reader after you guessing which of the three it was.
+
+- `already_delivered` — the work is already done, in this repository or
+  another. Give `references`, one per place it landed: a commit as
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. It is the one
+  outcome that says something shipped, and a run reads it to know this step
+  delivered even though nothing landed on its own branch.
+- `left_out` — the run decided not to do this work. Give `outcome_reason`, one
+  line saying why.
+- `not_needed` — the question turned out not to exist. Give `outcome_reason`,
+  one line saying why.
 
 A `halt_reason` is read by a person deciding what to do next, so write it as
 the blocker in words they can act on, not as an error string. Never leave a

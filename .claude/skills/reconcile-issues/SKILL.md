@@ -2,6 +2,7 @@
 name: reconcile-issues
 description: Give an orphan issue a parent, on approval — and report, without touching, the issues whose link is already right.
 family: planning
+shipped-from: e244af9f4aae6d73cea7d27063ebe5e552d8c2a0e11f86cfe49974f44f730c3a
 ---
 Give an orphan issue a parent, so it stops being the only member of its own
 group.
