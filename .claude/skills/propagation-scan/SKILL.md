@@ -1,8 +1,8 @@
 ---
 name: propagation-scan
-description: Find the other sites a landed change should have been made at, and file one issue per site with an umbrella per mechanical sweep — once a person approves the list, or at once as a stage of a run.
+description: Find the other sites a landed change should have been made at, and file one issue per site, gathering them under umbrella epics — once a person approves the list, or at once as a stage of a run.
 family: analysis
-shipped-from: e1a54249e4b517031f1687c3c3192e140f72e3c2915346aee41f8b1aaad58bf4
+shipped-from: b6d08ea03d2f6a2c388213988fea320e6d878458c188eee67f1d7d18c97a1d19
 ---
 Find the other places a landed change should have been made, and file each one.
 
@@ -63,8 +63,21 @@ that share one contract and take one mechanical change — one shared definition
 adopted at each — are a sweep, and a sweep of two or more sites is gathered
 under one umbrella epic, because the chain runs a pass as an epic with members
 rather than as loose issues. A recurring bug shape is not a sweep: each of its
-sites needs its own reading, so each is filed on its own with no umbrella. So
-is a sweep that found a single site.
+sites needs its own reading, so no site of one is ever folded into another.
+
+Whether a group that is not a sweep of two or more also gets an umbrella
+depends on who approved the scan. Invoked on demand it does not: a lone site,
+and each site of a bug shape, is filed on its own under the issue whose diff
+surfaced it, and the person who asked is there to pick it up. As a stage of a
+run every group gets one — a sweep, a bug shape, and a group of a single site
+alike — because that issue belongs to the epic the run is executing, and a run
+seals its membership at its first run-scope stage: a child linked to it now is
+never converged onto the run, never delivered by it, and read by nobody after
+it closes. An umbrella of one member is work the backlog goes on offering.
+
+Gathering is not collapsing. An umbrella holds one checklist line per site, so
+a bug shape's sites keep their own issues and their own readings under it —
+what the umbrella adds is a parent nothing has sealed.
 
 ## 5. Present, unless a run is the approval
 
@@ -82,14 +95,17 @@ to scan, so file without presenting and without waiting.
 One issue per site: `gh issue create` for each, naming the file, the line
 range, the contract it matches, and the change that surfaced it.
 
-Then mint one umbrella per sweep by following the `mint-umbrella-epic` skill,
-with that sweep's issues as its members. Its body names the change that
-surfaced the sweep — the issue whose diff it was and the commits — so the
-lineage survives the members linking to the umbrella instead. It carries the
-`epic` label and every label its members share, so the backlog lists it as
-work that can be run. Each member links `child-of` its umbrella, never the
-issue whose diff surfaced it; a site filed on its own links `child-of` that
-issue.
+Then mint one umbrella per group the step above gave one by following the
+`mint-umbrella-epic` skill, with that group's issues as its members. Its body
+names the change that surfaced the group — the issue whose diff it was and the
+commits — so the lineage survives the members linking to the umbrella instead.
+It carries the `epic` label and every label its members share, so the backlog
+lists it as work that can be run. Each member links `child-of` its umbrella,
+never the issue whose diff surfaced it.
+
+Only a scan invoked on demand files a site under that issue directly, and only
+for a group it left without an umbrella. As a stage there is no such group:
+nothing this scan files links `child-of` the issue the run is executing.
 
 As a stage, record what the scan left behind before settling:
 `worklist_record_scan` with `issues` every per-site issue you created and
@@ -136,6 +152,25 @@ Call `worklist_claim_item` with no arguments.
   `halt_reason` when it did not, and `skipped` when the question no longer
   exists.
 - `claimed: false` with `already_running` — another session has it. Stop.
+
+Only the claimed-item branch settles `skipped` at all:
+`worklist_set_stage_status` takes no outcome, and an on-demand invocation
+settles nothing.
+
+A `skipped` settle also says what became of this step's work, as an `outcome`
+with that outcome's evidence. A skip naming none is refused, and so is one
+whose outcome has nothing behind it: you are the only one who knows, and a bare
+skip leaves every reader after you guessing which of the three it was.
+
+- `already_delivered` — the work is already done, in this repository or
+  another. Give `references`, one per place it landed: a commit as
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. It is the one
+  outcome that says something shipped, and a run reads it to know this step
+  delivered even though nothing landed on its own branch.
+- `left_out` — the run decided not to do this work. Give `outcome_reason`, one
+  line saying why.
+- `not_needed` — the question turned out not to exist. Give `outcome_reason`,
+  one line saying why.
 
 A `halt_reason` is read by a person deciding what to do next, so write it as
 the blocker in words they can act on, not as an error string. Never leave a

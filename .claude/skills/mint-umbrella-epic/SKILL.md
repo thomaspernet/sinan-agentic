@@ -2,7 +2,7 @@
 name: mint-umbrella-epic
 description: Draft an umbrella epic grouping related work, and create it once a person approves the name, the body and the members — or at once when a run is the approval.
 family: planning
-shipped-from: 61271b20ec72721c66bb2e1e3f37b60674d1e882c636097b2d691eafb9b3891b
+shipped-from: daf39757f73d4868786e8ba545269019f5edb35af43d617ff4e54011c26d6f49
 ---
 Draft an umbrella epic that groups related work, and create it once a person
 approves — or at once, when a run is the approval.
@@ -18,8 +18,8 @@ worse than the loose issues it replaced.
 A name that says what the group is, and a body carrying what the pattern is, why
 it is worth one container, and a checklist with one line per member. The
 checklist is the epic's whole substance — a member with no line on it is not in
-the epic. An umbrella a scan mints for a sweep also names the change that
-surfaced it, so the lineage survives its members linking here instead.
+the epic. An umbrella a scan mints for what it filed also names the change
+that surfaced it, so the lineage survives its members linking here instead.
 
 ## 3. Present it, unless a run is the approval
 
@@ -30,7 +30,7 @@ members it would claim.
 
 Invoked from a run — the launch carries a *The run you were launched for*
 block, or a propagation scan running as a stage of one is minting the umbrella
-for a sweep it filed — nobody is there to answer, and the run stands as the
+for what it filed — nobody is there to answer, and the run stands as the
 approval: create the epic and link its members without presenting a draft or
 waiting. Minted from inside a scan, the scan owns the report and the settle,
 so hand it the epic's number and settle nothing here.
@@ -98,6 +98,21 @@ Call `worklist_claim_item` with no arguments.
   `skipped` when the question no longer exists. A step that decided its work
   fails says so with the reason, never with `passed`.
 - `claimed: false` with `already_running` — another session has it. Stop.
+
+A `skipped` settle also says what became of this step's work, as an `outcome`
+with that outcome's evidence. A skip naming none is refused, and so is one
+whose outcome has nothing behind it: you are the only one who knows, and a bare
+skip leaves every reader after you guessing which of the three it was.
+
+- `already_delivered` — the work is already done, in this repository or
+  another. Give `references`, one per place it landed: a commit as
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. It is the one
+  outcome that says something shipped, and a run reads it to know this step
+  delivered even though nothing landed on its own branch.
+- `left_out` — the run decided not to do this work. Give `outcome_reason`, one
+  line saying why.
+- `not_needed` — the question turned out not to exist. Give `outcome_reason`,
+  one line saying why.
 
 A `halt_reason` is read by a person deciding what to do next, so write it as
 the blocker in words they can act on, not as an error string. Never leave a

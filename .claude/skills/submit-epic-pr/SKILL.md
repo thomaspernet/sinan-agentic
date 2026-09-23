@@ -2,6 +2,7 @@
 name: submit-epic-pr
 description: Open the epic's pull request into the development branch, once every child has landed and no proposal is already open for the branch.
 family: delivery
+shipped-from: 927e85bf08b309316eb48eefcfb171fcff4bc93b955a918833bb6e1283852ead
 ---
 Open the epic's pull request into the development branch.
 
@@ -13,9 +14,11 @@ found for one of them does not make this step done.
 ## 1. Confirm every child has landed
 
 The launch lists the run's members with how the run settled each. A member
-settled `skipped` was deliberately left out of this epic: it is neither waited
-for nor named as a blocker, whatever its issue or its branch reads. Every other
-member is a child that must have landed. One the run has not settled, one
+settled `skipped` is neither waited for nor named as a blocker, whatever its
+issue or its branch reads: its line says which of the three it was — work
+already delivered, work left out of this epic, or work that turned out not to
+be needed — and none of the three is a child still to land. Every other member
+is a child that must have landed. One the run has not settled, one
 settled `failed`, or one whose branch has not merged into the integration
 branch means the epic is not ready to propose — settle `failed` naming the
 child. An integration branch that is not on origin, or an epic that is not this
@@ -35,9 +38,11 @@ Open the pull request from the named integration branch into the named
 development branch.
 The body summarises what the epic changed and how a reviewer convinces
 themselves it works — the children's own titles, not a restatement of every
-commit. A member the run left out is listed under what the epic does not ship,
-with the reason its settle note gives, so a reviewer reads its absence as a
-decision rather than an oversight.
+commit. A member whose work was already delivered is listed with the
+references its line names, so a reviewer knows where to read it. A member the
+run left out, and one whose work turned out not to be needed, is listed under
+what the epic does not ship, with the reason its line gives, so a reviewer
+reads its absence as a decision rather than an oversight.
 
 Write nothing a reader outside this run cannot understand: no run identifiers,
 no phase names, no first-person agent voice.

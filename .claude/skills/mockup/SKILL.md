@@ -2,6 +2,7 @@
 name: mockup
 description: Build a self-contained page that opens from a plain file link, and put it in the mockups folder of the session it belongs to.
 family: writing
+shipped-from: 979a113ffc57e74b0491e0cc4e8f343e66959807b03f63af17b15cf64ae8a9df
 ---
 Build a mockup and put it in the one place mockups belong — the `mockups/`
 folder of a brainstorming session.
@@ -10,13 +11,23 @@ A mockup is pre-issue design thinking: a page opened in a browser to feel out a
 layout before any code exists. It stays scratch, beside the session that
 produced it, and never reaches the repository.
 
+`mockups/` is the one directory an agent writes into. No sync reads a file
+there back into the graph, so nothing you put in it becomes a page — the app
+lists the folder on the session and opens a file from it as a tab (#3406),
+which is where a person sees what you built. The session's root belongs to the
+mirror, which writes it out from what the app holds and has folder sync read a
+file left there back as a note.
+
 ## 1. Resolve the session it belongs to
 
 `open_brainstorm_session` with the topic's name — it opens the session or
 resolves the one already open for today, and answers with `mockups_directory`,
-the folder the page goes in. A null path means the project has no single synced
-folder to write into: there is nowhere to put a mockup, so say that and stop
-rather than choosing a directory.
+the folder the page goes in. A null path means the project has declared no
+brainstorm folder to write into: there is nowhere to put a mockup, so say that
+and stop rather than choosing a directory. An `error` of `unresolved` means it
+opened nothing at all and repeating the call will not change that — reach the
+session with `list_brainstorm_sessions` and build against the folder it names,
+or say so and stop.
 
 ## 2. Build it
 
@@ -67,9 +78,25 @@ Call `worklist_claim_item` with no arguments.
 - `claimed: true` — you are a step of a run. Do the work above against the
   claimed item's `title` and `attachments`, then settle with
   `worklist_set_item_status` and the item's `item_uuid`: `passed` when the step
-  did what it says, `halted` with a `halt_reason` when it could not run at all,
-  `manual_review` when it ran but nothing can vouch for the result.
+  did what it says, `failed` with a `halt_reason` when it did not, and
+  `skipped` when the question no longer exists. A step that decided its work
+  fails says so with the reason, never with `passed`.
 - `claimed: false` with `already_running` — another session has it. Stop.
+
+A `skipped` settle also says what became of this step's work, as an `outcome`
+with that outcome's evidence. A skip naming none is refused, and so is one
+whose outcome has nothing behind it: you are the only one who knows, and a bare
+skip leaves every reader after you guessing which of the three it was.
+
+- `already_delivered` — the work is already done, in this repository or
+  another. Give `references`, one per place it landed: a commit as
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. It is the one
+  outcome that says something shipped, and a run reads it to know this step
+  delivered even though nothing landed on its own branch.
+- `left_out` — the run decided not to do this work. Give `outcome_reason`, one
+  line saying why.
+- `not_needed` — the question turned out not to exist. Give `outcome_reason`,
+  one line saying why.
 
 A `halt_reason` is read by a person deciding what to do next, so write it as
 the blocker in words they can act on, not as an error string. Never leave a

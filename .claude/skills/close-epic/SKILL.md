@@ -1,20 +1,27 @@
 ---
 name: close-epic
-description: Close the epic and the member issues it delivered, once its work has merged.
+description: Close the issues this run delivered, each by what the run recorded of it, once its work has merged.
 family: delivery
-shipped-from: e485226fca74fd65d2b4090132654dd818d5f3144d670cfce7e464bafb03b0c4
+shipped-from: 93edf679bb9365433a04562e199b928065715c61c471bcca4ff48ad9ba768295
 ---
-Close the epic and the members it delivered.
+Close the issues this run delivered, each by what the run recorded of it.
 
-Both are named by the launch in *The run you were launched for* — the epic,
-whose number is the `<N>` below, and every member under it.
+They are named by the launch in *The run you were launched for*: the epic,
+whose number is the `<N>` below, and every member under it. A run that
+delivers one issue on its own has no epic above the work — that issue is its
+one member, and the members below are the whole of this stage's work.
 
 ## 1. Confirm it merged
 
-The named epic's own branch is merged into the development branch. A branch
+The branch this run delivered is merged into the development branch. A branch
 that has not landed is a halt rather than a close — settle `failed` saying so.
 
-## 2. Close the members
+A run that put nothing on its branch takes on neither its proposal nor its
+merge — the launch lists them as left out, *the branch carries no work*.
+There is nothing here to confirm: whatever its members shipped, they shipped
+elsewhere or there was nothing to ship, and the close goes on to the issues.
+
+## 2. Close each issue by what its line says
 
 Closing them is this step's work, not GitHub's. The run merges into the
 development branch, which is not the repository's default branch, so a
@@ -22,29 +29,46 @@ development branch, which is not the repository's default branch, so a
 of the chain closes a member: left to itself, work that shipped keeps reading
 as outstanding.
 
-`gh issue close <M> --comment "..."` each member the launch names that shipped,
-the comment saying what that member shipped and naming the proposal that
-carried it. A member the launch names in another repository is closed there,
-with `--repo <owner/name>`. A member already closed is success: this step is
-idempotent, so a re-run does not stop on what a prior pass finished.
+Every member's line ends in what its issue is owed, read off the outcome that
+member settled with. Do what the line says and nothing else — this stage's
+verdict is taken over that same reading, so an issue closed against your own
+judgement fails the close that performed it.
 
-A member the launch lists as settled `skipped` was deliberately left out of the
-epic, and its work did not ship: leave its issue open, and comment on it with
-`gh issue comment <M> --body "..."` naming the epic it was deferred from and
-the reason its settle note gives, so it reads as work still to do rather than
-work the epic forgot. One already carrying that comment is success. Only a skip
-is read that way: a member settled `failed` is neither closed nor passed over,
-and is a halt naming it.
+- **close it as completed** — `gh issue close <M> --comment "..."`. The
+  comment says what shipped and where: the proposal that carried it for work
+  this run landed, and the commits, pull requests or issues the member's line
+  names for work that was already in a tree.
+- **close it as not planned** —
+  `gh issue close <M> --reason "not planned" --comment "..."`, the comment
+  carrying the reason the member's line gives. The question turned out not to
+  exist, and an issue left open for it is offered back to the backlog forever.
+- **leave it open** — `gh issue comment <M> --body "..."` naming this run and
+  the reason the member's line gives, so it reads as work still to do rather
+  than work the run forgot.
+
+A member the launch names in another repository is acted on there, with
+`--repo <owner/name>`.
+
+This step is idempotent, so a re-run finishes what a prior pass left and
+changes nothing else. Read each issue before you act on it —
+`gh issue view <M> --json state,stateReason,comments` — and leave alone the
+one already standing where its line says it belongs and already carrying this
+run's comment. Neither is a halt: the close writes no second comment and
+reopens nothing.
+
+Only a skip's outcome is read this way. A member settled `failed` is neither
+closed nor passed over, and is a halt naming it.
 
 ## 3. Close the epic
 
-`gh issue close <N>` with a comment saying what shipped, in one or two
-sentences a reader outside this run can follow. An already-closed epic is
-success on the same terms.
+An epic-rooted run closes its epic last: `gh issue close <N>` with a comment
+saying what shipped, in one or two sentences a reader outside this run can
+follow. An already-closed epic is success on the same terms. A run that
+delivers one issue on its own has no epic to close — step 2 closed its issue.
 
 A member that shipped and is still open is a failed close even when the epic
-closed — settle `failed` naming the members that are open, never `passed`. A
-member left out and left open is not one of them.
+closed — settle `failed` naming the members that are open, never `passed`. One
+whose line said to leave it open is not one of them.
 
 ## Settling
 
