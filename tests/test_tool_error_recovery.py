@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from agents import RunContextWrapper
+from agents.tool_context import ToolContext
 from pydantic import ValidationError
 
 from sinan_agentic_core.core.capabilities import Capability
@@ -978,6 +979,76 @@ class TestResetClearsPendingArgs:
 
         recovery.reset()
         assert recovery._pending_args == {}
+
+
+def _tool_context(tool_name: str, call_id: str, args: dict) -> ToolContext[None]:
+    """Build the per-call context the SDK passes to both hooks of a function tool."""
+    return ToolContext(
+        context=None,
+        tool_name=tool_name,
+        tool_call_id=call_id,
+        tool_arguments=json.dumps(args),
+    )
+
+
+class TestParallelToolCalls:
+    """In-flight arguments are keyed per call, so a parallel batch is not a retry loop."""
+
+    def test_parallel_batch_tracks_each_call_as_distinct(self):
+        recovery = ToolErrorRecovery()
+        tool = Mock()
+        tool.name = "compute"
+        calls = [_tool_context("compute", f"call_{i}", {"x": i}) for i in range(5)]
+
+        for ctx in calls:
+            recovery.on_tool_start(ctx, tool, ctx.tool_arguments)
+        identical_counts = []
+        for ctx in calls:
+            recovery.on_tool_end(ctx, tool, json.dumps({"error": "fail"}))
+            identical_counts.append(recovery.get_error_summary()["compute"]["identical_count"])
+
+        assert identical_counts == [1, 1, 1, 1, 1]
+        assert "STOP" not in recovery.build_instruction_section()
+        assert recovery._pending_args == {}
+
+    def test_parallel_batch_records_each_calls_own_arguments(self):
+        recovery = ToolErrorRecovery()
+        tool = Mock()
+        tool.name = "compute"
+        first = _tool_context("compute", "call_a", {"x": 1})
+        second = _tool_context("compute", "call_b", {"x": 2})
+
+        recovery.on_tool_start(first, tool, first.tool_arguments)
+        recovery.on_tool_start(second, tool, second.tool_arguments)
+        recovery.on_tool_end(first, tool, json.dumps({"error": "fail"}))
+
+        assert "x=1" in recovery.build_instruction_section()
+
+    def test_sequential_identical_calls_still_reach_stop(self):
+        recovery = ToolErrorRecovery()
+        tool = Mock()
+        tool.name = "compute"
+
+        for i in range(3):
+            ctx = _tool_context("compute", f"call_{i}", {"x": 0})
+            recovery.on_tool_start(ctx, tool, ctx.tool_arguments)
+            recovery.on_tool_end(ctx, tool, json.dumps({"error": "fail"}))
+
+        assert recovery.get_error_summary()["compute"]["identical_count"] == 3
+        assert "STOP: compute" in recovery.build_instruction_section()
+
+    def test_context_without_tool_call_id_falls_back_to_tool_name(self):
+        recovery = ToolErrorRecovery()
+        ctx = RunContextWrapper(context=None)
+        tool = Mock()
+        tool.name = "compute"
+
+        recovery.on_tool_start(ctx, tool, json.dumps({"x": 1}))
+        assert recovery._pending_args == {"compute": json.dumps({"x": 1})}
+
+        recovery.on_tool_end(ctx, tool, json.dumps({"error": "fail"}))
+        assert recovery._pending_args == {}
+        assert "x=1" in recovery.build_instruction_section()
 
 
 # ------------------------------------------------------------------ #
