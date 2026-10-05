@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from agents import RunContextWrapper, Tool
+from agents.tool_context import ToolContext
 from pydantic import BaseModel, ConfigDict
 
 from .capabilities import Capability
@@ -127,7 +128,9 @@ class ToolErrorRecovery(Capability):
         self._registry = tool_registry
         self._errors: dict[str, ToolErrorEntry] = {}  # key: tool_name
         self._last_args: dict[str, str] = {}  # tool_name -> last args_hash
-        self._pending_args: dict[str, str] = {}  # tool_name -> in-flight args
+        # In-flight args, keyed per call (see _pending_key) so parallel calls
+        # to one tool do not overwrite each other between start and end.
+        self._pending_args: dict[str, str] = {}
         self.mcp_hints = dict(mcp_hints or {})
         self.max_identical_before_stop = max_identical_before_stop
 
@@ -280,7 +283,7 @@ class ToolErrorRecovery(Capability):
     ) -> None:
         """Capability hook — capture tool arguments before execution."""
         tool_name = getattr(tool, "name", str(tool))
-        self._pending_args[tool_name] = args
+        self._pending_args[self._pending_key(ctx, tool_name)] = args
 
     def on_tool_end(
         self,
@@ -290,7 +293,7 @@ class ToolErrorRecovery(Capability):
     ) -> None:
         """Capability hook — record the tool result and emit any recovery event."""
         tool_name = getattr(tool, "name", str(tool))
-        arguments = self._pending_args.pop(tool_name, "")
+        arguments = self._pending_args.pop(self._pending_key(ctx, tool_name), "")
         self.record_tool_result(tool_name, result, arguments)
         if self.on_event and self.has_errors:
             self.on_event(
@@ -413,6 +416,20 @@ class ToolErrorRecovery(Capability):
         if isinstance(status, str) and status in cls._FAILURE_STATUSES:
             return str(data.get("message", f"Tool returned status: {status}"))
         return None
+
+    @staticmethod
+    def _pending_key(ctx: RunContextWrapper[Any], tool_name: str) -> str:
+        """Key one call's in-flight arguments between ``on_tool_start`` and ``on_tool_end``.
+
+        The SDK runs every start of a parallel batch before any end, so keying by
+        tool name would let each call overwrite the last. Function tools receive
+        the same :class:`ToolContext` in both hooks, and its ``tool_call_id``
+        identifies the call. Computer, shell and hosted tools receive a plain
+        ``RunContextWrapper`` with no call id and fall back to the tool name.
+        """
+        if isinstance(ctx, ToolContext):
+            return ctx.tool_call_id
+        return tool_name
 
     def _get_hint(self, tool_name: str) -> str:
         """Look up recovery hint from registry or MCP config."""
