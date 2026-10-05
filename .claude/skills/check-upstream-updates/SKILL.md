@@ -2,7 +2,7 @@
 name: check-upstream-updates
 description: Check one watched upstream library for changes this codebase can use, file each as a recommendation, and advance the watch's marker.
 family: analysis
-shipped-from: cb5d579ccfc9ee055327354da30e138df7e62fcc466d56988578b1b0a6263d7e
+shipped-from: 48837489aae7b0403149db7ccdafeb1308b340813f43c9fad9b63fa64cf3b778
 ---
 Survey one watched library, an upstream repository this project depends on, for
 what changed since the last check. Judge whether this project can use each
@@ -220,6 +220,14 @@ Call `worklist_claim_item` with no arguments.
   `skipped` when the question no longer exists. A step that decided its work
   fails says so with the reason, never with `passed`.
 - `claimed: false` with `already_running` — another session has it. Stop.
+
+A claimed step whose work stops for the person's decision — a proposal they
+must approve, a choice only they can make — does not settle at the pause. Call
+`worklist_set_item_status` with the `item_uuid`, `status: "waiting"` and a
+`question`: one line saying what the person must decide. That settles nothing:
+the step stays open and yours, and the run shows them the question. Once they
+have answered, do what the answer asks, then settle — never `passed` at the
+pause, which reads the step done before they have decided anything.
 
 A `skipped` settle also says what became of this step's work, as an `outcome`
 with that outcome's evidence. A skip naming none is refused, and so is one

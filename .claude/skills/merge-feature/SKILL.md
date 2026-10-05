@@ -2,7 +2,6 @@
 name: merge-feature
 description: Merge the branch a standalone run delivered — through its pull request once the checks and the gate have passed, or into the development branch directly where the repository opens none.
 family: delivery
-shipped-from: 19ca156763bbcfec6cda75929adc8f7cc67ffd4f62b90f7d0130dae4dc994db3
 ---
 Merge the branch this run delivered — through its pull request where the
 repository opens one, the branch itself directly where it opens none.

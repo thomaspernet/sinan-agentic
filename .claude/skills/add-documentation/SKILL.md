@@ -2,7 +2,6 @@
 name: add-documentation
 description: Update the documentation the landed diff made wrong — including prose naming a symbol the diff deleted or renamed.
 family: writing
-shipped-from: 16977c40f6984744c92434aa21410ba34060b6fe0a33235288f2ffa21e9ddd81
 ---
 Update the documentation pages the landed work changed, written from the story
 of that work.
@@ -17,14 +16,16 @@ the page. It takes no git action beyond reading the diff — no branch, no
 commit, no push — and writes no file: run `git status --porcelain` when you
 start and again before you settle, and the two readings are the same.
 
-This stage is one of the run's tracks. It starts beside the run's pull request,
-alongside the propagation scan and the rule pass where the run takes those on,
-in a copy of the code of its own pinned to the commit where every member had
-landed — the directory this session opened in. The pull request opens while you
-work, and the merge may land before you finish, so read the code in this copy
-rather than in the repository's own checkout.
+This stage is one of the run's tracks. It starts beside the run's landing —
+its pull request where the repository opens one, the check stage and the direct
+merge of the run's branch where it opens none — alongside the propagation scan
+and the rule pass where the run takes those on, in a copy of the code of its own
+pinned to the commit where every member had landed — the directory this session
+opened in. The landing goes on while you work, and the merge may land before
+you finish, so read the code in this copy rather than in the repository's own
+checkout.
 
-A run over pages has no repository, no pull request and no diff: its members
+A run over pages has no repository, no branch and no diff: its members
 are pages, and what it delivered is what they produced. This stage then starts
 beside that run's chain in the run's own directory. Read *On a run over pages*
 below before you gather anything; every other step reads as written.
@@ -84,12 +85,16 @@ settle once every page gathered carries its answer.
 Two sources propose pages, and the diff decides which of them this stage
 answers.
 
-1. Call `documentation_coverage`. A page whose `covers` match a path in the
-   diff is a page this stage answers. A page that reads stale only for paths
-   outside the diff was made stale by other work: leave it, since this stage
-   documents what this run landed. When `repos_unread` names the run's
+1. Call `documentation_coverage`. A page with a cover of the run's repository
+   whose glob matches a path in the diff is a page this stage answers. A page
+   that reads stale only for paths outside the diff was made stale by other
+   work: leave it, since this stage documents what this run landed. When `repos_unread` names the run's
    repository, its paths were never read against any page: settle `failed` and
-   name the checkout.
+   name the checkout. A cover listed under `untied` names no repository and
+   matches no change, so its page is never gathered by it; when that page is
+   one this stage answers anyway, name the cover's repository in step 3. A
+   cover listed under `unmatched` matches no file its repository tracks; when
+   its page is one this stage answers, replace it in step 3 too.
 2. Take every page in `candidates`. Similarity proposes; it does not decide.
    Confirm a candidate that declares `covers` by reading the code under them
    against the diff, and one that declares none by reading the page against the
@@ -108,8 +113,9 @@ For each page:
 
 1. Open it with `read`.
 2. When the diff moved code the page describes — renamed or relocated a path
-   out from under one of its globs — replace its globs with
-   `update_documentation_covers`, passing every glob the page now covers. A
+   out from under one of its globs, or it declares a cover naming no
+   repository — replace its covers with `update_documentation_covers`, passing
+   every cover the page now declares, each written `<repository>:<glob>`. A
    glob naming a path that no longer exists covers nothing, and the page would
    read current however its code changes from here on.
 3. Decide whether the merged behaviour, architecture or API is now
@@ -118,28 +124,38 @@ For each page:
    diff renamed, relocated or deleted; describes a pattern the diff changed; or
    states a count or exhaustive list a new call site made wrong. The decisions
    and the debriefs say what the change meant; the diff says what it did.
-4. When it is misrepresented, rewrite it with `update_page_content`, passing
-   the whole page as markdown: one cohesive rewrite per page, not one edit per
-   changed path.
+4. When it is misrepresented, change it: with `edit_page_content` for the
+   passages the change made wrong, or with `update_page_content`, passing the
+   whole page as markdown, when all of it has to change. A page too large to
+   send back whole is only ever changed with `edit_page_content`. Make one
+   cohesive change per page, not one call per changed path.
 5. Record the answer with `answer_documentation_page`: `answer` `rewritten`
    after a rewrite, `confirmed` when the change was internal. It joins the page
    to the work this run delivered, so the page can later be read back to the
    epics that shaped it, and a `confirmed` answer records the page as re-read
    against the change, which is what keeps "confirmed accurate"
-   distinguishable from "nobody looked". Pass `covers`: the repository-relative
-   globs of the diff's paths the page was answered for, narrow enough that a
-   change under them is one this page has to answer for. They are required for
-   a page that declares none, and are added to the globs of a page that does.
+   distinguishable from "nobody looked". Pass `covers`: the diff's paths the
+   page was answered for, each written `<repository>:<glob>` with the run's
+   repository as `owner/name` and a glob written from its root, narrow enough
+   that a change under it is one this page has to answer for. They are
+   required for a page that declares none, and are added to the covers of a
+   page that does. A cover naming no repository is refused in a project
+   holding several, and so is the answer carrying it.
 
 Every page gathered gets one of the two answers; a covering page left
 unanswered still reads stale, and the stage fails on it.
 
-`update_page_content` replaces the whole body with what it is given, as
-markdown. Write it from the page's current body as `read` returns it, keeping
-the headings, lists and tables it holds. Change what the change calls for and
-leave every passage it does not touch exactly as it was: a house style (dash or
-arrow substitutions, re-quoting, re-wrapping) is never applied across a page
-the change did not otherwise affect.
+Change some passages of an existing page with `edit_page_content`: each edit is
+an `old` passage copied exactly from the markdown body `read` returns and the
+`new` markdown that replaces it, and nothing else on the page is sent or
+rewritten. It is the only write that reaches a page too large to send back
+whole. Keep `update_page_content` for a full rewrite of a page small enough to
+send whole: it replaces the whole body with what it is given, as markdown.
+Write it from the page's current body as `read` returns it, keeping the
+headings, lists and tables it holds. Either way, change what the change calls
+for and leave every passage it does not touch exactly as it was: a house style
+(dash or arrow substitutions, re-quoting, re-wrapping) is never applied across
+a page the change did not otherwise affect.
 
 Search the project's pages with `search` for every symbol the diff deleted or
 renamed. A page still naming one is wrong whether or not its `covers` match the
@@ -155,17 +171,20 @@ page nor a confirmed candidate describes it.
 
 1. Create it with `create_page`, `type_name` `documentation`, named as a reader
    would look it up. Give it the `category` the pages describing the
-   neighbouring code already file under, and `covers`: the
-   repository-relative globs of the code it describes, narrow enough that a
-   change under them is one this page has to answer for. The create is refused
-   without either. Write its body as markdown, from the story: the decision
+   neighbouring code already file under, and `covers`, each written
+   `<repository>:<glob>`: the run's repository as `owner/name` and a glob of
+   the code it describes written from its root, narrow enough that a
+   change under it is one this page has to answer for. The create is refused
+   without either, and a cover naming no repository is refused in a project
+   holding several. Write its body as markdown, from the story: the decision
    behind the surface as well as its shape.
 2. Record it with `answer_documentation_page`, `answer` `rewritten`, so the new
    page is joined to the work that made it necessary.
 3. Link it from the concept page for its surface: open that page with `read`,
-   add a wikilink to the new page where the page discusses the surface, and
-   rewrite it with `update_page_content` from its markdown body with only the
-   link added, held to the same rewrite as a page answered above.
+   add a wikilink to the new page where the page discusses the surface, with
+   `edit_page_content`: one edit whose `old` is the markdown passage the link
+   goes into and whose `new` is that passage with only the link added, held to
+   the same contract as a page answered above.
 
 The stage's verdict reads the coverage once you settle. It fails while a page
 covering the diff reads stale. When no page of the project declares `covers`

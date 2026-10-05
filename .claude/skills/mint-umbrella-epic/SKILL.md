@@ -2,7 +2,7 @@
 name: mint-umbrella-epic
 description: Draft an umbrella epic grouping related work, and create it once a person approves the name, the body and the members — or at once when a run is the approval.
 family: planning
-shipped-from: daf39757f73d4868786e8ba545269019f5edb35af43d617ff4e54011c26d6f49
+shipped-from: ce683e85d4028a46b68c604eb556ca4c2c88e777e9e7a3d02ab404255d034dc4
 ---
 Draft an umbrella epic that groups related work, and create it once a person
 approves — or at once, when a run is the approval.
@@ -37,9 +37,11 @@ so hand it the epic's number and settle nothing here.
 
 ## 4. Create it
 
-`gh issue create` with the `epic` label and every label its members share, so
-the backlog lists it as work that can be run, then link each member to it. Read the
-member's current body first: the parser that turns a `child-of` line into a
+`file_issue` with the `epic` label and every label its members share, so the
+backlog lists it as work that can be run, then link each member to it with
+`edit_issue`, sending back the member's whole body with the line added — the
+`body` an edit sends replaces the one the issue holds. Read the member's current
+body first, with `gh issue view`: the parser that turns a `child-of` line into a
 graph edge reads only the body's *last* `Links:` block, so a member already
 carrying one — a `blocks` line from other work — keeps that block and never
 gets a second header below it, which would silently drop what the first one
@@ -59,10 +61,11 @@ When the work came out of a brainstorming session, link each issue filed here
 to it once the issue exists: `link_brainstorm_work` with the session's uuid and
 the issue as `owner/name#N`. The link is what the issue and the session both
 read to say where the work came from, so it is written with the tool and never
-as a `brainstorm` line in the body. An issue filed a moment ago may not have
-reached the mirror yet, and the tool says so: call it again once the issue has
-arrived rather than straight away, and if it still has not, name the issue to
-the person to link from the session.
+as a `brainstorm` line in the body. Call it straight after filing: an issue
+filed with `file_issue` is in the mirror by the time that tool returns, and one
+filed with `gh` has its repository read afresh on the call. If the tool still
+says the mirror holds no such issue, check the coordinate, and if it is right,
+name the issue to the person to link from the session.
 
 A member already claimed by another epic is left where it is and named in the
 report — moving it is a decision the approval did not cover.
@@ -79,6 +82,15 @@ third person, present tense, naming the change rather than the process that
 produced it. No run identifiers, no internal phase names, no first-person
 agent voice, no real names or addresses — a role (`the reporter`, `the
 reviewer`) says everything the reader needs.
+
+Every issue write here goes through the app's issue tools — `file_issue`,
+`edit_issue` and `delete_issue` — which put the write in the Backlog before
+they return. In a session where those tools are not loaded, make the same
+write with `gh` instead:
+`gh issue create`, `gh issue edit`, `gh issue close` or `gh issue comment`.
+A write made that way reaches the Backlog only on the repository's next
+refresh, so say so when reporting it rather than reading its absence there as
+a failure.
 
 ## Reporting back
 
@@ -99,6 +111,14 @@ Call `worklist_claim_item` with no arguments.
   fails says so with the reason, never with `passed`.
 - `claimed: false` with `already_running` — another session has it. Stop.
 
+A claimed step whose work stops for the person's decision — a proposal they
+must approve, a choice only they can make — does not settle at the pause. Call
+`worklist_set_item_status` with the `item_uuid`, `status: "waiting"` and a
+`question`: one line saying what the person must decide. That settles nothing:
+the step stays open and yours, and the run shows them the question. Once they
+have answered, do what the answer asks, then settle — never `passed` at the
+pause, which reads the step done before they have decided anything.
+
 A `skipped` settle also says what became of this step's work, as an `outcome`
 with that outcome's evidence. A skip naming none is refused, and so is one
 whose outcome has nothing behind it: you are the only one who knows, and a bare
@@ -106,9 +126,14 @@ skip leaves every reader after you guessing which of the three it was.
 
 - `already_delivered` — the work is already done, in this repository or
   another. Give `references`, one per place it landed: a commit as
-  `owner/name@sha`, a pull request or issue as `owner/name#123`. It is the one
-  outcome that says something shipped, and a run reads it to know this step
-  delivered even though nothing landed on its own branch.
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
 - `left_out` — the run decided not to do this work. Give `outcome_reason`, one
   line saying why.
 - `not_needed` — the question turned out not to exist. Give `outcome_reason`,

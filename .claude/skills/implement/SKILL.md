@@ -2,7 +2,6 @@
 name: implement
 description: Implement one issue on its own branch — read the issue and its lineage, follow the closest existing implementation, and test before committing.
 family: delivery
-shipped-from: 1bffcb86044ccf1882a1b522d661b89faf4fbfc1884e3c7e2451fa962b13c634
 ---
 Implement one issue on its own branch.
 
@@ -143,8 +142,14 @@ If the work is already in the tree — shipped by a sibling, or the criteria are
 already met — do not fake a commit and do not exit silently. Settle the unit
 `skipped` with the `already_delivered` outcome below, referencing where the
 work is; this repository is as nameable as any other. If it belongs in other
-repositories rather than this one, commit and push it there and settle the same
-way, with a reference into each repository it landed in.
+repositories rather than this one, it counts as delivered only once it has
+reached that repository's development branch, through that repository's own
+delivery — a commit you push to a branch there is not delivered yet, and a
+reference to it is refused. Where it has reached it, settle the same way, with
+a reference into each repository it landed in. Where it has not, do not cite
+it: settle `left_out` with an `outcome_reason` naming where that repository now
+tracks the work — its issue, or its open pull request — so this issue stays
+open until the work lands there.
 
 Write the debrief of step 5 for that skip too. The references say where the
 work landed; the debrief says why it answers *this* issue — each acceptance
@@ -190,9 +195,14 @@ skip leaves every reader after you guessing which of the three it was.
 
 - `already_delivered` — the work is already done, in this repository or
   another. Give `references`, one per place it landed: a commit as
-  `owner/name@sha`, a pull request or issue as `owner/name#123`. It is the one
-  outcome that says something shipped, and a run reads it to know this step
-  delivered even though nothing landed on its own branch.
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
 - `left_out` — the run decided not to do this work. Give `outcome_reason`, one
   line saying why.
 - `not_needed` — the question turned out not to exist. Give `outcome_reason`,

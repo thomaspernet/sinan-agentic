@@ -3,7 +3,6 @@ name: edit-acceptance-scenarios
 description: Add or remove the acceptance scenarios an issue tracks, changing nothing else about its body.
 family: writing
 capability: acceptance
-shipped-from: 8b7b31486d4c240ea86199b8305dbb2a8521c0ccb4dd12d9e9ee21fc30d5aa65
 ---
 Add or remove the acceptance scenarios an issue tracks.
 
@@ -25,8 +24,8 @@ somebody's issue.
 
 ## 3. Write it back
 
-`gh issue edit` with the new body, then read it back and confirm the lines you
-intended are the lines that are there.
+`edit_issue` with the new body, then read it back with `gh issue view` and
+confirm the lines you intended are the lines that are there.
 
 ## Writing for GitHub
 
@@ -36,6 +35,15 @@ third person, present tense, naming the change rather than the process that
 produced it. No run identifiers, no internal phase names, no first-person
 agent voice, no real names or addresses — a role (`the reporter`, `the
 reviewer`) says everything the reader needs.
+
+Every issue write here goes through the app's issue tools — `file_issue`,
+`edit_issue` and `delete_issue` — which put the write in the Backlog before
+they return. In a session where those tools are not loaded, make the same
+write with `gh` instead:
+`gh issue create`, `gh issue edit`, `gh issue close` or `gh issue comment`.
+A write made that way reaches the Backlog only on the repository's next
+refresh, so say so when reporting it rather than reading its absence there as
+a failure.
 
 ## Reporting back
 
@@ -56,6 +64,14 @@ Call `worklist_claim_item` with no arguments.
   fails says so with the reason, never with `passed`.
 - `claimed: false` with `already_running` — another session has it. Stop.
 
+A claimed step whose work stops for the person's decision — a proposal they
+must approve, a choice only they can make — does not settle at the pause. Call
+`worklist_set_item_status` with the `item_uuid`, `status: "waiting"` and a
+`question`: one line saying what the person must decide. That settles nothing:
+the step stays open and yours, and the run shows them the question. Once they
+have answered, do what the answer asks, then settle — never `passed` at the
+pause, which reads the step done before they have decided anything.
+
 A `skipped` settle also says what became of this step's work, as an `outcome`
 with that outcome's evidence. A skip naming none is refused, and so is one
 whose outcome has nothing behind it: you are the only one who knows, and a bare
@@ -63,9 +79,14 @@ skip leaves every reader after you guessing which of the three it was.
 
 - `already_delivered` — the work is already done, in this repository or
   another. Give `references`, one per place it landed: a commit as
-  `owner/name@sha`, a pull request or issue as `owner/name#123`. It is the one
-  outcome that says something shipped, and a run reads it to know this step
-  delivered even though nothing landed on its own branch.
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
 - `left_out` — the run decided not to do this work. Give `outcome_reason`, one
   line saying why.
 - `not_needed` — the question turned out not to exist. Give `outcome_reason`,

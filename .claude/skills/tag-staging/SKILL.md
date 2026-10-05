@@ -3,7 +3,6 @@ name: tag-staging
 description: Cut the staging tag the artifact is named by, against the staging branch's current commit.
 family: delivery
 capability: tag_staging
-shipped-from: 53b786a6fe36ad6e87a28d982f8248250d29952ebf7c0ab3e4f6335cc0905ddb
 ---
 Cut the staging tag the artifact is named by.
 

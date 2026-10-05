@@ -2,7 +2,6 @@
 name: issue-to-rule
 description: Turn one resolved issue into a rule when the mistake it fixed is a class rather than a one-off.
 family: analysis
-shipped-from: 50ae0c78896efe7689316693dbddd056ac4086343aa77cda0680e8f5096a33ed
 ---
 Turn one resolved issue into a rule, so the same mistake stops recurring.
 
@@ -80,6 +79,14 @@ Call `worklist_claim_item` with no arguments.
   exists.
 - `claimed: false` with `already_running` — another session has it. Stop.
 
+A claimed step whose work stops for the person's decision — a proposal they
+must approve, a choice only they can make — does not settle at the pause. Call
+`worklist_set_item_status` with the `item_uuid`, `status: "waiting"` and a
+`question`: one line saying what the person must decide. That settles nothing:
+the step stays open and yours, and the run shows them the question. Once they
+have answered, do what the answer asks, then settle — never `passed` at the
+pause, which reads the step done before they have decided anything.
+
 Only the claimed-item branch settles `skipped` at all:
 `worklist_set_stage_status` takes no outcome, and an on-demand invocation
 settles nothing.
@@ -91,9 +98,14 @@ skip leaves every reader after you guessing which of the three it was.
 
 - `already_delivered` — the work is already done, in this repository or
   another. Give `references`, one per place it landed: a commit as
-  `owner/name@sha`, a pull request or issue as `owner/name#123`. It is the one
-  outcome that says something shipped, and a run reads it to know this step
-  delivered even though nothing landed on its own branch.
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
 - `left_out` — the run decided not to do this work. Give `outcome_reason`, one
   line saying why.
 - `not_needed` — the question turned out not to exist. Give `outcome_reason`,

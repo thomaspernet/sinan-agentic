@@ -2,7 +2,6 @@
 name: delete-epic-branch
 description: Delete the epic's integration branch once its merge is proven and nothing downstream still needs its diff.
 family: delivery
-shipped-from: bd7cae4416d1aed21cf1cf1efafa2dcb80559ac659bad20b8a2e2badf2695cf9
 ---
 Delete the epic's integration branch.
 
@@ -21,14 +20,15 @@ A branch whose merge you cannot establish is a halt, not a deletion.
 
 Nothing this run still does reads the branch by name, so a proven merge is all
 this step waits for. The documentation pass, the propagation scan and the rule
-pass are the run's tracks: each starts beside the pull request in a copy of the
-code of its own, pinned to the commits where every member landed, and may still
-be running or already settled when this step opens. A pinned copy holds
-commits rather than a branch, so dropping the branch takes nothing from a track
-still running. The documentation pass reads the run's story off
-the merge commit the merge stage wrote, which carries the epic's diff between
-its two parents, and falls back to the tip this drop records once the name is
-gone.
+pass are the run's tracks. Each starts beside the run's landing — its pull
+request where the repository opens one, the direct merge of the integration
+branch where it opens none — in a copy of the code of its own, pinned to the
+commits where every member landed, and may still be running or already settled
+when this step opens. A pinned copy holds commits rather than a branch, so
+dropping the branch takes nothing from a track still running. The
+documentation pass reads the run's story off the merge commit the merge stage
+wrote, which carries the epic's diff between its two parents, and falls back
+to the tip this drop records once the name is gone.
 
 So do not hold this step back for a documentation stage, whether it is running,
 settled or never taken on: a track that has not settled is no reason to settle
@@ -47,9 +47,8 @@ the stage halts over work that landed.
 `changed: false` means the branch was already gone — a re-run after a drop
 that landed — and is success, not a failure: this stage is idempotent by
 intent. A refusal says why — a stage that is not this run's cleanup stage, a
-run that recorded no integration branch, a repository whose writes have not
-flipped to this app, or a tip that could not be read — and each is a halt with
-that reason, not a reason to delete another way.
+run that recorded no integration branch, or a tip that could not be read —
+and each is a halt with that reason, not a reason to delete another way.
 
 ## Settling
 

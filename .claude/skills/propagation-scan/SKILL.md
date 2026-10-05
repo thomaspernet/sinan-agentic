@@ -2,7 +2,7 @@
 name: propagation-scan
 description: Find the other sites a landed change should have been made at, and file one issue per site, gathering them under umbrella epics — once a person approves the list, or at once as a stage of a run.
 family: analysis
-shipped-from: b6d08ea03d2f6a2c388213988fea320e6d878458c188eee67f1d7d18c97a1d19
+shipped-from: b86c47a362cc334c32101ede842e152cd949e6f5217e76fe47bb92ba03b6c0d0
 ---
 Find the other places a landed change should have been made, and file each one.
 
@@ -92,8 +92,8 @@ to scan, so file without presenting and without waiting.
 
 ## 6. File
 
-One issue per site: `gh issue create` for each, naming the file, the line
-range, the contract it matches, and the change that surfaced it.
+One issue per site: `file_issue` for each, naming the file, the line range,
+the contract it matches, and the change that surfaced it.
 
 Then mint one umbrella per group the step above gave one by following the
 `mint-umbrella-epic` skill, with that group's issues as its members. Its body
@@ -126,6 +126,15 @@ produced it. No run identifiers, no internal phase names, no first-person
 agent voice, no real names or addresses — a role (`the reporter`, `the
 reviewer`) says everything the reader needs.
 
+Every issue write here goes through the app's issue tools — `file_issue`,
+`edit_issue` and `delete_issue` — which put the write in the Backlog before
+they return. In a session where those tools are not loaded, make the same
+write with `gh` instead:
+`gh issue create`, `gh issue edit`, `gh issue close` or `gh issue comment`.
+A write made that way reaches the Backlog only on the repository's next
+refresh, so say so when reporting it rather than reading its absence there as
+a failure.
+
 ## Reporting back
 
 You are invoked on demand — by a person who already knows what they want — or
@@ -153,6 +162,14 @@ Call `worklist_claim_item` with no arguments.
   exists.
 - `claimed: false` with `already_running` — another session has it. Stop.
 
+A claimed step whose work stops for the person's decision — a proposal they
+must approve, a choice only they can make — does not settle at the pause. Call
+`worklist_set_item_status` with the `item_uuid`, `status: "waiting"` and a
+`question`: one line saying what the person must decide. That settles nothing:
+the step stays open and yours, and the run shows them the question. Once they
+have answered, do what the answer asks, then settle — never `passed` at the
+pause, which reads the step done before they have decided anything.
+
 Only the claimed-item branch settles `skipped` at all:
 `worklist_set_stage_status` takes no outcome, and an on-demand invocation
 settles nothing.
@@ -164,9 +181,14 @@ skip leaves every reader after you guessing which of the three it was.
 
 - `already_delivered` — the work is already done, in this repository or
   another. Give `references`, one per place it landed: a commit as
-  `owner/name@sha`, a pull request or issue as `owner/name#123`. It is the one
-  outcome that says something shipped, and a run reads it to know this step
-  delivered even though nothing landed on its own branch.
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
 - `left_out` — the run decided not to do this work. Give `outcome_reason`, one
   line saying why.
 - `not_needed` — the question turned out not to exist. Give `outcome_reason`,

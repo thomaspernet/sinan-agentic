@@ -3,7 +3,6 @@ name: acceptance
 description: Run the acceptance scenarios against the branch the run is about to merge — on its pull request, or on the check stage that stands in for one — and return a pass/fail verdict.
 family: review
 capability: acceptance
-shipped-from: 3856b1fda22a35fe3fb6f1ad87236e51ca6dd3dae219c6bc789854dbdd69a0cd
 ---
 Run the acceptance scenarios against the branch the run is about to merge, and
 return a verdict.

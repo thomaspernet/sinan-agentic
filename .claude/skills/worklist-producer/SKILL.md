@@ -2,7 +2,7 @@
 name: Worklist Producer
 description: Producer for a worklist step that runs once per member — claim its item, read its lineage, the run's story and its rules, produce, check it, record the output and the debrief, and settle.
 family: writing
-shipped-from: e46b28b990f78ba7f3bf198d9f7b5e316aa132d245b4c456070fbfa3d7eb89f3
+shipped-from: ba00aee36f06419f8df9f9e9889f34edc57f55d7ecb855a632170465ce562679
 ---
 Run one worklist item end to end: claim it, read what came before it, produce
 its output, check it, record it, and settle its status. It is bound to a step
@@ -60,15 +60,21 @@ attests against.
 ## 4. Produce the output
 
 Do the work the item asks for against its input page and attachments, then
-write the result as markdown with `create_page` (or `update_page_content` when
-you are refining a page that already exists).
+write the result as markdown with `create_page` (or, refining a page that
+already exists, `edit_page_content` for the passages you change and
+`update_page_content` for a rewrite of the whole page).
 
-`update_page_content` replaces the whole body with what it is given, as
-markdown. Write it from the page's current body as `read` returns it, keeping
-the headings, lists and tables it holds. Change what the change calls for and
-leave every passage it does not touch exactly as it was: a house style (dash or
-arrow substitutions, re-quoting, re-wrapping) is never applied across a page
-the change did not otherwise affect.
+Change some passages of an existing page with `edit_page_content`: each edit is
+an `old` passage copied exactly from the markdown body `read` returns and the
+`new` markdown that replaces it, and nothing else on the page is sent or
+rewritten. It is the only write that reaches a page too large to send back
+whole. Keep `update_page_content` for a full rewrite of a page small enough to
+send whole: it replaces the whole body with what it is given, as markdown.
+Write it from the page's current body as `read` returns it, keeping the
+headings, lists and tables it holds. Either way, change what the change calls
+for and leave every passage it does not touch exactly as it was: a house style
+(dash or arrow substitutions, re-quoting, re-wrapping) is never applied across
+a page the change did not otherwise affect.
 
 ## 5. Check the output before recording it
 
@@ -96,7 +102,9 @@ the debrief.
 ## 6. Record what you produced
 
 Call `worklist_add_output` with the item's `item_uuid` and the page uuid you
-just wrote. This is the link the surface renders as the item's output.
+just wrote. This is the link the surface renders as the item's output. A step
+whose work is files in a checkout rather than a page has nothing to record
+here: its debrief names the files, and is all the step owes.
 
 ## 7. Write the debrief
 
@@ -104,7 +112,7 @@ What you produced is the item's deliverables; the debrief is its account of
 itself — one page, whatever the deliverables were, for a person reading the
 run who does not want to open each of them, and the page the gate reads before
 it grades. A `passed` settle is refused with `missing_debrief` until
-the item carries one, and no other output stands in for it.
+this attempt has recorded one, and no other output stands in for it.
 
 Write it as markdown with `create_page`, `type_name: "debrief"`, in
 three sections:
@@ -130,6 +138,15 @@ producing session with `not_a_gate`. Where the step is gated, the gate
 runs after you and records it; where it is not, the item settles with no
 verdict and reads as done but unverified, which is exactly what it is.
 
+When your work stops to wait for the person — a plan they must approve, a
+choice only they can make — do not settle. Call `worklist_set_item_status`
+with the `item_uuid`, `status: "waiting"` and a `question`: one line saying
+what the person must decide. Never `passed` there: a pass reads the step done
+before they have decided anything, and the run closes over a plan nobody
+approved. `waiting` settles nothing — the step stays open and yours, the run
+shows them your question, and your silence is not timed out while they think.
+Once they have answered, do what the answer asks, then settle below.
+
 Call `worklist_set_item_status` with the `item_uuid` and one of:
 
 - `passed` — the step did what it says. An ungated pass reads as done but
@@ -148,9 +165,14 @@ skip leaves every reader after you guessing which of the three it was.
 
 - `already_delivered` — the work is already done, in this repository or
   another. Give `references`, one per place it landed: a commit as
-  `owner/name@sha`, a pull request or issue as `owner/name#123`. It is the one
-  outcome that says something shipped, and a run reads it to know this step
-  delivered even though nothing landed on its own branch.
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
 - `left_out` — the run decided not to do this work. Give `outcome_reason`, one
   line saying why.
 - `not_needed` — the question turned out not to exist. Give `outcome_reason`,
@@ -174,3 +196,5 @@ by policy whatever is written here.
 
 An item is not finished until its status is settled. Leaving it `running`
 strands it: the surface shows a run in flight that nothing will ever complete.
+A `waiting` is not a settle: it holds the step open for the person's answer,
+and the settle above still follows it.

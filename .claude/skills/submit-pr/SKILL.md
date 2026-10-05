@@ -2,7 +2,6 @@
 name: submit-pr
 description: Open the pull request a standalone run proposes, from the branch its work landed on into the development branch.
 family: delivery
-shipped-from: 6d4b721ee58b5fd6e45b28ade47eab8fd4a2542c31accaeec5ae16098279d4ff
 ---
 Open the pull request a standalone run proposes into the development branch.
 

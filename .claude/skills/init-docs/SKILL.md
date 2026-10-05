@@ -2,7 +2,6 @@
 name: init-docs
 description: Write or refresh the project's documentation pages, each naming the skills and rules the bank should bind it to.
 family: writing
-shipped-from: e4b9ac9519fb41fa6db30847a502c2d63e000c2a9baf8a215832a1a0f593a132
 ---
 Write or refresh the project's documentation pages.
 
@@ -45,11 +44,18 @@ is a page that will be wrong before anyone notices it was never right.
 
 Create it with `create_page`, `type_name` `documentation`, its body written as
 markdown and named as a reader would look it up. Give it a `category`, the area it files under, and keep one
-audience's pages out of another's category. Give it `covers`: the
-repository-relative globs of the code it describes, narrow enough that a change
-under them is one this page has to answer for. A page about a principle rather
-than one part of the code covers the code that principle governs. The create is
-refused without either, because a page covering nothing can never read stale.
+audience's pages out of another's category. Give it `covers`, each written
+`<repository>:<glob>`: the repository the code lives in, as `owner/name` the
+way `documentation_coverage` names it in `repos_read`, and a glob of the code
+it describes written from that repository's root, narrow enough that a change
+under it is one this page has to answer for. A glob is matched from the root and
+never from a subdirectory: `api/**` covers the top-level `api` directory, not
+every directory named `api`. A page describing code in several repositories carries
+covers for each. A page about a principle rather than one part of the code
+covers the code that principle governs. The create is refused without either,
+because a page covering nothing can never read stale, and a cover naming no
+repository is refused in a project holding several, because a glob with no
+repository matches the same-named files of every other one.
 
 Link docs to each other by wikilink, carrying the linked page's name exactly as
 it is titled: `[[Status Model]]`. A concept is explained on one page and linked
@@ -73,17 +79,28 @@ goes. A doc nothing is bound to is a doc nothing will ever open.
 
 On a second pass, read a page before changing it. A doc still accurate is left
 alone — rewriting an accurate page to look busy is churn a reviewer has to read.
-One the code has moved on from is rewritten with `update_page_content`.
-One whose code was renamed or relocated keeps its body and has its globs
-replaced with `update_documentation_covers`. A doc someone adapted is theirs;
+One the code has moved on from is brought up to date with `edit_page_content`,
+or rewritten with `update_page_content` when all of it has to change.
+One whose code was renamed or relocated keeps its body and has its covers
+replaced with `update_documentation_covers`, each written
+`<repository>:<glob>`. A cover `documentation_coverage` lists under `untied`
+names no repository and matches no change; name its repository the same way. A
+cover it lists under `unmatched` matches no file its repository tracks, most
+often left behind by a move; replace it with the glob of where the code now is.
+A doc someone adapted is theirs;
 report what diverged and recommend, rather than overwriting their edit.
 
-`update_page_content` replaces the whole body with what it is given, as
-markdown. Write it from the page's current body as `read` returns it, keeping
-the headings, lists and tables it holds. Change what the change calls for and
-leave every passage it does not touch exactly as it was: a house style (dash or
-arrow substitutions, re-quoting, re-wrapping) is never applied across a page
-the change did not otherwise affect.
+Change some passages of an existing page with `edit_page_content`: each edit is
+an `old` passage copied exactly from the markdown body `read` returns and the
+`new` markdown that replaces it, and nothing else on the page is sent or
+rewritten. It is the only write that reaches a page too large to send back
+whole. Keep `update_page_content` for a full rewrite of a page small enough to
+send whole: it replaces the whole body with what it is given, as markdown.
+Write it from the page's current body as `read` returns it, keeping the
+headings, lists and tables it holds. Either way, change what the change calls
+for and leave every passage it does not touch exactly as it was: a house style
+(dash or arrow substitutions, re-quoting, re-wrapping) is never applied across
+a page the change did not otherwise affect.
 
 ## Reporting back
 
@@ -104,6 +121,14 @@ Call `worklist_claim_item` with no arguments.
   fails says so with the reason, never with `passed`.
 - `claimed: false` with `already_running` — another session has it. Stop.
 
+A claimed step whose work stops for the person's decision — a proposal they
+must approve, a choice only they can make — does not settle at the pause. Call
+`worklist_set_item_status` with the `item_uuid`, `status: "waiting"` and a
+`question`: one line saying what the person must decide. That settles nothing:
+the step stays open and yours, and the run shows them the question. Once they
+have answered, do what the answer asks, then settle — never `passed` at the
+pause, which reads the step done before they have decided anything.
+
 A `skipped` settle also says what became of this step's work, as an `outcome`
 with that outcome's evidence. A skip naming none is refused, and so is one
 whose outcome has nothing behind it: you are the only one who knows, and a bare
@@ -111,9 +136,14 @@ skip leaves every reader after you guessing which of the three it was.
 
 - `already_delivered` — the work is already done, in this repository or
   another. Give `references`, one per place it landed: a commit as
-  `owner/name@sha`, a pull request or issue as `owner/name#123`. It is the one
-  outcome that says something shipped, and a run reads it to know this step
-  delivered even though nothing landed on its own branch.
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
 - `left_out` — the run decided not to do this work. Give `outcome_reason`, one
   line saying why.
 - `not_needed` — the question turned out not to exist. Give `outcome_reason`,

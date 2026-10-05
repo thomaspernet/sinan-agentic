@@ -2,7 +2,6 @@
 name: promote
 description: Promote the merged work onto the next branch of the cascade, reusing the checks result its merge recorded.
 family: delivery
-shipped-from: 79c00e838ade4aace170dd79ac4085470f8699b1bd1a311f5e8841bd32ea75bf
 ---
 Promote the merged work onto the next branch of the cascade.
 

@@ -2,15 +2,14 @@
 name: delete-feature-branch
 description: Delete the branch a standalone run delivered once its merge into the development branch is proven and nothing downstream needs its diff.
 family: delivery
-shipped-from: 8e32d58192fc0f0bc9ec674bbeb353ee88232c12634227cca5c94072dae6d158
 ---
 Delete the branch this run delivered.
 
 This run has one member and no integration branch: the branch its member wrote
 is the branch the whole run delivered, and it is the one the run's pull request
-proposed. The launch names it in *The run you were launched for*, and the
-development branch likewise. You name no branch anywhere below — the record
-does.
+proposed where the repository opens one. The launch names it in *The run you
+were launched for*, and the development branch likewise. You name no branch
+anywhere below — the record does.
 
 ## 1. Prove it merged on origin
 
@@ -26,12 +25,13 @@ Nothing this run still does reads the branch by name, so a proven merge is all
 this step waits for. A repository that opens a pull request carries the diff on
 the merge commit, and every repository keeps the tip this drop records. The
 documentation pass, the propagation scan and the rule pass are the run's
-tracks: each starts beside the pull request in a copy of the code of its own,
-pinned to the commits where the member landed, and may still be running or
-already settled when this step opens. A pinned copy holds commits rather than
-a branch, so dropping the branch takes nothing from a track still running.
-The documentation pass reads the run's story off the merge commit and falls
-back to that recorded tip once the name is gone.
+tracks. Each starts beside the run's landing — its pull request where the
+repository opens one, the direct merge of this branch where it opens none — in
+a copy of the code of its own, pinned to the commits where the member landed,
+and may still be running or already settled when this step opens. A pinned
+copy holds commits rather than a branch, so dropping the branch takes nothing
+from a track still running. The documentation pass reads the run's story off
+the merge commit and falls back to that recorded tip once the name is gone.
 
 So do not hold this step back for a documentation stage, whether it is running,
 settled or never taken on: a track that has not settled is no reason to settle
@@ -50,9 +50,8 @@ finds no ref, and the stage halts over work that landed.
 `changed: false` means the branch was already gone — a re-run after a drop
 that landed — and is success, not a failure: this stage is idempotent by
 intent. A refusal says why — a stage that is not this run's cleanup stage, a
-run whose members name no single branch, a repository whose writes have not
-flipped to this app, or a tip that could not be read — and each is a halt with
-that reason, not a reason to delete another way.
+run whose members name no single branch, or a tip that could not be read —
+and each is a halt with that reason, not a reason to delete another way.
 
 ## Settling
 

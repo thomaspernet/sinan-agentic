@@ -2,7 +2,6 @@
 name: merge-to-base
 description: Merge one verified child branch into the epic's integration branch, testing the merge result before pushing it.
 family: delivery
-shipped-from: 20735b78a0dc2b0f70514b2448c45fdadd729f1e54d29222d4b8b6da5d7c86e9
 ---
 Land one branch — onto the branch the launch names it lands on: the epic's
 integration branch where this run's shape cut one, the development branch where
@@ -115,9 +114,14 @@ skip leaves every reader after you guessing which of the three it was.
 
 - `already_delivered` — the work is already done, in this repository or
   another. Give `references`, one per place it landed: a commit as
-  `owner/name@sha`, a pull request or issue as `owner/name#123`. It is the one
-  outcome that says something shipped, and a run reads it to know this step
-  delivered even though nothing landed on its own branch.
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
 - `left_out` — the run decided not to do this work. Give `outcome_reason`, one
   line saying why.
 - `not_needed` — the question turned out not to exist. Give `outcome_reason`,

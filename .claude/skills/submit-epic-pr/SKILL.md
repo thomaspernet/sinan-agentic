@@ -2,7 +2,6 @@
 name: submit-epic-pr
 description: Open the epic's pull request into the development branch, once every child has landed and no proposal is already open for the branch.
 family: delivery
-shipped-from: 927e85bf08b309316eb48eefcfb171fcff4bc93b955a918833bb6e1283852ead
 ---
 Open the epic's pull request into the development branch.
 

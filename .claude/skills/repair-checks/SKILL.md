@@ -1,24 +1,24 @@
 ---
 name: repair-checks
-description: Repair the failing checks on the pull request a run is waiting to merge, on the branch that proposal was opened from.
+description: Repair the failing checks on the branch a run is waiting to merge — on its pull request where the repository opens one, on the branch head itself where it opens none.
 family: delivery
-shipped-from: 982b4388ef0942d317d12a036401ea6192cc9ec12a462ec055a7ce34182a70c7
 ---
-Repair the failing checks on the pull request this run is waiting to merge, on
-the branch that proposal was opened from.
+Repair the failing checks on the branch this run is waiting to merge — the
+checks on its pull request where the repository opens one, on the branch head
+itself where it opens none.
 
-The run's merge stage read this proposal's checks as failing. Nothing here
-merges, closes or reopens anything: the one act is landing a fix on the head
-branch and pushing it — or, for a failure that looks like a flake, rerunning
-the failed jobs once — after which the engine reads the checks again on its own
-and merges when they pass.
+The run read those checks as failing while it waits to merge. Nothing here
+merges, closes or reopens anything: the one act is landing a fix on the branch
+and pushing it — or, for a failure that looks like a flake, rerunning the
+failed jobs once — after which the engine reads the checks again on its own and
+merges when they pass.
 
 The branch is the one the launch names in *The run you were launched for* — the
 integration branch an epic-rooted run cut, or the single member's branch a
-standalone run delivered. A proposal for any other branch is not this run's,
-however red it looks. Check the branch out if the checkout is not already on it,
-and settle `failed` naming the branch rather than working somewhere else if you
-cannot.
+standalone run delivered. Checks failing on any other branch are not this
+run's, however red they look. Check the branch out if the checkout is not
+already on it, and settle `failed` naming the branch rather than working
+somewhere else if you cannot.
 
 ## 1. Read what actually failed
 
@@ -33,10 +33,12 @@ the launch says which.
   head, or whose status is not `failed`, means the checks moved on since this
   repair opened: push nothing and settle `passed`, and the engine reads the
   checks again on its own.
-- **GitHub checks** — the launch carries no such section. Find the proposal from
-  the branch — `gh pr list --head <branch>` — then read the failing run rather
-  than guessing from the summary: `gh pr checks` names the checks,
-  `gh run view <run-id> --log-failed` gives the failing job's own output.
+- **GitHub checks** — the launch carries no such section, and the checks ran on
+  the run's pull request: only a repository that opens one runs them on GitHub.
+  Find it from the branch — `gh pr list --head <branch>` — then read the
+  failing run rather than guessing from the summary: `gh pr checks` names the
+  checks, `gh run view <run-id> --log-failed` gives the failing job's own
+  output.
 
 The failing tool's output is what the fix is written against, so read it before
 touching a file. A check that failed for a reason no diff can repair — a missing
@@ -51,7 +53,7 @@ touched, fails now and then on any branch. Decide whether this is one before
 writing a fix, on two readings together:
 
 - the failing tests sit in paths the branch's diff (`git diff <base>...HEAD`,
-  against the branch the proposal merges into) does not touch;
+  against the development branch it merges into) does not touch;
 - the failure is timing or concurrency shaped — a race, a timeout, an ordering
   that differs between runs — as opposed to failing the same way every time.
 
@@ -63,7 +65,7 @@ run has already been attempted: `gh run view <run-id> --json attempt,headSha`.
 The cap is one rerun per head commit, because the engine opens this repair
 again on every red reading and would otherwise rerun the same flake forever.
 
-- Attempt `1` on the proposal's current head: rerun only the failed jobs,
+- Attempt `1` on the branch's current head: rerun only the failed jobs,
   `gh run rerun <run-id> --failed`, push nothing, and settle `passed`. The
   engine goes back to waiting on the checks and reads the rerun when it ends.
 - Attempt above `1`: the rerun was already tried on this head, and the failure
@@ -90,7 +92,7 @@ this repair is the only thing that clears it before the merge. Say in the
 settle note that the fault came from earlier work on the development branch,
 naming what it was, so a person can trace where it came from.
 
-The fix goes on the head branch as an ordinary commit with a conventional-commit
+The fix goes on the branch as an ordinary commit with a conventional-commit
 subject. Do not rebase, force-push, or rewrite what the branch already carries:
 the children that merged into it read their own merges by that ancestry.
 
@@ -105,12 +107,13 @@ Run the repository's check command — the one its checks run.
   (`git merge --no-commit --no-ff origin/<development branch>`), run the
   script, and `git merge --abort` before touching anything else — the abort
   discards every uncommitted change, which is why the fix is committed first.
-- **GitHub checks** — the command its pull request check runs. In the core app
-  that command is `cd digital_brain_back && uv run scripts/check.sh`: lint,
-  format, complexity and the test suite, stopping at the first failure. Run it
-  as written, both halves; the checks belong to that package and reach their
-  tools through `uv run`, so the bare script path from the repository root
-  fails on tool lookup rather than on the branch.
+- **GitHub checks** — the command the workflow the launch's *Checks* line
+  names runs. In the core app that command is
+  `cd digital_brain_back && uv run scripts/check.sh`: lint, format, complexity
+  and the test suite, stopping at the first failure. Run it as written, both
+  halves; the checks belong to that package and reach their tools through
+  `uv run`, so the bare script path from the repository root fails on tool
+  lookup rather than on the branch.
 
 A non-zero exit means the push would fail the same check the run is already red
 on, so do not make it — fix what the command printed and run it again. Where a
@@ -119,7 +122,7 @@ assembling a substitute of your own, and push having verified what you could.
 
 Then push the branch. The checks are re-read on the pushed head and nowhere
 else — a local script runs again only for a new head — so a commit that stays
-on this machine leaves the proposal exactly as red as it was.
+on this machine leaves the checks exactly as red as they were.
 
 ## 5. Settle
 

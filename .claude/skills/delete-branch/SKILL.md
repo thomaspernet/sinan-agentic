@@ -2,7 +2,6 @@
 name: delete-branch
 description: Delete one child branch once its merge into the integration branch can be proven.
 family: delivery
-shipped-from: d103de5087e3ef3a4e33f1466126476bbcb73f54fe5998dda6ede17a3371ca69
 ---
 Delete one child branch that has landed.
 
@@ -33,9 +32,9 @@ compare by name finds no ref, and the step halts over work that landed.
 that landed — and is success, not a failure: this step is idempotent by
 intent, because a re-run after a partial pass must not stop on what the
 first pass finished. A refusal says why — a step that is not this run's
-delete-branch step, an item that recorded no branch, a repository whose
-writes have not flipped to this app, or a tip that could not be read — and
-each is a halt with that reason, not a reason to delete another way.
+delete-branch step, an item that recorded no branch, or a tip that could
+not be read — and each is a halt with that reason, not a reason to delete
+another way.
 
 ## Claiming and settling
 
@@ -63,9 +62,14 @@ skip leaves every reader after you guessing which of the three it was.
 
 - `already_delivered` — the work is already done, in this repository or
   another. Give `references`, one per place it landed: a commit as
-  `owner/name@sha`, a pull request or issue as `owner/name#123`. It is the one
-  outcome that says something shipped, and a run reads it to know this step
-  delivered even though nothing landed on its own branch.
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
 - `left_out` — the run decided not to do this work. Give `outcome_reason`, one
   line saying why.
 - `not_needed` — the question turned out not to exist. Give `outcome_reason`,

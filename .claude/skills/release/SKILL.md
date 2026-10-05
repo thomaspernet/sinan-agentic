@@ -3,7 +3,6 @@ name: release
 description: Cut the release the promoted work ships, against the published history read live.
 family: delivery
 capability: releasable
-shipped-from: c8bcbc574a79a8bf7c0a4bc4ef14afce634d48825219d61bd5f2bd1272c8ac94
 ---
 Cut the release the promoted work ships.
 
@@ -42,8 +41,7 @@ derives the next version from the published history read live, cuts the
 release against the tier's branch, and records the tag on this stage in the
 same call — that record is what the stage's truth is read from, by probing
 the tag on origin. Do not cut with `gh` yourself: a tag cut that way records
-nothing, and the refusal for a repository whose writes have not flipped to
-this app belongs to the service. The app's own Ship view is the one exception
+nothing. The app's own Ship view is the one exception
 — a cut there for the tier this stage stands at records on it too (#2641) —
 and it is no substitute for cutting here: it names no run.
 

@@ -2,7 +2,7 @@
 name: close-epic
 description: Close the issues this run delivered, each by what the run recorded of it, once its work has merged.
 family: delivery
-shipped-from: 93edf679bb9365433a04562e199b928065715c61c471bcca4ff48ad9ba768295
+shipped-from: 6dc601433ae3c59fe06cf96402dea4fe39f83f2101e4d8b012d922b909122b57
 ---
 Close the issues this run delivered, each by what the run recorded of it.
 
@@ -34,20 +34,21 @@ member settled with. Do what the line says and nothing else — this stage's
 verdict is taken over that same reading, so an issue closed against your own
 judgement fails the close that performed it.
 
-- **close it as completed** — `gh issue close <M> --comment "..."`. The
-  comment says what shipped and where: the proposal that carried it for work
-  this run landed, and the commits, pull requests or issues the member's line
-  names for work that was already in a tree.
-- **close it as not planned** —
-  `gh issue close <M> --reason "not planned" --comment "..."`, the comment
-  carrying the reason the member's line gives. The question turned out not to
-  exist, and an issue left open for it is offered back to the backlog forever.
-- **leave it open** — `gh issue comment <M> --body "..."` naming this run and
+- **close it as completed** — `edit_issue` with `state: closed`,
+  `close_reason: completed` and a `comment`. The comment says what shipped and
+  where: the proposal that carried it for work this run landed, and the
+  commits, pull requests or issues the member's line names for work that was
+  already in a tree.
+- **close it as not planned** — `edit_issue` with `state: closed`,
+  `close_reason: not_planned` and a `comment` carrying the reason the member's
+  line gives. The question turned out not to exist, and an issue left open for
+  it is offered back to the backlog forever.
+- **leave it open** — `edit_issue` with a `comment` alone, naming this run and
   the reason the member's line gives, so it reads as work still to do rather
   than work the run forgot.
 
-A member the launch names in another repository is acted on there, with
-`--repo <owner/name>`.
+Each names the issue as `<owner/name>#<M>`, so a member the launch names in
+another repository is acted on there by naming that repository.
 
 This step is idempotent, so a re-run finishes what a prior pass left and
 changes nothing else. Read each issue before you act on it —
@@ -61,14 +62,23 @@ closed nor passed over, and is a halt naming it.
 
 ## 3. Close the epic
 
-An epic-rooted run closes its epic last: `gh issue close <N>` with a comment
-saying what shipped, in one or two sentences a reader outside this run can
-follow. An already-closed epic is success on the same terms. A run that
+An epic-rooted run closes its epic last: `edit_issue` with `state: closed` and
+a `comment` saying what shipped, in one or two sentences a reader outside this
+run can follow. An already-closed epic is success on the same terms. A run that
 delivers one issue on its own has no epic to close — step 2 closed its issue.
 
 A member that shipped and is still open is a failed close even when the epic
 closed — settle `failed` naming the members that are open, never `passed`. One
 whose line said to leave it open is not one of them.
+
+Every issue write here goes through the app's issue tools — `file_issue`,
+`edit_issue` and `delete_issue` — which put the write in the Backlog before
+they return. In a session where those tools are not loaded, make the same
+write with `gh` instead:
+`gh issue create`, `gh issue edit`, `gh issue close` or `gh issue comment`.
+A write made that way reaches the Backlog only on the repository's next
+refresh, so say so when reporting it rather than reading its absence there as
+a failure.
 
 ## Settling
 
