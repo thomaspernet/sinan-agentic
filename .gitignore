@@ -60,8 +60,7 @@ htmlcov/
 *.log
 
 # Claude Code
-.claude/*
-!.claude/skills/
+.claude/
 CLAUDE.md
 CLAUDE.local.md
 BUGS.md

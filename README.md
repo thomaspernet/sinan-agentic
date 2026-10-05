@@ -1,8 +1,10 @@
 # Sinan (司南)
 
-<img src="https://upload.wikimedia.org/wikipedia/commons/thumb/5/53/Model_Si_Nan_of_Han_Dynasty.jpg/250px-Model_Si_Nan_of_Han_Dynasty.jpg" alt="Sinan - a Han dynasty south-pointing spoon on a bronze plate" width="220" align="right" />
+<img src="https://raw.githubusercontent.com/thomaspernet/sinan-agentic/main/docs/assets/sinan.jpg" alt="Sinan - a Han dynasty south-pointing spoon on a bronze plate" width="220" align="right" />
 
 > **sinan (司南)** - the earliest known compass. A lodestone carved into a spoon, resting on a bronze plate inscribed with the 24 directions. Han dynasty China, ~2nd century BCE.
+>
+> <sub>Image: [Model Si Nan of Han Dynasty](https://commons.wikimedia.org/wiki/File:Model_Si_Nan_of_Han_Dynasty.jpg) by Hohum, [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/).</sub>
 >
 > Like its namesake, this framework is the instrument that helps you align yourself with our agentic logic - the plate holds the field of tools, knowledge, and rules; the spoon is the agent that always knows which way to turn.
 
