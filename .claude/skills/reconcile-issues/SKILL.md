@@ -1,156 +1,128 @@
 ---
-description: "Reconcile orphan issues that have no child-of: pick a parent for each, write the child-of link, and let convergence re-home them. Confirms before touching any issue with a run/branch, and reports misrouted members and workflow-less parents without touching them."
-capability: core
+name: reconcile-issues
+description: Give an orphan issue a parent, on approval — and report, without touching, the issues whose link is already right.
+family: planning
 ---
+Give an orphan issue a parent, so it stops being the only member of its own
+group.
 
-Reconcile the orphan issues the **convergence engine deliberately does not auto-heal**
-(#2951, epic #2948). Once convergence (#2949) shipped, the common case heals
-itself — a pristine birth-draft re-homes the instant a `child-of`-to-root link
-appears. This skill is the human-in-the-loop remainder:
+## 1. Find the orphans
 
-- **No `child-of` at all** — Lingtai cannot infer the parent, so it asks you
-  which parent each orphan belongs under, then writes the link.
-- **Work already started** — re-homing could disturb an in-flight run, so it
-  **confirms** before touching any issue that has a run/branch.
-- **Backlog backfill** — running this skill over the full orphan list in one
-  pass is the one-time sweep of issues orphaned before the convergence fix.
-- **Misrouted members** (#3727) — a `child-of` that reaches a different workflow
-  root than the one owning the step. Reported here, never touched: the link is
-  already right, so the fix is a membership re-home, not another link.
-- **Unrooted parents** (#3827) — a `child-of` that reaches no workflow root at
-  all, because the declared parent is a label-only epic. Reported here, never
-  touched: the link is already right too, and no second link helps — the parent
-  needs a workflow rooted on it before anything can converge onto it.
+An orphan is an open issue whose body carries no `child-of` link. `gh issue
+list --state open` with the body among the fields — the link lives there, so a
+listing without it cannot tell an orphan from a child. Separate them by shape,
+because only the first is yours:
 
-This skill **reuses the membership service** — it lists candidates via
-`devwatch attach-candidates` (backed by `attach_service`) and writes the
-**single uniform operation** convergence projects from: a `child-of: #parent`
-edge via `devwatch link`. It never re-implements attach, never starts a
-workflow, and never cuts a branch.
+- **No link at all** — the orphan. It has nowhere to belong until one is
+  written. Continue with these.
+- **Linked, but the parent is a label-only epic that roots no work** — the link
+  is already right; what is missing is a workflow on the parent. Writing a
+  second link fixes nothing. Report it and leave it.
+- **Linked, and the link disagrees with where the work is actually running** —
+  again the link is right and the membership is wrong. Report it and leave it.
 
-## Detect repo
+## 2. Propose a parent for each orphan
 
-Determine the target repository from the current working directory:
+For every orphan, name the epic it most plausibly belongs under and say why in
+one line. An orphan with no plausible parent stays an orphan — inventing an epic
+to hold one issue is how a tree becomes noise.
 
-```bash
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+## 3. Ask, then write
+
+Present the proposals and wait. No run stands as the approval here, as one
+does for a scan or an umbrella: every link is the person's to approve. As a
+claimed step of a run, the wait is a call — `worklist_set_item_status` with the
+item's `item_uuid`, `status: "waiting"` and a `question` naming each orphan and
+the parent proposed for it — and never `passed`, which reads the step done
+before any parent is approved.
+
+On approval, `edit_issue` each approved orphan with its whole body, read first
+with `gh issue view` — the `body` an edit sends replaces the one the issue
+holds — and a `child-of` line added to it: into the body's existing trailing
+`Links:` block if it already carries one, written as the block's first line
+above whatever is already there, since the parser reads only the last such
+block and a second header below it would silently drop what the first held; a
+fresh
+
+```
+Links:
+- child-of: #N
 ```
 
-Pass `--repo "$REPO"` to every `devwatch` and `gh` command to ensure the correct
-repo is targeted.
+block otherwise. Leave every other issue untouched. An orphan the person skips
+is written nothing. As a claimed step, settle once the approved links are
+written.
 
-## 1. List the candidates
+Only ever the link. Never re-title, re-label, close, or reopen an issue here —
+this skill answers one question about an issue and touches nothing else about
+it.
 
-```bash
-devwatch --repo "$REPO" attach-candidates --json
-```
+## Writing for GitHub
 
-Each entry is an open, non-epic issue whose membership needs a decision. Fields:
+Anything written onto an issue is public, permanent, and read months later by
+someone with no knowledge of the run that produced it. Write for that reader:
+third person, present tense, naming the change rather than the process that
+produced it. No run identifiers, no internal phase names, no first-person
+agent voice, no real names or addresses — a role (`the reporter`, `the
+reviewer`) says everything the reader needs.
 
-- `number`, `title` — the issue.
-- `disposition` — `pristine`, `work_started`, `misrouted`, or `unrooted_parent`
-  (see below).
-- `roots` — the candidate parents the link may point at: each is an **epic** or
-  a **workflow root** (never a mere step — #1316). Picking one of these is what
-  lets convergence re-home the orphan, because the chain reaches a workflow root.
-  Empty for a `misrouted` or `unrooted_parent` entry — there is nothing to pick.
-- `divergence` — present only on a `misrouted` entry: `link_root`,
-  `workflow_root`, and the `reason` sentence naming both. `null` otherwise.
-- `unrooted_parent` — present only on an `unrooted_parent` entry: `parent` and
-  the `reason` sentence naming it. `null` otherwise.
+Every issue write here goes through the app's issue tools — `file_issue`,
+`edit_issue` and `delete_issue` — which put the write in the Backlog before
+they return. In a session where those tools are not loaded, make the same
+write with `gh` instead:
+`gh issue create`, `gh issue edit`, `gh issue close` or `gh issue comment`.
+A write made that way reaches the Backlog only on the repository's next
+refresh, so say so when reporting it rather than reading its absence there as
+a failure.
 
-Three shapes, and **only the orphan shape is this skill's job**:
+## Reporting back
 
-- **Orphans** (`pristine`, `work_started`) — no `child-of` at all, so their only
-  home is their own single-member self-rooted workflow and convergence has
-  nothing to project membership from. `pristine` means no run and no branch, so
-  convergence re-homes it the moment a link is written; `work_started` means a
-  run/branch exists, so convergence will **not** auto-move it (the commit
-  boundary holds). Continue to step 2 with these.
-- **Misrouted** (`misrouted`) — the issue already has a `child-of`, but that
-  chain reaches a different workflow root than the one owning its step (#3727):
-  it renders under one epic and executes on another's integration branch.
-  **Writing another link fixes nothing** — the link is already correct; it is
-  membership that is wrong. Do not offer a parent for these and do not run
-  `devwatch link` on them. Report them to the human, quoting `divergence.reason`
-  verbatim, and say the fix is a re-home of the member onto the workflow rooted
-  at `link_root` — an explicit operator action outside this skill.
-- **Unrooted parent** (`unrooted_parent`) — the issue already has a `child-of`
-  too, but that chain reaches **no** workflow root at all (#3827): the declared
-  parent is a label-only epic, so convergence has nowhere to project the
-  membership to and the issue re-roots its own draft forever. **Writing another
-  link fixes nothing here either** — the link is already correct; what is
-  missing is a workflow rooted on the parent. Do not offer a parent for these
-  and do not run `devwatch link` on them. Report them to the human, quoting
-  `unrooted_parent.reason` verbatim, and say the fix is to root a workflow on
-  that parent (`devwatch regroup-onto-new-epic`, or the dashboard's workflow
-  create) — an explicit operator action outside this skill. Once one exists,
-  these converge on their own with no further link.
+You are invoked either on demand — by a person who already knows what they want
+— or as one step of a run. The two report back differently, so establish which
+before doing anything.
 
-If the list is empty, report "Nothing to reconcile — every open issue has a home,
-and every link agrees with it." and stop. (Run the plain
-`devwatch --repo "$REPO" attach-candidates` without `--json` for a readable table
-when reporting to the human.)
+Call `worklist_claim_item` with no arguments.
 
-## 2. Present the orphans and ask for a parent
+- `no_anchor` — you were invoked on demand. There is no unit to settle: do the
+  work above, then report what you produced to the person who asked, naming it
+  by issue number or path so they can open it.
+- `claimed: true` — you are a step of a run. Do the work above against the
+  claimed item's `title` and `attachments`, then settle with
+  `worklist_set_item_status` and the item's `item_uuid`: `passed` when the step
+  did what it says, `failed` with a `halt_reason` when it did not, and
+  `skipped` when the question no longer exists. A step that decided its work
+  fails says so with the reason, never with `passed`.
+- `claimed: false` with `already_running` — another session has it. Stop.
 
-Show the orphans as a table: number, title, disposition, and the candidate
-parents (`#N — title`). List any `misrouted` and `unrooted_parent` entries in a
-separate, read-only section — they are reported, not placed. Then, for each
-**orphan** the human wants to place, ask **which candidate parent** it belongs
-under.
+A claimed step whose work stops for the person's decision — a proposal they
+must approve, a choice only they can make — does not settle at the pause. Call
+`worklist_set_item_status` with the `item_uuid`, `status: "waiting"` and a
+`question`: one line saying what the person must decide. That settles nothing:
+the step stays open and yours, and the run shows them the question. Once they
+have answered, do what the answer asks, then settle — never `passed` at the
+pause, which reads the step done before they have decided anything.
 
-- Offer the orphan's `roots` as the choices. Picking one of them guarantees the
-  re-home, because each is a valid workflow root.
-- The human may name a parent **not** in `roots`. Only proceed if that parent is
-  itself an epic or a workflow root — otherwise convergence will not re-home the
-  orphan (the chain must reach a *root*, not a mere step). If no offered root
-  fits, the right move is to create a workflow/epic for the missing branch (or
-  root an existing workflow higher) **first** — do not write a link to a non-root.
-- The human may skip any orphan. Skipping writes nothing.
+A `skipped` settle also says what became of this step's work, as an `outcome`
+with that outcome's evidence. A skip naming none is refused, and so is one
+whose outcome has nothing behind it: you are the only one who knows, and a bare
+skip leaves every reader after you guessing which of the three it was.
 
-## 3. Confirm before moving a work-started orphan
+- `already_delivered` — the work is already done, in this repository or
+  another. Give `references`, one per place it landed: a commit as
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
+- `left_out` — the run decided not to do this work. Give `outcome_reason`, one
+  line saying why.
+- `not_needed` — the question turned out not to exist. Give `outcome_reason`,
+  one line saying why.
 
-For any orphan whose `disposition` is `work_started` (it has a run or branch),
-**confirm explicitly** before writing the link:
-
-> #N has a run/branch in flight. Writing `child-of: #parent` records the
-> relationship, but convergence will **not** auto-move committed work — the
-> physical re-home stays an explicit operator action (detach in the dashboard's
-> "Attach to…" flow). Write the link anyway? [y/N]
-
-Only proceed on an explicit yes. A `pristine` orphan needs no such confirmation
-beyond the parent choice — it has no in-flight work to disturb.
-
-## 4. Write the link
-
-The uniform operation, identical for every parent kind (epic, workflow root,
-standalone root):
-
-```bash
-devwatch --repo "$REPO" link <orphan> <parent> --type child-of
-```
-
-This writes the `child-of` edge to the cache and mirrors it to the issue body's
-`Links:` section on GitHub (the source of truth). Repeat per orphan the human
-placed.
-
-## 5. What happens next
-
-You are done once the links are written — **do not** start a workflow, cut a
-branch, or drive any pipeline step.
-
-- **Pristine** orphans re-home automatically: the next server sync runs
-  `_auto_attach_if_orphaned`, and convergence (#2949) retires the birth-draft
-  and appends the issue onto the parent's workflow. Re-run
-  `devwatch --repo "$REPO" attach-candidates` to confirm the list shrank.
-- **Work-started** orphans keep their own workflow (the commit boundary). The
-  link you wrote surfaces the relationship in the issue tree; the physical
-  membership move is the operator's explicit follow-up in the dashboard.
-
-## Boundary
-
-This skill **lists candidates and writes `child-of` links for orphans** —
-nothing else. It does not create workflows, cut branches, implement, force-move
-committed work, or act on a `misrouted` / `unrooted_parent` entry beyond
-reporting it. Membership lands via convergence on its own schedule.
+A `halt_reason` is read by a person deciding what to do next, so write it as
+the blocker in words they can act on, not as an error string. Never leave a
+claimed unit `running`: a step that stops without settling is
+indistinguishable from one still in flight.

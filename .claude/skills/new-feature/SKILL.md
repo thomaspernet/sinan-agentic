@@ -1,143 +1,132 @@
 ---
-description: "Create a GitHub issue for a feature request."
-capability: core
+name: new-feature
+description: File one feature as a GitHub issue, with acceptance criteria as the contract the work is reviewed against.
+family: writing
 ---
+File one feature as a GitHub issue.
 
-Create a GitHub issue for a feature. Record it in devwatch. Stop.
+## 1. Establish what is being asked for
 
-## Mandatory reads — do this first
+The ask is the outcome, not the implementation someone has in mind for it. Write
+down what would be true once it shipped; if that cannot be stated, the request is
+not yet an issue and the honest answer is to say so rather than to file a vague
+one.
 
-Run:
+## 2. Write it
 
-    devwatch --repo "$REPO" doc-read --skill new-feature --display
+The title states the ask in one line. The body carries what is missing and why
+it matters, then acceptance criteria — the contract, and the part worth the most
+care. Each one is something a reviewer can tick off by reading the diff or
+running a command. Name the areas the work touches and why each is affected.
 
-The output contains every doc you must read; treat it as if you opened each file directly. Do not proceed with the skill body until done.
+## 3. Place it
 
-## Parse arguments
+Read the description for a stated parent — "part of epic #N", "extends #N".
+Confirm it once with the person before writing a `child-of` link; a passing
+mention is not a parent and is not linked.
 
-Extract description, optional run ID, optional body-file path, optional parent refs, and optional brainstorm session from `$ARGUMENTS`:
-- `$ARGUMENTS` = `"add dark mode"` -> DESCRIPTION="add dark mode", RUN_ID=(none), PARENTS=(), FROM_BRAINSTORM=(none)
-- `$ARGUMENTS` = `"add dark mode --run 7"` -> DESCRIPTION="add dark mode", RUN_ID=7, PARENTS=()
-- `$ARGUMENTS` = `"add dark mode --parent 42"` -> PARENTS=(42)
-- `$ARGUMENTS` = `"add dark mode --parent 42 --parent 50"` -> PARENTS=(42, 50) — repeatable
-- `$ARGUMENTS` = `"add dark mode --parent owner/repo#42"` -> cross-repo parent accepted
-- `$ARGUMENTS` = `"--body-file /tmp/devwatch-issue-body-XXX.json --run 7"` -> read the JSON file for the payload; no inline description
-- `$ARGUMENTS` = `"--from-brainstorm 11-05-26/dark-mode-rollout"` -> FROM_BRAINSTORM="11-05-26/dark-mode-rollout" (bare slug also accepted when unambiguous); the skill seeds the issue body from the session contents and the CLI back-links the session to the new issue in the same transaction
+A link is a trailing block, not a sentence — the parser that turns it into a
+graph edge reads only a line shaped exactly `child-of: #N` under its own
+`Links:` header, both required, and finds nothing from any other phrasing:
 
-Strip `--run <N>`, `--body-file <PATH>`, `--from-brainstorm <SESSION>`, and every `--parent <REF>` from the description before using it.
-
-**If `--body-file <PATH>` is present:** read the file with your Read tool — it is a JSON object with the exact bytes of the request. Use its fields for the feature issue:
-- `description` → primary body text (verbatim, no shell quoting to worry about)
-- `subject` → short hint for the title (optional)
-- `sender` → From: line for the issue body (optional)
-- `messages` → full Gmail thread, oldest-first, when the source is the inbox promote flow (optional). Preserve the full conversation in the issue body when present.
-
-The body-file path is generated server-side and only contains filesystem-safe characters. Do NOT paste the file contents into Bash; read it with the Read tool.
-
-The CLI accepts the parent as `N`, `#N`, or `owner/repo#N`. Preserve the exact form the user typed.
-
-## Pull brainstorm context (when `--from-brainstorm` is set)
-
-When `FROM_BRAINSTORM` is provided, the issue title and body get seeded from the session contents:
-
-```bash
-SESSION_TEXT=$(devwatch --repo "$REPO" brainstorm-read --session "$FROM_BRAINSTORM" --display)
+```
+Links:
+- child-of: #N
 ```
 
-The output streams every file under the session (README first, then alphabetised siblings, then subfolders) with `===== <abs path> =====` headers — the same shape as `doc-read --display`. Summarise it into the issue body:
+A body that already carries a block — a `blocks` line naming other work —
+keeps that one block, and the `child-of` line is written as the block's first
+line, above whatever is already there. The edge is what the block is read for,
+so it is what a person opening the issue meets first.
 
-1. Read the session's README (the first block in the stream) — its `## Summary` for the gist and its `## Files` index for which child files carry the detail.
-2. Read each child `.md` file in the stream (`open-questions.md`, topic files, …) for the detailed thinking the README only summarises and indexes.
-3. Promote the session's substance — the summary plus the relevant child-file detail — into the issue's description, and any concrete acceptance signals from the session into the `## Acceptance criteria` block.
-4. The CLI back-links the session to the new issue automatically — do **not** write `brainstorm: <path>` into the body yourself.
+Treat it as an epic when the acceptance criteria genuinely split into three or
+more workstreams that each deserve their own branch — and when they do, list
+that split in the body, because those become the children. A long single-area
+feature is not an epic.
 
-## Detect repo
+## 4. File it
 
-Determine the target repository from the current working directory:
+`file_issue` with the title, the body, and the labels for its area and
+priority. Report the number it answers with.
 
-```bash
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-```
+When the work came out of a brainstorming session, link each issue filed here
+to it once the issue exists: `link_brainstorm_work` with the session's uuid and
+the issue as `owner/name#N`. The link is what the issue and the session both
+read to say where the work came from, so it is written with the tool and never
+as a `brainstorm` line in the body. Call it straight after filing: an issue
+filed with `file_issue` is in the mirror by the time that tool returns, and one
+filed with `gh` has its repository read afresh on the call. If the tool still
+says the mirror holds no such issue, check the coordinate, and if it is right,
+name the issue to the person to link from the session.
 
-Pass `--repo "$REPO"` to every `devwatch` command to ensure the correct repo is targeted.
+Filing is the whole job. Do not implement the feature here.
 
-## Intelligence (what you decide)
+## Writing for GitHub
 
-1. Write a clear issue title and structured body (description, acceptance criteria, affected areas, priority).
-2. Assess the area and priority.
-3. **Detect implicit parent references.** If the user did not pass `--parent` but the description indicates this is a sub-feature of something — phrases like *"sub-feature of #N"*, *"part of epic #N"*, *"extends #N"*, *"child-of #N"* — surface the candidate once: *"This looks like a child of #N — link as `child-of`?"* If confirmed, append `N` to `PARENTS`. Do not auto-link without confirmation — mentions like "related to #N" or "see #N" are not parent relationships.
-4. **Detect epic scope.** An epic is a parent issue that spans multiple child issues. Flag the feature as an epic when the scoping shows **any** of:
-   - The user explicitly says *"epic"*, *"this is an epic"*, or asks for an epic.
-   - The body naturally splits into **3 or more independent workstreams** that each deserve their own issue (e.g., *DB schema + API + dashboard + CLI + docs*).
-   - Acceptance criteria spans **multiple areas** (backend + frontend + cli) and can't ship in a single PR without becoming unreviewable.
-   - You find yourself writing a *"Suggested child breakdown"* section because the work is too large to implement in one branch.
-   - Dependency notes like *"prerequisite for #N"* or *"blocks #N"* where the downstream work is itself multi-part.
-   Narrow single-area features are **not** epics, even when the body is long. When in doubt, surface the candidate once: *"This scoping looks like an epic (N workstreams). Mark as epic?"* Set `IS_EPIC=true` only on confirmation or explicit request. If `IS_EPIC=true`, add a `## Suggested child breakdown` section to the body listing the workstreams as a numbered list — these become the child issues downstream.
-5. **Record a model hint.** Assess the issue's difficulty and append the managed `model-hint:` line — see **Model hint (record once)** below — as the final line of the body.
+Anything written onto an issue is public, permanent, and read months later by
+someone with no knowledge of the run that produced it. Write for that reader:
+third person, present tense, naming the change rather than the process that
+produced it. No run identifiers, no internal phase names, no first-person
+agent voice, no real names or addresses — a role (`the reporter`, `the
+reviewer`) says everything the reader needs.
 
-## Model hint (record once)
+Every issue write here goes through the app's issue tools — `file_issue`,
+`edit_issue` and `delete_issue` — which put the write in the Backlog before
+they return. In a session where those tools are not loaded, make the same
+write with `gh` instead:
+`gh issue create`, `gh issue edit`, `gh issue close` or `gh issue comment`.
+A write made that way reaches the Backlog only on the repository's next
+refresh, so say so when reporting it rather than reading its absence there as
+a failure.
 
-Assess the issue's difficulty and record one managed `model-hint:` line for the three reasoning actions the pipeline launches — `implement`, `quality`, `propagation-scan`. It seeds the per-workflow **Model** tab downstream (epic #3139); the GitHub→DB sync later mirrors the line into `issues.model_hint`. You write it once, here, at creation — never edit it afterward (no `gh issue edit --body`).
+## Reporting back
 
-Format — one flush-left line, all three actions, always in this order:
+You are invoked either on demand — by a person who already knows what they want
+— or as one step of a run. The two report back differently, so establish which
+before doing anything.
 
-    model-hint: implement=<model>:<effort>, quality=<model>:<effort>, propagation-scan=<model>:<effort>
+Call `worklist_claim_item` with no arguments.
 
-Bounded catalog — use **only** these values, never anything outside them:
+- `no_anchor` — you were invoked on demand. There is no unit to settle: do the
+  work above, then report what you produced to the person who asked, naming it
+  by issue number or path so they can open it.
+- `claimed: true` — you are a step of a run. Do the work above against the
+  claimed item's `title` and `attachments`, then settle with
+  `worklist_set_item_status` and the item's `item_uuid`: `passed` when the step
+  did what it says, `failed` with a `halt_reason` when it did not, and
+  `skipped` when the question no longer exists. A step that decided its work
+  fails says so with the reason, never with `passed`.
+- `claimed: false` with `already_running` — another session has it. Stop.
 
-- `<model>` is one of `haiku`, `sonnet`, `opus` (reasoning strength, weakest→strongest)
-- `<effort>` is one of `low`, `medium`, `high`, `xhigh`, `max` (thinking effort, least→most)
+A claimed step whose work stops for the person's decision — a proposal they
+must approve, a choice only they can make — does not settle at the pause. Call
+`worklist_set_item_status` with the `item_uuid`, `status: "waiting"` and a
+`question`: one line saying what the person must decide. That settles nothing:
+the step stays open and yours, and the run shows them the question. Once they
+have answered, do what the answer asks, then settle — never `passed` at the
+pause, which reads the step done before they have decided anything.
 
-Pick by difficulty. `implement` does the work, so it never scores below `quality` or `propagation-scan`:
+A `skipped` settle also says what became of this step's work, as an `outcome`
+with that outcome's evidence. A skip naming none is refused, and so is one
+whose outcome has nothing behind it: you are the only one who knows, and a bare
+skip leaves every reader after you guessing which of the three it was.
 
-- **Simple** — a one-line change, a copy/enum/config tweak, a doc-only edit, or a localized single-file change with no subtle invariants:
-  `model-hint: implement=sonnet:high, quality=sonnet:medium, propagation-scan=sonnet:medium`
-- **Moderate** — a self-contained change over a few files with a clear contract (the common case):
-  `model-hint: implement=opus:high, quality=opus:high, propagation-scan=opus:high`
-- **Hard** — cross-layer work, subtle invariants or concurrency, dispatcher or state-machine changes, or a wide blast radius:
-  `model-hint: implement=opus:max, quality=opus:xhigh, propagation-scan=opus:xhigh`
+- `already_delivered` — the work is already done, in this repository or
+  another. Give `references`, one per place it landed: a commit as
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
+- `left_out` — the run decided not to do this work. Give `outcome_reason`, one
+  line saying why.
+- `not_needed` — the question turned out not to exist. Give `outcome_reason`,
+  one line saying why.
 
-When unsure, fall back to the built-in default `opus:xhigh` for all three actions. End the composed body with this line; the CLI appends the `Links:` block below it.
-
-## Execution
-
-1. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to every title, body, and comment below.
-
-2. Build the `devwatch create-issue` invocation. The title and the body are both your own prose and name files and symbols in backticks by convention, so pass each through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
-
-```bash
-TITLE=$(cat <<'TITLE_EOF'
-<title>
-TITLE_EOF
-)
-
-BODY=$(cat <<'BODY_EOF'
-<structured body>
-BODY_EOF
-)
-
-devwatch --repo "$REPO" create-issue \
-  --type feature \
-  --title "$TITLE" \
-  --body "$BODY" \
-  --area <backend|frontend|agents|infrastructure> \
-  --priority <P0-critical|P1-high|P2-medium|P3-low> \
-  --parent <N> \
-  --epic \
-  --from-brainstorm <SESSION> \
-  --run-id <RUN_ID>
-```
-
-Add one `--parent <REF>` for each entry in `PARENTS` (repeatable). Omit the flag entirely when `PARENTS` is empty. Omit `--run-id` if no RUN_ID was parsed from arguments. Include `--epic` only when `IS_EPIC=true`. Include `--from-brainstorm <SESSION>` when `FROM_BRAINSTORM` is set — the CLI back-links the session to the new issue (writes `linked_issues` in the session README AND appends `brainstorm: <path>` under the issue body's `Links:` block) in the same transaction.
-
-The CLI handles everything deterministically: issue creation, labels, devwatch trace, sync. When `--epic` is passed, the CLI also creates and pushes the `epic/<N>-<slug>` branch on origin so child issues can branch off it (see #942). The `epic` label is authoritative — GitHub is the source of truth and the server derives the `is_epic` column from the label on every sync.
-
-## Boundary
-
-This command creates the issue. It does NOT implement the feature. Report the issue number and ask: "Want me to implement it? I'll run `/feat-issue <N>`"
-
-When you launched from a `--body-file`, delete the file after `devwatch create-issue` succeeds:
-
-```bash
-rm -f "$BODY_FILE"
-```
+A `halt_reason` is read by a person deciding what to do next, so write it as
+the blocker in words they can act on, not as an error string. Never leave a
+claimed unit `running`: a step that stops without settling is
+indistinguishable from one still in flight.

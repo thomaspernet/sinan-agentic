@@ -1,180 +1,117 @@
 ---
-description: "Extract a persistent rule from a resolved issue. Writes to .claude/rules/ or a principle doc. Never modifies application code."
-capability: core
+name: issue-to-rule
+description: Turn one resolved issue into a rule when the mistake it fixed is a class rather than a one-off.
+family: analysis
 ---
+Turn one resolved issue into a rule, so the same mistake stops recurring.
 
-Turn a resolved issue into a persistent rule. Read the issue context and its diff, decide whether the fix represents a **class** of mistake worth capturing, and write the constraint to the right rule file so the same mistake does not recur.
+This skill writes rule text and nothing else. It edits no application code, runs
+no tests, and commits no behaviour change.
 
-This skill writes text — rule entries in `.claude/rules/*.md` or principle docs under `documentation/general/principles/`. It does **not** modify application code, run tests, commit code changes, or execute Python.
+## 1. Read what actually happened
 
-## Mandatory reads — do this first
+The issue, the review it went through, and the diff that closed it. As a stage
+of a run that is every issue the run resolved — the epic and each member, with
+`gh issue view` — and the run's finished diff, pinned: the *Pinned diff* line
+of the launch's *The run you were launched for* block names it as two commits,
+and the stage opens in a copy of the code checked out at the second, so read it
+there as `git diff <base>..HEAD` — never the delivered branch against the
+development branch by name, which reads as no change at all once the merge
+beside this stage lands. Read them together, once. Two members fixing the same
+mistake is the evidence of a class the next step asks for, and a pass over one member at a
+time could never see it. The rule is about the mistake, not the symptom, so
+keep reading until you can say what a person would have had to know beforehand
+to avoid it.
 
-Run:
+## 2. Decide whether there is a class here
 
-    devwatch --repo "$REPO" doc-read --skill issue-to-rule --display
+Most fixes are correct and not generalisable. A rule is worth writing only when
+the same mistake can plausibly be made again somewhere else — usually shown by
+it having already been made twice, in different files or by different authors.
+One instance is feedback about one change.
 
-The output contains every doc you must read; treat it as if you opened each file directly. Do not proceed with the skill body until done. The mandatory-reads include the authoritative `issue-to-rule` doc and the `rules-checklist` verifier — both are loaded once here and referenced (not re-read) throughout the rest of this skill.
+If there is no class, say so plainly and stop. A rule file full of one-off
+observations is one nobody reads, which costs more than the rule saved.
 
-## Parse arguments
+## 3. Write it
 
-- `$ARGUMENTS` = `"42"` → ISSUE=42, MODE=user-direct, RUN_ID=(none), BASE_BRANCH=(none), HEAD_SHA=(none)
-- `$ARGUMENTS` = `"42 --mode <mode>"` → ISSUE=42, MODE=\<mode\>
-- `$ARGUMENTS` = `"42 --run 7"` → ISSUE=42, RUN_ID=7
-- `$ARGUMENTS` = `"42 --run 7 --base-branch feat/364-x"` → ISSUE=42, RUN_ID=7, BASE_BRANCH=feat/364-x
-- `$ARGUMENTS` = `"42 --run 7 --base-branch local-dev-next --head 9f3a2b1"` → ISSUE=42, RUN_ID=7, BASE_BRANCH=local-dev-next, HEAD_SHA=9f3a2b1
+Three parts, in this order:
 
-`--head <sha>` is set by the dispatcher when the action fires inside an `epic_integration` chain (#1916). Since #2353 this skill runs **before** `merge-to-base` and `delete-branch`, so the child's feature branch still exists and `origin/<base>...<HEAD_SHA>` is the child's *own un-merged change*. The flag pins the diff to the implement run's tip so it is the same diff every time, regardless of which branch the dispatcher left checked out.
+- **The constraint** — one line, stated as what to do, not as what went wrong.
+- **Why** — the incident it comes from, named concretely enough that a reader
+  can go and look at it.
+- **How to apply** — when it fires and how to tell a real instance from
+  something that merely resembles one. This is the part that decides whether the
+  rule is usable, so it carries the edge cases rather than the constraint line.
 
-Valid `MODE` values:
+## 4. Put it where it belongs
 
-- `user-direct` (default) — user invoked the skill directly.
-- `post-quality` — triggered after `/check-code-quality` failed on a violation that matched no existing rule.
-- `self-flagged` — an implementation agent surfaced a generalizable lesson at the end of `/fix-issue` or `/feat-issue`.
+A constraint about this repository's own code goes in that repository's rules. A
+constraint that would hold in any codebase goes with the principles, where every
+project reads it. Before writing either, read what is already there: a rule that
+contradicts an existing one leaves a reader to guess, and a rule that repeats
+one is the duplication these rules exist to prevent.
 
-For `post-quality` and `self-flagged`, require at least **two concrete instances** of the class — different files, different sessions, or different authors. A single-session, single-file pattern is iteration feedback; record a skipped summary and stop.
+## Reporting back
 
-## Detect repo
+You are invoked on demand — by a person who already knows what they want — or
+as one stage of a run, which runs you once for the run as a whole rather than
+once per member. The two report back differently, so establish which before
+doing anything.
 
-```bash
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-```
+Call `worklist_claim_item` with no arguments.
 
-Pass `--repo "$REPO"` to every `devwatch` command.
+- `no_anchor`, and the launch carries a *The run you were launched for* block —
+  you are a stage of that run, and the run is the unit: there is nothing to
+  claim. Do the work above against the run's finished change, then settle with
+  `worklist_set_stage_status`, which takes no uuid: `passed` when the stage did
+  what it says, `failed` with a `halt_reason` when it could not.
+- `no_anchor`, and the launch carries no such block — you were invoked on
+  demand. There is no unit to settle: do the work above, then report what you
+  produced to the person who asked, naming it by issue number or path so they
+  can open it.
+- `claimed: true` — you are one member's step of a run over a workflow someone
+  wrote, which binds this skill to a step of its own. Do the work above against
+  that member's change, read from the claimed item's `title` and
+  `attachments`, then settle with `worklist_set_item_status` and the item's
+  `item_uuid`: `passed` when the step did what it says, `failed` with a
+  `halt_reason` when it did not, and `skipped` when the question no longer
+  exists.
+- `claimed: false` with `already_running` — another session has it. Stop.
 
-## Context loading
+A claimed step whose work stops for the person's decision — a proposal they
+must approve, a choice only they can make — does not settle at the pause. Call
+`worklist_set_item_status` with the `item_uuid`, `status: "waiting"` and a
+`question`: one line saying what the person must decide. That settles nothing:
+the step stays open and yours, and the run shows them the question. Once they
+have answered, do what the answer asks, then settle — never `passed` at the
+pause, which reads the step done before they have decided anything.
 
-1. Read this repo's CLAUDE.md.
-2. The mandatory-reads block already loaded the authoritative rule (`issue-to-rule`) and the verifier checklist (`rules-checklist`).
-3. Pull the issue's full context from `devwatch`:
-   ```bash
-   devwatch --repo "$REPO" issue-history <ISSUE> --full --comments
-   ```
-   This returns the issue's run timeline, prior quality-check reports, fix summaries, and relevant comments — the complete history the skill needs.
-4. Read the diff that fixed the issue:
-   ```bash
-   BASE="${BASE_BRANCH:-$(devwatch --repo "$REPO" branches dev)}"
-   if [ -n "$HEAD_SHA" ]; then
-     git diff "origin/${BASE}...${HEAD_SHA}"
-   else
-     git diff "origin/${BASE}...HEAD"
-   fi
-   ```
-   When `--head <sha>` is supplied the diff is pinned to that SHA — deterministic across re-runs and immune to checkout state. The implement run's tip SHA is recorded on the `agent_runs` row by `/fix-issue` / `/feat-issue`; the dispatcher resolves it at trigger time and passes it here.
+Only the claimed-item branch settles `skipped` at all:
+`worklist_set_stage_status` takes no outcome, and an on-demand invocation
+settles nothing.
 
-   Run exactly the command above — nothing else. If it prints **nothing**, the diff is empty: record an `iteration-only` skipped summary and stop. Do **not** reconstruct a diff by other means (`git show <sha>`, `git diff <sha>^ <sha>`, a different base, the working tree) — an empty sanctioned diff means there is no change to extract a rule from, not that you should find one another way.
-5. Read the implementing agent's own run-report notes for this issue — read-only reviewer context for the classification (epic #2913):
-   ```bash
-   devwatch --repo "$REPO" get-report --issue <ISSUE>
-   ```
-   `get-report` prints a category-grouped markdown digest (`### Risks` / `### Decisions` / `### Follow-ups`), or nothing when there are no notes. A `consideration` ("deliberately didn't do X because Y") or a recurring `risk` is often the generalizable lesson itself — weigh it alongside the history and diff when deciding *structural* vs *iteration-only* below. **Empty digest → skip**; classify from the history and diff alone. This read posts nothing — `issue-to-rule` writes only rule text.
-6. Read every file in the target tier you might write to, so you can detect conflict or subsumption before drafting:
-   - `.claude/rules/*.md` — project-wide always-on rules
-   - `documentation/general/principles/**/*.mdx` — language / architecture principles
+A `skipped` settle also says what became of this step's work, as an `outcome`
+with that outcome's evidence. A skip naming none is refused, and so is one
+whose outcome has nothing behind it: you are the only one who knows, and a bare
+skip leaves every reader after you guessing which of the three it was.
 
-## Decide: extract or skip
+- `already_delivered` — the work is already done, in this repository or
+  another. Give `references`, one per place it landed: a commit as
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
+- `left_out` — the run decided not to do this work. Give `outcome_reason`, one
+  line saying why.
+- `not_needed` — the question turned out not to exist. Give `outcome_reason`,
+  one line saying why.
 
-Evaluate the diff against the authoritative `issue-to-rule` doc loaded in the mandatory-reads block and classify:
-
-- **`iteration-only`** — the fix was correct but not generalizable. Record a skipped summary via `devwatch agent-update` with the reason and stop.
-- **`structural`** — a class of mistake exists and the constraint would prevent its next occurrence. Proceed.
-
-If `MODE` is `post-quality` or `self-flagged`, also verify the two-instance requirement. Without two cited instances, skip.
-
-## Draft the rule
-
-Write a draft with:
-
-- A **one-line statement** of the constraint. Voice matches the target tier — declarative 2nd-person for principle docs, file-referencing imperative for `.claude/rules/`.
-- A **`**Why:**`** line — the past incident, the preference, or the guarantee the rule enforces.
-- A **`**How to apply:**`** line — when and where the rule kicks in, concrete enough to judge edge cases.
-- **Cited instances** — `file:line` references (at least two for agent-triggered modes).
-- **Operation and target** — one of `add`, `update`, `supersede`, `flag-stale`, and the file the rule will be written to.
-
-Choose the tier:
-
-| Claim | Target |
-|---|---|
-| Applies to any project adopting this framework | `documentation/general/principles/<topic>.mdx` |
-| Project-wide, always loaded | `.claude/rules/critical.md` |
-| Domain-scoped (backend / frontend / CLI / infra) | `.claude/rules/<domain>.md` |
-
-If you cannot pick a tier confidently, the rule is not general enough — skip.
-
-## Run the verifier
-
-Walk the draft through every item of the `rules-checklist` loaded in the mandatory-reads block. Each item is a yes/no question. Record your answers:
-
-- **All items pass** → proceed to write.
-- **Any item fails** → revise the draft once and re-run the checklist. If it fails a second time, stop and record the failing items in the `agent-update` summary.
-
-## Write the rule
-
-Depending on the operation:
-
-- **`add`** — append a new entry to the target file. Preserve neighbouring style.
-- **`update`** — replace the existing entry in place. Cite the new instance in `**Why:**`.
-- **`supersede`** — write the new entry; append a `⚠ superseded by <anchor>` breadcrumb to the old entry. Do not delete the old entry.
-- **`flag-stale`** — **do not edit the rule file**. Post a comment on the issue describing the drift and the file/line of the stale reference. Leave the rule alone.
-
-Commit with a conventional message. The commit only touches rule files — never application code:
-
-```bash
-git add <rule-file-or-principle-doc>
-git commit -m "docs(rules): <operation> rule from #<ISSUE> — <short description>"
-```
-
-## Record and comment
-
-1. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to every title, body, and comment below.
-
-Update the agent-run trace and post a completion comment (omit `--run-id` if RUN_ID is unavailable). The summary carries the path you wrote and the comment body names it in backticks, so pass both through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
-
-```bash
-SUMMARY=$(cat <<'SUMMARY_EOF'
-<operation> rule from #<ISSUE> at <path>
-SUMMARY_EOF
-)
-
-devwatch --repo "$REPO" agent-update \
-  --run-id <RUN_ID> \
-  --status completed \
-  --summary "$SUMMARY" \
-  --files "<changed rule file>" \
-  --commits "$(git rev-parse HEAD)"
-
-BODY=$(cat <<'BODY_EOF'
-## Rule extracted
-
-**Operation**: <add|update|supersede|flag-stale>
-**Target**: `<path>`
-**Summary**: <one line>
-
-See the commit for the full entry.
-BODY_EOF
-)
-
-devwatch --repo "$REPO" agent-comment \
-  --issue <ISSUE> \
-  --body "$BODY"
-```
-
-For skipped runs (iteration-only, insufficient instances, or flag-stale with no file write), still call `agent-update` with `--status completed` and prefix the summary with `Skipped —` so the dashboard can distinguish. The reason is your own prose, so it goes through the same **quoted heredoc**:
-
-```bash
-SUMMARY=$(cat <<'SUMMARY_EOF'
-Skipped — <reason, e.g. iteration-only / insufficient instances / flag-stale surfaced without file change>
-SUMMARY_EOF
-)
-
-devwatch --repo "$REPO" agent-update \
-  --run-id <RUN_ID> \
-  --status completed \
-  --summary "$SUMMARY"
-```
-
-## Boundary
-
-- **Writes text only.** Rule entries in `.claude/rules/` or principle docs. Never modifies application code, never runs tests, never opens a PR.
-- **No autonomous delete.** `remove` is not one of the operations. The strongest deprecation is `supersede`.
-- **Agent-triggered invocations are gated.** `post-quality` and `self-flagged` require ≥2 instances; the gate is not a suggestion.
-- **Single rule per run.** If the draft wants to write more than one rule, the issue probably covered unrelated concerns — split the work.
+A `halt_reason` is read by a person deciding what to do next, so write it as
+the blocker in words they can act on, not as an error string. Never leave a
+claimed unit `running`: a step that stops without settling is
+indistinguishable from one still in flight.

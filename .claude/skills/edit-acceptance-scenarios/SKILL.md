@@ -1,218 +1,98 @@
 ---
-description: "Add or remove acceptance / regression scenario lines on an issue body."
+name: edit-acceptance-scenarios
+description: Add or remove the acceptance scenarios an issue tracks, changing nothing else about its body.
+family: writing
 capability: acceptance
 ---
+Add or remove the acceptance scenarios an issue tracks.
 
-Edit the `Links:` section on a GitHub issue body to add or remove
-`acceptance-scenario:` / `regression-scenario:` coordinate lines. The
-dashboard side panel's Acceptance tab (#1389) launches this skill from
-its Add and Remove buttons; you can also invoke it directly.
+## 1. Read the issue as it stands
 
-The skill is body-edit only. It does **not** touch the lingtai cache
-directly — the next GitHub auto-sync re-parses the body and rebuilds
-the `scenario_links` cache (#1386).
+`gh issue view` for the body, and read the scenario lines it already carries. An
+edit computed against a body you did not read overwrites whatever changed since.
 
-## Mandatory reads — do this first
+## 2. Compute the new body
 
-Run:
+Add a scenario by appending its line to the block the body already keeps them
+in; remove one by deleting exactly that line. Adding one already there, or
+removing one not there, is a no-op rather than an error — this is edited from
+more than one surface, and both must be safe to repeat.
 
-    devwatch --repo "$REPO" doc-read --skill edit-acceptance-scenarios --display
+Change nothing else. Every other line of the body stays byte for byte as it was:
+the edit rewrites the whole body, so an accidental reflow is a silent rewrite of
+somebody's issue.
 
-The output contains every doc you must read; treat it as if you opened each file directly. Do not proceed with the skill body until done. The mandatory-reads include the authoritative `acceptance-scenarios` doc — the contract for the `Links:` section header, the `<suite>::<file>::<title>` coordinate this skill writes, and the title-stability invariant.
+## 3. Write it back
 
-## Parse arguments
+`edit_issue` with the new body, then read it back with `gh issue view` and
+confirm the lines you intended are the lines that are there.
 
-`$ARGUMENTS` is `<issue-number> [--add "<coord>" | --remove "<coord>"]...`.
-Both flags are repeatable so a single invocation can apply multiple edits.
+## Writing for GitHub
 
-Examples:
+Anything written onto an issue is public, permanent, and read months later by
+someone with no knowledge of the run that produced it. Write for that reader:
+third person, present tense, naming the change rather than the process that
+produced it. No run identifiers, no internal phase names, no first-person
+agent voice, no real names or addresses — a role (`the reporter`, `the
+reviewer`) says everything the reader needs.
 
-- `1389 --add "smoke::e2e/login.spec.ts::logs in"`
-- `1389 --remove "smoke::e2e/login.spec.ts::logs in"`
-- `1389 --add "smoke::a.spec.ts::t1" --add "smoke::b.spec.ts::t2" --remove "smoke::old.spec.ts::gone"`
+Every issue write here goes through the app's issue tools — `file_issue`,
+`edit_issue` and `delete_issue` — which put the write in the Backlog before
+they return. In a session where those tools are not loaded, make the same
+write with `gh` instead:
+`gh issue create`, `gh issue edit`, `gh issue close` or `gh issue comment`.
+A write made that way reaches the Backlog only on the repository's next
+refresh, so say so when reporting it rather than reading its absence there as
+a failure.
 
-The first non-flag token is the issue number. Each `--add` /
-`--remove` is followed by a double-quoted coordinate. Preserve the
-quotes when shelling out and keep the value intact — do not split on
-`::` yourself, the body parser does that.
+## Reporting back
 
-By default a coordinate added by `--add` is rendered as
-`acceptance-scenario:`. To emit a `regression-scenario:` line use
-`--add-regression "<coord>"` instead. `--remove` strips matching
-lines regardless of which key (`acceptance-scenario` /
-`regression-scenario`) they used.
+You are invoked either on demand — by a person who already knows what they want
+— or as one step of a run. The two report back differently, so establish which
+before doing anything.
 
-## Detect repo
+Call `worklist_claim_item` with no arguments.
 
-```bash
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-```
+- `no_anchor` — you were invoked on demand. There is no unit to settle: do the
+  work above, then report what you produced to the person who asked, naming it
+  by issue number or path so they can open it.
+- `claimed: true` — you are a step of a run. Do the work above against the
+  claimed item's `title` and `attachments`, then settle with
+  `worklist_set_item_status` and the item's `item_uuid`: `passed` when the step
+  did what it says, `failed` with a `halt_reason` when it did not, and
+  `skipped` when the question no longer exists. A step that decided its work
+  fails says so with the reason, never with `passed`.
+- `claimed: false` with `already_running` — another session has it. Stop.
 
-## Read the current body
+A claimed step whose work stops for the person's decision — a proposal they
+must approve, a choice only they can make — does not settle at the pause. Call
+`worklist_set_item_status` with the `item_uuid`, `status: "waiting"` and a
+`question`: one line saying what the person must decide. That settles nothing:
+the step stays open and yours, and the run shows them the question. Once they
+have answered, do what the answer asks, then settle — never `passed` at the
+pause, which reads the step done before they have decided anything.
 
-```bash
-ISSUE_NUMBER=<N>
-CURRENT_BODY=$(gh issue view "$ISSUE_NUMBER" -R "$REPO" --json body -q .body)
-```
+A `skipped` settle also says what became of this step's work, as an `outcome`
+with that outcome's evidence. A skip naming none is refused, and so is one
+whose outcome has nothing behind it: you are the only one who knows, and a bare
+skip leaves every reader after you guessing which of the three it was.
 
-If the issue does not exist, `gh` exits non-zero — propagate.
+- `already_delivered` — the work is already done, in this repository or
+  another. Give `references`, one per place it landed: a commit as
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
+- `left_out` — the run decided not to do this work. Give `outcome_reason`, one
+  line saying why.
+- `not_needed` — the question turned out not to exist. Give `outcome_reason`,
+  one line saying why.
 
-## Compute the new body
-
-The `Links:` section uses the bare `Links:` header (no `##`). The
-parser at `src/watchdog_sensor/workflow/issue_links_sync.py` is the
-authority — it terminates the section on the first blank line, accepts
-`acceptance-scenario:` / `regression-scenario:` lines with or without
-a leading `- ` bullet, and treats each coordinate as a literal.
-
-Apply the edits in this order:
-
-1. **Removes first.** For every `--remove "<coord>"`, drop any line in
-   the `Links:` section whose right-hand side equals `<coord>`,
-   regardless of whether the key was `acceptance-scenario:` or
-   `regression-scenario:`. Lines outside the section are never touched.
-2. **Adds next.** For every `--add` / `--add-regression`, append the
-   matching line to the `Links:` section. Skip the append when an
-   identical line is already present (idempotent — re-running the
-   skill must not duplicate lines).
-3. **No `Links:` section yet?** If the body has no `Links:` section,
-   create one (separated from the body by a single blank line) before
-   appending the new lines.
-
-A small Python one-liner is the simplest way to do the edit
-deterministically — bash string-rewriting is fragile when titles
-contain `::`, slashes, or punctuation. Stage the new body to a tempfile:
-
-```bash
-TMP=$(mktemp)
-python3 - "$TMP" <<'PY'
-import os, sys
-import textwrap
-import re
-
-tmp = sys.argv[1]
-body = os.environ.get("CURRENT_BODY", "")
-removes = [c for c in os.environ.get("REMOVES", "").split("\n") if c]
-adds_acc = [c for c in os.environ.get("ADDS_ACC", "").split("\n") if c]
-adds_reg = [c for c in os.environ.get("ADDS_REG", "").split("\n") if c]
-
-LINK_KEYS = ("acceptance-scenario", "regression-scenario")
-LINE_RE = re.compile(
-    r"^\s*[-*]?\s*(?P<key>acceptance-scenario|regression-scenario)\s*:\s*(?P<val>.+?)\s*$"
-)
-
-# Split into pre-section / section / post-section. The section starts
-# at a bare 'Links:' header line and ends at the first blank line.
-lines = body.splitlines()
-header_idx = None
-for i, ln in enumerate(lines):
-    if ln.strip().lower() == "links:":
-        header_idx = i
-        break
-
-if header_idx is None:
-    pre = lines
-    section = []
-    post = []
-else:
-    pre = lines[:header_idx]
-    section_start = header_idx + 1
-    section_end = section_start
-    while section_end < len(lines) and lines[section_end].strip():
-        section_end += 1
-    section = lines[section_start:section_end]
-    post = lines[section_end:]
-
-# Drop matching scenario lines.
-def keep(line: str) -> bool:
-    m = LINE_RE.match(line)
-    if not m:
-        return True
-    val = m.group("val").strip()
-    return val not in removes
-
-section = [ln for ln in section if keep(ln)]
-
-# Build the set of scenario lines already present so we skip duplicates.
-existing = set()
-for ln in section:
-    m = LINE_RE.match(ln)
-    if m:
-        existing.add((m.group("key"), m.group("val").strip()))
-
-for coord in adds_acc:
-    key = ("acceptance-scenario", coord)
-    if key in existing:
-        continue
-    section.append(f"acceptance-scenario: {coord}")
-    existing.add(key)
-for coord in adds_reg:
-    key = ("regression-scenario", coord)
-    if key in existing:
-        continue
-    section.append(f"regression-scenario: {coord}")
-    existing.add(key)
-
-if section:
-    out_lines = list(pre)
-    if out_lines and out_lines[-1].strip():
-        out_lines.append("")
-    out_lines.append("Links:")
-    out_lines.extend(section)
-    if post:
-        out_lines.append("")
-        out_lines.extend(post)
-else:
-    # Empty section: drop the Links: header entirely so the body is clean.
-    out_lines = list(pre)
-    if post:
-        if out_lines and out_lines[-1].strip():
-            out_lines.append("")
-        out_lines.extend(post)
-
-# Strip trailing blank lines to keep the body tidy.
-while out_lines and not out_lines[-1].strip():
-    out_lines.pop()
-
-with open(tmp, "w", encoding="utf-8") as f:
-    f.write("\n".join(out_lines))
-    f.write("\n")
-PY
-```
-
-Set the env vars before running the Python block:
-
-```bash
-export CURRENT_BODY
-REMOVES=$(printf '%s\n' "${REMOVE_COORDS[@]}")
-ADDS_ACC=$(printf '%s\n' "${ADD_ACCEPTANCE_COORDS[@]}")
-ADDS_REG=$(printf '%s\n' "${ADD_REGRESSION_COORDS[@]}")
-export REMOVES ADDS_ACC ADDS_REG
-```
-
-## Push the new body
-
-```bash
-gh issue edit "$ISSUE_NUMBER" -R "$REPO" --body-file "$TMP"
-rm -f "$TMP"
-```
-
-## Confirm
-
-Print a one-line summary listing the adds / removes that were applied
-and remind the user that the dashboard cache rebuilds on the next
-auto-sync (no extra command — the server reconciles automatically; see
-`CLAUDE.md` → Top Rules → "GitHub is the source of truth").
-
-```
-Edited issue #<N> on <REPO>: +<n> acceptance, +<n> regression, -<n> removed.
-The Acceptance tab will refresh after the next auto-sync.
-```
-
-## Boundary
-
-This skill edits the issue body. It does **not** edit the `scenarios`
-catalogue, run Playwright, or write to the `scenario_links` table —
-the next GitHub sync rebuilds the cache from the body. To run a
-scenario, use `/run-scenarios`. To create a regression bug from a
-failed scenario, use `/new-bug --from-scenario`.
+A `halt_reason` is read by a person deciding what to do next, so write it as
+the blocker in words they can act on, not as an error string. Never leave a
+claimed unit `running`: a step that stops without settling is
+indistinguishable from one still in flight.

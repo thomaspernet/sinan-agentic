@@ -1,179 +1,239 @@
 ---
-description: "Update documentation for the workflow root #$ARGUMENTS after its integration branch has merged."
-capability: core
+name: add-documentation
+description: Update the documentation the landed diff made wrong — including prose naming a symbol the diff deleted or renamed.
+family: writing
 ---
+Update the documentation pages the landed work changed, written from the story
+of that work.
 
-Update the documentation pages affected by the change that just shipped for workflow root #$ARGUMENTS.
+Documentation is a page in the app, not a file in the repository. This stage
+does not start from a list of changed files. It reads the story of the run —
+why the work was wanted, what each piece of it did, and the diff that proves
+it — and answers every documentation page that story touches: rewritten when
+the merged behaviour is now misrepresented, or confirmed when the change left
+the page accurate. Where the diff lands a surface no page describes, it creates
+the page. It takes no git action beyond reading the diff — no branch, no
+commit, no push — and writes no file: run `git status --porcelain` when you
+start and again before you settle, and the two readings are the same.
 
-This is the workflow's single **Documentation** ship step (#2801, epic #2800). It runs once, post-merge, against the merged integration diff. The argument is the workflow's root: an epic issue, or a self-rooted single issue. Either way you document **whatever that root describes** against the change that landed on the dev branch.
+This stage is one of the run's tracks. It starts beside the run's landing —
+its pull request where the repository opens one, the check stage and the direct
+merge of the run's branch where it opens none — alongside the propagation scan
+and the rule pass where the run takes those on, in a copy of the code of its own
+pinned to the commit where every member had landed — the directory this session
+opened in. The landing goes on while you work, and the merge may land before
+you finish, so read the code in this copy rather than in the repository's own
+checkout.
 
-Documentation is a Page, not a file (epic #2014). You read the merged diff, resolve which page covers what changed, and write that page. **Take no other git action** — no branch, no commit, no push. The working tree you read must be exactly as clean when you finish as when you started.
+A run over pages has no repository, no branch and no diff: its members
+are pages, and what it delivered is what they produced. This stage then starts
+beside that run's chain in the run's own directory. Read *On a run over pages*
+below before you gather anything; every other step reads as written.
 
-The post-merge ordering is kept deliberately. It is no longer a constraint imposed by `git diff` — a page reads as stale the moment a file under its globs changes, with no merge commit needed — it is a choice: document what actually shipped, rather than what a child intended before it was re-scoped or reverted.
+## 1. Read the story
 
-## Mandatory reads — do this first
+Call `delivery_run_story` with no arguments: in a session launched for a run it
+reads that run. Each part of what it answers has a use here.
 
-The `MANDATORY CONTEXT` block in your priming lists every doc and rule this step must read, each with its uuid. Open the ones this work needs with `read_doc(uuid=...)` and `read_rule(uuid=...)` before writing anything. The block carries titles and descriptions only — never bodies — so those two tools are how you read one.
+- `brainstorm`: the session the work was filed from, with its summary and its
+  decisions note. This is why the work was wanted and what was settled, so a
+  page written from the story states the decision as well as the mechanism.
+- `members`: one per child issue, with the debrief its producing step wrote and
+  the settle notes its steps left. This is what each piece did, in the words of
+  the session that did it.
+- `diff`: the paths the run's branch changed — the merge commit's diff once
+  merged, the branch's diff from its fork point before. This is the proof:
+  nothing is documented that the diff does not show. Read the code behind a
+  path once a page describing it has to be decided.
+- `candidates`: per debrief, the documentation pages nearest to it by
+  similarity, each with its `covers` and its coverage `status`. How many pages
+  each debrief proposes, and the score below which a page is none, are yours
+  to set: call again with `candidate_count` and `candidate_floor` to widen the
+  search when the nearest pages do not match the change, and to tighten it when
+  they are noise. Either left out takes the configured value.
 
-There is no command to run and no tree to scan: the set is resolved from the library's own edges, so a doc named there exists and a doc that does not exist cannot be named.
+A `diff` carrying a `gap` has no paths to confirm any page against: settle
+`failed` and name the gap, unless the gap is `no_repository` on a run over
+pages, which is that run's ordinary shape. A member with no debrief is read
+from its settle notes and its issue instead, and named in the settle note.
 
-**Standing authorization**: posting the `devwatch agent-report`, `devwatch agent-update`, and `devwatch agent-comment` calls described below (run report + status update + single completion comment on the root issue) is part of this skill's contract. Run them without asking for confirmation.
+## On a run over pages
 
-## Parse arguments
+The story names no `epic`, no member names an issue, and its `diff` carries the
+`no_repository` gap. What the run delivered is what its members produced, so
+their outputs and debriefs are the proof the diff is on a run over code, and
+the steps below change in three places.
 
-Extract the root issue number and optional run ID from `$ARGUMENTS`:
-- `$ARGUMENTS` = `"42"` -> ISSUE=42, RUN_ID=(none)
-- `$ARGUMENTS` = `"42 --run 7"` -> ISSUE=42, RUN_ID=7
+- Gather the pages from `candidates`, and `search` the project's pages for the
+  names and terms the members' outputs introduce. Skip `documentation_coverage`:
+  it reads repositories, and this run changed none. Confirm a page by reading it
+  against the outputs and the debriefs; a page they do not bear on is left alone
+  and named in the settle note.
+- Answer each page with `answer_documentation_page` and no `covers`. It joins
+  the page to every item of the run that produced an output. A run whose items
+  produced nothing is refused, and that refusal is the halt to settle `failed`
+  with.
+- Write no new documentation page. A page is created with the code globs it
+  covers, and a run over pages has none, so name the surface a page is missing
+  for in the settle note, for a person to decide.
 
-ISSUE is the workflow root. Every workflow runs the same documentation step.
+The coverage checks that close step 4 read code, so they do not apply here:
+settle once every page gathered carries its answer.
 
-## Detect repo
+## 2. Gather the pages to answer
 
-Determine the target repository from the current working directory:
+Two sources propose pages, and the diff decides which of them this stage
+answers.
 
-```bash
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-```
+1. Call `documentation_coverage`. A page with a cover of the run's repository
+   whose glob matches a path in the diff is a page this stage answers. A page
+   that reads stale only for paths outside the diff was made stale by other
+   work: leave it, since this stage documents what this run landed. When `repos_unread` names the run's
+   repository, its paths were never read against any page: settle `failed` and
+   name the checkout. A cover listed under `untied` names no repository and
+   matches no change, so its page is never gathered by it; when that page is
+   one this stage answers anyway, name the cover's repository in step 3. A
+   cover listed under `unmatched` matches no file its repository tracks; when
+   its page is one this stage answers, replace it in step 3 too.
+2. Take every page in `candidates`. Similarity proposes; it does not decide.
+   Confirm a candidate that declares `covers` by reading the code under them
+   against the diff, and one that declares none by reading the page against the
+   diff and the debrief it was proposed for. A candidate is confirmed when the
+   diff changes something the page says. One that is not is left alone and
+   named in the settle note, so a person sees what was considered; a rewrite on
+   similarity alone is churn a reviewer has to read.
 
-Pass `--repo "$REPO"` to every `devwatch` command to ensure the correct repo is targeted.
+A project whose pages carry no `covers` is not a reason to stop: the candidates
+are how its pages are found, and every page this stage answers leaves carrying
+the covers it was answered for.
 
-## Resolve the merged change
+## 3. Answer every page gathered
 
-The integration branch has already merged into the dev branch — this step runs after `merge-branch`. Document the change that landed, reading the root issue body as the spec.
+For each page:
 
-1. Resolve the dev branch and check it out (the integration PR has already merged into it):
-   ```bash
-   DEV_BRANCH="$(devwatch --repo "$REPO" branches dev)"
-   git fetch origin
-   git checkout "$DEV_BRANCH"
-   git pull --ff-only origin "$DEV_BRANCH"
-   ```
-   This is the whole of the git this step takes, and all of it is a read: you are moving to the ref the change landed on so you can see it.
-2. Read the root issue body as the spec — it describes what shipped (an epic body, or a single issue), not a single child:
-   ```bash
-   gh issue view <ISSUE> --repo "$REPO" --json title,body,labels
-   ```
-3. Resolve the merged integration PR and its commit range. The integration PR is the most recent merged PR closing this root:
-   ```bash
-   PR=$(gh pr list --repo "$REPO" --state merged --search "closes #<ISSUE>" --json number,mergeCommit --jq '.[0]')
-   ```
-   Use the merge commit's first-parent range to get the diff that landed on dev:
-   ```bash
-   MERGE_SHA=$(echo "$PR" | jq -r .mergeCommit.oid)
-   git diff "${MERGE_SHA}^1..${MERGE_SHA}" --name-only
-   ```
-   If no merged integration PR is found (a `devonly` workflow merges straight into dev with no PR), fall back to `devwatch --repo "$REPO" check-docs --issue <ISSUE>` — when `<ISSUE>` is an epic it diffs the integration branch against dev; otherwise it diffs the issue's merged change. Either source gives you the changed-file set. That branch has no merge commit to name, so name the ref you read instead:
-   ```bash
-   MERGE_SHA="$(git rev-parse HEAD)"
-   ```
-   `MERGE_SHA` is set on both branches, because the completion record below names it either way.
+1. Open it with `read`.
+2. When the diff moved code the page describes — renamed or relocated a path
+   out from under one of its globs, or it declares a cover naming no
+   repository — replace its covers with `update_documentation_covers`, passing
+   every cover the page now declares, each written `<repository>:<glob>`. A
+   glob naming a path that no longer exists covers nothing, and the page would
+   read current however its code changes from here on.
+3. Decide whether the merged behaviour, architecture or API is now
+   misrepresented, or whether the change was internal. A page is wrong when it
+   misses a new entity, endpoint or configuration section; names a symbol the
+   diff renamed, relocated or deleted; describes a pattern the diff changed; or
+   states a count or exhaustive list a new call site made wrong. The decisions
+   and the debriefs say what the change meant; the diff says what it did.
+4. When it is misrepresented, change it: with `edit_page_content` for the
+   passages the change made wrong, or with `update_page_content`, passing the
+   whole page as markdown, when all of it has to change. A page too large to
+   send back whole is only ever changed with `edit_page_content`. Make one
+   cohesive change per page, not one call per changed path.
+5. Record the answer with `answer_documentation_page`: `answer` `rewritten`
+   after a rewrite, `confirmed` when the change was internal. It joins the page
+   to the work this run delivered, so the page can later be read back to the
+   epics that shaped it, and a `confirmed` answer records the page as re-read
+   against the change, which is what keeps "confirmed accurate"
+   distinguishable from "nobody looked". Pass `covers`: the diff's paths the
+   page was answered for, each written `<repository>:<glob>` with the run's
+   repository as `owner/name` and a glob written from its root, narrow enough
+   that a change under it is one this page has to answer for. They are
+   required for a page that declares none, and are added to the covers of a
+   page that does. A cover naming no repository is refused in a project
+   holding several, and so is the answer carrying it.
 
-## Resolve which pages cover it
+Every page gathered gets one of the two answers; a covering page left
+unanswered still reads stale, and the stage fails on it.
 
-Call `documentation_coverage` — it returns every documentation page of the project with the code globs it covers, whether it is `current` or `stale`, and the paths that changed under it since it was last written or last confirmed accurate. It also returns `never_written`: directories holding changed code no page covers at all.
+Change some passages of an existing page with `edit_page_content`: each edit is
+an `old` passage copied exactly from the markdown body `read` returns and the
+`new` markdown that replaces it, and nothing else on the page is sent or
+rewritten. It is the only write that reaches a page too large to send back
+whole. Keep `update_page_content` for a full rewrite of a page small enough to
+send whole: it replaces the whole body with what it is given, as markdown.
+Write it from the page's current body as `read` returns it, keeping the
+headings, lists and tables it holds. Either way, change what the change calls
+for and leave every passage it does not touch exactly as it was: a house style
+(dash or arrow substitutions, re-quoting, re-wrapping) is never applied across
+a page the change did not otherwise affect.
 
-Match your changed-file set against each page's `covers` globs. A page whose globs match a file you just saw in the merged diff is a page this pass has to decide about. A page the coverage already calls `stale` for paths outside your diff was made stale by earlier work — leave it; this pass documents what this root shipped.
+Search the project's pages with `search` for every symbol the diff deleted or
+renamed. A page still naming one is wrong whether or not its `covers` match the
+diff, and gets the same rewrite and the same answer.
 
-`repos_unread` names checkouts that could not be read. A page covering only those reads as current on a question nobody managed to ask, so say so in the completion comment rather than treating it as clean.
+## 4. Write the page nobody has written
 
-## Intelligence (what you decide)
+`never_written` lists every directory holding changed code no page covers,
+including code other work changed, so an entry there is not on its own a page
+to write. Write one when this diff lands a surface a reader needs explained —
+a new entity, service, endpoint family or subsystem — and neither a covering
+page nor a confirmed candidate describes it.
 
-### Reviewer context — the author's implement notes
+1. Create it with `create_page`, `type_name` `documentation`, named as a reader
+   would look it up. Give it the `category` the pages describing the
+   neighbouring code already file under, and `covers`, each written
+   `<repository>:<glob>`: the run's repository as `owner/name` and a glob of
+   the code it describes written from its root, narrow enough that a
+   change under it is one this page has to answer for. The create is refused
+   without either, and a cover naming no repository is refused in a project
+   holding several. Write its body as markdown, from the story: the decision
+   behind the surface as well as its shape.
+2. Record it with `answer_documentation_page`, `answer` `rewritten`, so the new
+   page is joined to the work that made it necessary.
+3. Link it from the concept page for its surface: open that page with `read`,
+   add a wikilink to the new page where the page discusses the surface, with
+   `edit_page_content`: one edit whose `old` is the markdown passage the link
+   goes into and whose `new` is that passage with only the link added, held to
+   the same contract as a page answered above.
 
-Before deciding which pages are stale, read the shipping workflow's run-report notes and use them to focus the pass (epic #2913). Each child's `implement` agent recorded `risk` notes ("watch this") and `consideration` notes ("deliberately didn't do X because Y") while the work was fresh — exactly the hand-off that points you at the behaviour or API a page may now misrepresent. This is **read-only** context enrichment: it sharpens where you look; it is never posted anywhere.
+The stage's verdict reads the coverage once you settle. It fails while a page
+covering the diff reads stale. When no page of the project declares `covers`
+at all nothing could read stale, so the verdict passes and names the missing
+covers rather than calling the docs current; every page this stage answers
+leaves carrying covers, and the next run is read against them.
 
-Resolve the workflow that owns this root, then read its rollup digest (every shipped member's notes — you document the whole merged change, so the workflow-scoped report is the right scope):
+Name every page this stage answered in the settle note, with its answer, and
+every page it created, so a person can find them in the Documentation view. A
+`never_written` area this diff did not make necessary is named there too, and
+left for a person to decide.
 
-```bash
-WORKFLOW_ID="$(devwatch --repo "$REPO" workflow-get --issue <ISSUE> | jq -r '.id // empty')"
-if [ -n "$WORKFLOW_ID" ]; then
-  devwatch --repo "$REPO" get-report --workflow "$WORKFLOW_ID"
-fi
-```
+## 5. Link, do not restate
 
-`get-report` prints a category-grouped markdown digest (`### Risks` / `### Decisions` / `### Follow-ups`) assembled from the notes earlier agents recorded, or nothing when there are no notes.
+Pages link each other and never duplicate each other. If a concept is
+explained on one page, link it from the second rather than explaining it again
+— two copies of one fact means one of them is already wrong.
 
-- **Empty digest (or no workflow resolved) → skip.** No author context; map the changed files to pages as usual. Do not add a context block.
-- **Non-empty digest → focus the pass.** Treat each **Risks** and **Decisions** entry as a pointer to a surface whose behaviour or contract may have shifted — check the pages for those surfaces first. **Follow-ups** are deferred work, not shipped behaviour; do not document them as if they landed.
+A link is a wikilink carrying the linked page's name exactly as it is titled:
+`[[Status Model]]`. It resolves by that name alone, so search the project's
+pages with `search` for the name before writing it: a name no page carries
+links to nothing.
 
-Then, for each page the coverage flagged:
+A page the diff did not affect is left alone. Rewriting an accurate page to
+look busy is churn a reviewer has to read.
 
-1. Read the page: `read(uuid=<page uuid>)`.
-2. Read the changed code that landed under its globs.
-3. Decide: is the merged behavior, architecture, or API now misrepresented, or is the change internal?
-4. **If it is misrepresented**, rewrite the page: `update_page_content(page_uuid=<uuid>, content=<full markdown>)`. Prefer one cohesive update per surface over N narrow per-file edits — read the root body as the "what shipped and why" spec, not a file-by-file history.
-5. **If the change was internal** — a refactor, a rename, anything that does not alter what the page says — call `mark_documentation_current(page_uuid=<uuid>)`. This is the other answer a stale page has, and it is not the same as doing nothing: it records that somebody re-read the page against the change, which is what keeps "confirmed accurate" distinguishable from "nobody looked".
+## Settling
 
-Every page the coverage flagged for a path in your diff gets one of those two answers. Leaving one unanswered is the state this step exists to remove.
+You were launched for one stage of this run as a whole, not for one document,
+so there is nothing to claim. What the run is working — its repository, its
+epic and its integration branch — is stated in the launch's own *The run you
+were launched for* block; read them there, never from the checkout, which can
+hold several epic branches and proposals that are not this run's. Every child
+of the run has already settled by the time this stage starts; the work below
+acts on what they landed.
 
-Do not create pages for `never_written` areas. Which page should exist, and where it belongs in the tree, is a decision made in the Documentation view — report the areas in the completion comment so a reader can act on them.
+Settle with `worklist_set_stage_status`, which takes no uuid — the run and the
+stage rode in with the launch: `passed` when the stage did what it says;
+`failed` with a `halt_reason` when it could not — the reason in words a
+person can act on.
 
-Before finishing, run the documentation checklist against your changes if one exists.
+Give the settle a `note`: a few sentences in your own words for a person
+reading the issue later — what you found, what you chose, and what you left.
+It is stored verbatim against this attempt, so write prose, not a status
+string and not a commit message. It is optional — a settle with no note is
+valid — and it is not the `halt_reason`: the reason says what stopped the
+unit, the note says what the work was.
 
-## Wrap up
-
-1. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to every title, body, and comment below.
-
-2. Confirm the working tree is clean. Nothing this step does touches a file, so anything staged or modified is something to explain, not to commit:
-
-```bash
-git status --porcelain
-```
-
-Emit the run report (advisory — a failed post must never fail the step). Write the
-fixed JSON skeleton, filling `notes` with the pages you updated and any page you
-considered but deliberately recorded as still accurate (with the reason). Use an
-empty array (`[]`) when no page changed. Post it **before** the status flip below
-so the report exists when completion hooks fire.
-
-```bash
-cat > /tmp/devwatch-report-<ISSUE>.json <<'JSON'
-{
-  "schema_version": 1,
-  "notes": [
-    {"category": "follow_up", "text": "Updated <page> — <why>"},
-    {"category": "consideration", "text": "<page recorded as still accurate — why the change was internal>"}
-  ]
-}
-JSON
-
-devwatch --repo "$REPO" agent-report \
-  --run-id <RUN_ID> \
-  --file /tmp/devwatch-report-<ISSUE>.json \
-  || echo "  agent-report failed (advisory) — continuing"
-```
-Omit `--run-id` if RUN_ID is unavailable — the run is resolved from `DEVWATCH_AGENT_RUN_ID` instead.
-
-3. Record completion (omit `--run-id` if RUN_ID is unavailable). There is no doc commit to record — the pages are the artifact, so `--files` names them and `--commits` names the commit the pass read: the integration merge, or the dev branch's own tip when the workflow merged with no pull request.
-
-```bash
-devwatch --repo "$REPO" agent-update \
-  --run-id <RUN_ID> \
-  --status completed \
-  --summary "Docs updated for #<ISSUE>" \
-  --files "<comma-separated page names>" \
-  --commits "$MERGE_SHA"
-```
-
-4. Post completion comment to the root issue. The body is your own prose, so pass it through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
-
-```bash
-BODY=$(cat <<'BODY_EOF'
-## Docs Updated
-
-**Summary**: <which pages were updated and why>
-**Confirmed accurate**: <pages whose change was internal, or "none">
-**Not covered by any page**: <directories from never_written, or "none">
-
-Docs are up to date for #<ISSUE>.
-BODY_EOF
-)
-
-devwatch --repo "$REPO" agent-comment \
-  --issue <ISSUE> \
-  --body "$BODY"
-```
-
-## Boundary
-
-This command updates documentation pages only. It does not modify application code, it takes no git action beyond reading the merged diff, and it does not open a PR — the change has already merged.
+A `halt_reason` is read by a person deciding what to do next, so write it as
+the blocker in words they can act on — not as an error string. Never leave the
+unit `running`: a step that stops without settling is indistinguishable from
+one still in flight.

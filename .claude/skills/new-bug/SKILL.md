@@ -1,203 +1,135 @@
 ---
-description: "Create a GitHub issue for a bug report."
-capability: core
+name: new-bug
+description: File one bug as a GitHub issue — the observed behaviour, the steps that reproduce it, and criteria a reviewer can tick off.
+family: writing
 ---
+File one bug as a GitHub issue.
 
-Create a GitHub issue for a bug. Record it in devwatch. Stop.
+## 1. Establish what is broken
 
-## Mandatory reads — do this first
+Separate what was observed from what it is assumed to mean. A report of "search
+is broken" is a symptom; the issue needs the input, the observed result, and the
+result that was expected instead. Reproduce it if you can reach it — a bug you
+have seen is worth more to whoever fixes it than one you have only been told
+about.
 
-Run:
+## 2. Write it
 
-    devwatch --repo "$REPO" doc-read --skill new-bug --display
+The title states the problem, never the fix, and stays under about eighty
+characters. The body carries what is broken and its observable impact, the steps
+that reproduce it, and acceptance criteria a reviewer can tick off by running
+something. "Works properly" is not a criterion; "returns 400 with an error body
+on an empty payload" is.
 
-The output contains every doc you must read; treat it as if you opened each file directly. Do not proceed with the skill body until done.
+## 3. Place it
 
-## Parse arguments
+Read the description for a stated parent — "regression of #N", "found while
+building #N". A stated parent is confirmed once with the person and then
+written as a `child-of` link; a passing mention ("see #N") is not one, and is
+not linked. Nothing is linked without asking.
 
-Extract description, optional run ID, optional body-file path, optional parent refs, optional scenario coordinate, optional explicit child-of link, and optional brainstorm session from `$ARGUMENTS`:
-- `$ARGUMENTS` = `"login page broken"` -> DESCRIPTION="login page broken", RUN_ID=(none), PARENTS=(), FROM_SCENARIO=(none), LINK_TO=(none), FROM_BRAINSTORM=(none)
-- `$ARGUMENTS` = `"login page broken --run 7"` -> DESCRIPTION="login page broken", RUN_ID=7, PARENTS=()
-- `$ARGUMENTS` = `"login page broken --parent 42"` -> DESCRIPTION="login page broken", PARENTS=(42)
-- `$ARGUMENTS` = `"login page broken --parent 42 --parent 50"` -> PARENTS=(42, 50) — repeatable
-- `$ARGUMENTS` = `"login page broken --parent owner/repo#42"` -> cross-repo parent accepted
-- `$ARGUMENTS` = `"--body-file /tmp/devwatch-issue-body-XXX.json --run 7"` -> read the JSON file for the payload; no inline description
-- `$ARGUMENTS` = `'--from-scenario "smoke::e2e/smoke-chat.spec.ts::chat toggle button is visible in header" --link-to 1100'` -> FROM_SCENARIO=`<coord>`, LINK_TO=1100, no inline description (the skill prefills title + body from the failed run)
-- `$ARGUMENTS` = `"--from-brainstorm 11-05-26/login-bug-repro"` -> FROM_BRAINSTORM="11-05-26/login-bug-repro" (bare slug also accepted when unambiguous); the skill seeds the issue body from the session contents and the CLI back-links the session to the new issue in the same transaction
-
-Strip `--run <N>`, `--body-file <PATH>`, every `--parent <REF>`, `--from-scenario "<COORD>"`, `--link-to <REF>`, and `--from-brainstorm <SESSION>` from the description before using it. The `<COORD>` is double-quoted because it contains `::` separators and (often) spaces in the title segment — preserve the quotes when shelling out and keep the value intact (do not split on `::` yourself; pass it through).
-
-**If `--body-file <PATH>` is present:** read the file with your Read tool — it is a JSON object with the exact bytes of the request. Use its fields for the issue:
-- `description` → primary body text (verbatim, no shell quoting to worry about)
-- `subject` → short hint for the title (optional)
-- `sender` → From: line for the issue body (optional)
-- `messages` → full Gmail thread, oldest-first, when the source is the inbox promote flow (optional). Each message has `sender`, `received_at`, `body`. Preserve the full conversation in the issue body when present — the most recent reply often holds the actual question.
-
-The body-file path is generated server-side and only contains filesystem-safe characters — safe to quote with shell single-quotes if you need to shell out. Do NOT paste the file contents into Bash; read it with the Read tool.
-
-The CLI accepts the parent as `N`, `#N`, or `owner/repo#N`. Preserve the exact form the user typed. `--link-to <REF>` is a friendlier alias when promoting from a scenario failure: it is added to `PARENTS` so the rendered body carries a `child-of:` line pointing at the workflow root.
-
-## Detect repo
-
-Determine the target repository from the current working directory:
-
-```bash
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-```
-
-Pass `--repo "$REPO"` to every `devwatch` command to ensure the correct repo is targeted.
-
-## Pull failure context (when `--from-scenario` is set)
-
-When `FROM_SCENARIO` is provided, the issue title and body get prefilled from the latest failed run of that scenario.
-
-```bash
-SCENARIO_JSON=$(devwatch --repo "$REPO" scenarios show "$FROM_SCENARIO")
-```
-
-`scenarios show` accepts a numeric scenario id today; if `$FROM_SCENARIO` is a coordinate `<suite>::<file>::<title>`, first resolve it to a numeric id by listing the catalogue and matching the coordinate triple, then re-run `show`:
-
-```bash
-SCENARIO_ID=$(devwatch --repo "$REPO" scenarios list --filter "<title segment>" \
-  | awk -v file="<file segment>" '$0 ~ file {print $1}' \
-  | tr -d '#' | head -n1)
-SCENARIO_JSON=$(devwatch --repo "$REPO" scenarios show "$SCENARIO_ID")
-```
-
-Parse the JSON response (shape: `{scenario, group, suite, last_runs: [...]}`). Pull these fields:
-
-- `scenario.title` → seed the issue title as `Regression: <scenario.title>` when no other title is supplied.
-- The first entry in `last_runs` whose `status == "failed"` → the failure to report. Capture its `artifacts_dir` and any failure summary the CLI prints alongside the JSON (`devwatch scenarios show` prints a short failure list to stderr/stdout when the run is red — copy the first ~10 lines verbatim).
-- `<artifacts_dir>/trace.zip` → "Trace" link in the body if it exists.
-- `<artifacts_dir>/screenshot.png` → "Screenshot" link if it exists.
-- `<artifacts_dir>/video.webm` → "Video" link if it exists.
-
-Write a `## Failure` block at the top of the issue body with the truncated error message and the artifact paths. Keep it short — the goal is enough context for `/fix-issue` to start; the dashboard's scenario drawer (#1387) carries the full artifact view.
-
-## Pull brainstorm context (when `--from-brainstorm` is set)
-
-When `FROM_BRAINSTORM` is provided, the issue title and body get seeded from the session contents:
-
-```bash
-SESSION_TEXT=$(devwatch --repo "$REPO" brainstorm-read --session "$FROM_BRAINSTORM" --display)
-```
-
-The output streams every file under the session (README first, then alphabetised siblings, then subfolders) with `===== <abs path> =====` headers — the same shape as `doc-read --display`. Summarise it into the issue body — read the README's `## Summary` + `## Files` index for orientation, then the child `.md` files (`open-questions.md`, …) for the detail; promote the session's substance into the bug description and any concrete repro steps from the session into the `## Steps to reproduce` block. The CLI back-links the session to the new issue automatically — do **not** write `brainstorm: <path>` into the body yourself.
-
-## Intelligence (what you decide)
-
-1. Write a clear issue title and structured body (description, steps to reproduce, severity). When `FROM_SCENARIO` is set and the user did not pass an inline description, default the title to `Regression: <scenario.title>` and seed the body from the failure block above.
-2. Assess the area and priority. Regression bugs are usually `frontend` + `P1-high` unless the failure clearly points elsewhere.
-3. **Detect implicit parent references.** If the user did not pass `--parent` or `--link-to` but the description contains a phrase like *"while testing #N"*, *"regression of #N"*, *"found in #N"*, or *"child-of #N"*, surface the candidate to the user once: *"This looks like a child of #N — link as `child-of`?"* If confirmed, append `N` to `PARENTS`. Do not auto-link without confirmation — mentions like "related to #N" or "see #N for context" are not parent relationships.
-4. **Detect epic scope.** Most bugs are single-area and **not** epics. Flag the bug as an epic only when the scoping shows **any** of:
-   - The user explicitly says *"epic"*, *"this is an epic bug"*, or asks for an epic.
-   - The root cause spans **3 or more independent fix workstreams** that each deserve their own issue (e.g., a systemic regression touching DB, server, CLI, and dashboard that must be split into per-area fixes).
-   - You find yourself writing a *"Suggested child breakdown"* section because a single branch can't carry the whole fix.
-   Narrow bugs are **not** epics, even when the repro is long. When in doubt, surface the candidate once: *"This bug looks like an epic (N workstreams). Mark as epic?"* Set `IS_EPIC=true` only on confirmation or explicit request. If `IS_EPIC=true`, add a `## Suggested child breakdown` section to the body listing the fix workstreams as a numbered list.
-5. **Record a model hint.** Assess the issue's difficulty and append the managed `model-hint:` line — see **Model hint (record once)** below — as the final line of the body.
-
-## Model hint (record once)
-
-Assess the issue's difficulty and record one managed `model-hint:` line for the three reasoning actions the pipeline launches — `implement`, `quality`, `propagation-scan`. It seeds the per-workflow **Model** tab downstream (epic #3139); the GitHub→DB sync later mirrors the line into `issues.model_hint`. You write it once, here, at creation — never edit it afterward (no `gh issue edit --body`).
-
-Format — one flush-left line, all three actions, always in this order:
-
-    model-hint: implement=<model>:<effort>, quality=<model>:<effort>, propagation-scan=<model>:<effort>
-
-Bounded catalog — use **only** these values, never anything outside them:
-
-- `<model>` is one of `haiku`, `sonnet`, `opus` (reasoning strength, weakest→strongest)
-- `<effort>` is one of `low`, `medium`, `high`, `xhigh`, `max` (thinking effort, least→most)
-
-Pick by difficulty. `implement` does the work, so it never scores below `quality` or `propagation-scan`:
-
-- **Simple** — a one-line change, a copy/enum/config tweak, a doc-only edit, or a localized single-file change with no subtle invariants:
-  `model-hint: implement=sonnet:high, quality=sonnet:medium, propagation-scan=sonnet:medium`
-- **Moderate** — a self-contained change over a few files with a clear contract (the common case):
-  `model-hint: implement=opus:high, quality=opus:high, propagation-scan=opus:high`
-- **Hard** — cross-layer work, subtle invariants or concurrency, dispatcher or state-machine changes, or a wide blast radius:
-  `model-hint: implement=opus:max, quality=opus:xhigh, propagation-scan=opus:xhigh`
-
-When unsure, fall back to the built-in default `opus:xhigh` for all three actions. End the composed body with this line; the CLI appends the `Links:` block below it.
-
-## Execution
-
-1. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to every title, body, and comment below.
-
-2. When `LINK_TO` is set, append it to `PARENTS` so the rendered body carries `child-of: #<LINK_TO>` (the CLI does the rendering — the skill just passes the parent ref through).
-
-3. Build the `devwatch create-issue` invocation. The title and the body are both your own prose and name files and symbols in backticks by convention, so pass each through a **quoted heredoc** — an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
-
-```bash
-TITLE=$(cat <<'TITLE_EOF'
-<title>
-TITLE_EOF
-)
-
-BODY=$(cat <<'BODY_EOF'
-<structured body>
-BODY_EOF
-)
-
-devwatch --repo "$REPO" create-issue \
-  --type bug \
-  --title "$TITLE" \
-  --body "$BODY" \
-  --area <backend|frontend|agents|infrastructure> \
-  --priority <P0-critical|P1-high|P2-medium|P3-low> \
-  --parent <N> \
-  --regression-scenario "<COORD>" \
-  --epic \
-  --from-brainstorm <SESSION> \
-  --run-id <RUN_ID>
-```
-
-Add one `--parent <REF>` for each entry in `PARENTS` (repeatable). Add one `--regression-scenario "<COORD>"` for each scenario coordinate the issue should track — pass `FROM_SCENARIO` here when it is set; the flag is repeatable for issues that cover multiple regressions. Omit `--parent` entirely when `PARENTS` is empty; omit `--regression-scenario` entirely when no scenario is in scope. Omit `--run-id` if no RUN_ID was parsed from arguments. Include `--epic` only when `IS_EPIC=true`. Include `--from-brainstorm <SESSION>` when `FROM_BRAINSTORM` is set — the CLI back-links the session to the new issue (writes `linked_issues` in the session README AND appends `brainstorm: <path>` under the issue body's `Links:` block) in the same transaction.
-
-The CLI handles everything deterministically: issue creation, labels, devwatch trace, sync. The body's `Links:` block is rendered by the CLI — it always emits a single `Links:` header followed by `- child-of: #N` lines (one per parent) and `regression-scenario: <coord>` lines (one per scenario), in that order. The body parser added in #1386 picks the regression line up on the next sync and rebuilds the `scenario_links` cache. When `--epic` is passed, the CLI also creates and pushes the `epic/<N>-<slug>` branch on origin so child issues can branch off it (see #942). The `epic` label is authoritative — GitHub is the source of truth and the server derives the `is_epic` column from the label on every sync.
-
-## Example
-
-Promoting a failing smoke run into a regression-tracked bug under workflow #1100:
-
-```bash
-/new-bug --from-scenario "smoke::e2e/smoke-chat.spec.ts::chat toggle button is visible in header" --link-to 1100
-```
-
-The skill resolves the scenario, pulls the failure context, then runs:
-
-```bash
-devwatch --repo "$REPO" create-issue \
-  --type bug \
-  --title "Regression: chat toggle button is visible in header" \
-  --body "$BODY" \
-  --area frontend \
-  --priority P1-high \
-  --parent 1100 \
-  --regression-scenario "smoke::e2e/smoke-chat.spec.ts::chat toggle button is visible in header"
-```
-
-Where `$BODY` looks like:
+A link is a trailing block, not a sentence — the parser that turns it into a
+graph edge reads only a line shaped exactly `child-of: #N` under its own
+`Links:` header, both required, and finds nothing from any other phrasing:
 
 ```
-## Failure
-TimeoutError: locator.click: Timeout 5000ms exceeded
-Trace: <artifacts_dir>/trace.zip
-Screenshot: <artifacts_dir>/screenshot.png
-
 Links:
-- child-of: #1100
-regression-scenario: smoke::e2e/smoke-chat.spec.ts::chat toggle button is visible in header
+- child-of: #N
 ```
 
-(The CLI assembles the `Links:` block — the skill writes only the `## Failure` block plus any free-text. Do not author `Links:` by hand; let `--parent` and `--regression-scenario` render it.)
+A body that already carries a block — a `blocks` line naming other work —
+keeps that one block, and the `child-of` line is written as the block's first
+line, above whatever is already there. The edge is what the block is read for,
+so it is what a person opening the issue meets first.
 
-## Boundary
+Most bugs are one issue. Treat it as an epic only when the cause genuinely
+splits into three or more independent fixes that cannot share a branch — a long
+reproduction is not the same thing as a wide one.
 
-This command creates the issue. It does NOT fix the bug. Report the issue number and ask: "Want me to fix it? I'll run `/fix-issue <N>`"
+## 4. File it
 
-When you launched from a `--body-file`, delete the file after `devwatch create-issue` succeeds so temp files don't accumulate:
+`file_issue` with the title, the body, and the labels for its area and
+priority. Report the number it answers with.
 
-```bash
-rm -f "$BODY_FILE"
-```
+When the work came out of a brainstorming session, link each issue filed here
+to it once the issue exists: `link_brainstorm_work` with the session's uuid and
+the issue as `owner/name#N`. The link is what the issue and the session both
+read to say where the work came from, so it is written with the tool and never
+as a `brainstorm` line in the body. Call it straight after filing: an issue
+filed with `file_issue` is in the mirror by the time that tool returns, and one
+filed with `gh` has its repository read afresh on the call. If the tool still
+says the mirror holds no such issue, check the coordinate, and if it is right,
+name the issue to the person to link from the session.
+
+Filing is the whole job. Do not fix the bug here — an issue and its fix reviewed
+together is an issue nothing reviewed.
+
+## Writing for GitHub
+
+Anything written onto an issue is public, permanent, and read months later by
+someone with no knowledge of the run that produced it. Write for that reader:
+third person, present tense, naming the change rather than the process that
+produced it. No run identifiers, no internal phase names, no first-person
+agent voice, no real names or addresses — a role (`the reporter`, `the
+reviewer`) says everything the reader needs.
+
+Every issue write here goes through the app's issue tools — `file_issue`,
+`edit_issue` and `delete_issue` — which put the write in the Backlog before
+they return. In a session where those tools are not loaded, make the same
+write with `gh` instead:
+`gh issue create`, `gh issue edit`, `gh issue close` or `gh issue comment`.
+A write made that way reaches the Backlog only on the repository's next
+refresh, so say so when reporting it rather than reading its absence there as
+a failure.
+
+## Reporting back
+
+You are invoked either on demand — by a person who already knows what they want
+— or as one step of a run. The two report back differently, so establish which
+before doing anything.
+
+Call `worklist_claim_item` with no arguments.
+
+- `no_anchor` — you were invoked on demand. There is no unit to settle: do the
+  work above, then report what you produced to the person who asked, naming it
+  by issue number or path so they can open it.
+- `claimed: true` — you are a step of a run. Do the work above against the
+  claimed item's `title` and `attachments`, then settle with
+  `worklist_set_item_status` and the item's `item_uuid`: `passed` when the step
+  did what it says, `failed` with a `halt_reason` when it did not, and
+  `skipped` when the question no longer exists. A step that decided its work
+  fails says so with the reason, never with `passed`.
+- `claimed: false` with `already_running` — another session has it. Stop.
+
+A claimed step whose work stops for the person's decision — a proposal they
+must approve, a choice only they can make — does not settle at the pause. Call
+`worklist_set_item_status` with the `item_uuid`, `status: "waiting"` and a
+`question`: one line saying what the person must decide. That settles nothing:
+the step stays open and yours, and the run shows them the question. Once they
+have answered, do what the answer asks, then settle — never `passed` at the
+pause, which reads the step done before they have decided anything.
+
+A `skipped` settle also says what became of this step's work, as an `outcome`
+with that outcome's evidence. A skip naming none is refused, and so is one
+whose outcome has nothing behind it: you are the only one who knows, and a bare
+skip leaves every reader after you guessing which of the three it was.
+
+- `already_delivered` — the work is already done, in this repository or
+  another. Give `references`, one per place it landed: a commit as
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
+- `left_out` — the run decided not to do this work. Give `outcome_reason`, one
+  line saying why.
+- `not_needed` — the question turned out not to exist. Give `outcome_reason`,
+  one line saying why.
+
+A `halt_reason` is read by a person deciding what to do next, so write it as
+the blocker in words they can act on, not as an error string. Never leave a
+claimed unit `running`: a step that stops without settling is
+indistinguishable from one still in flight.

@@ -1,58 +1,155 @@
 ---
-description: "Seed or refresh a project's documentation set — one skill, two modes (--mode create|update). Create seeds the recommended docs from the project's capabilities; update re-derives the installed tree's status so you can refresh what's stale."
-capability: core
+name: init-docs
+description: Write or refresh the project's documentation pages, each naming the skills and rules the bank should bind it to.
+family: writing
 ---
+Write or refresh the project's documentation pages.
 
-Seed or refresh this repo's documentation set. **One skill, two modes** — there is no separate create-only and update-only path (epic #2907):
+Documentation is what carries knowledge that cannot be recovered from the code —
+why a thing is shaped as it is, how the parts connect, what the words mean. That
+is what this writes; the code says the rest.
 
-- `--mode create` seeds the recommended doc set from the project's declared capabilities, then you adapt it to the repo.
-- `--mode update` re-derives the status of the installed docs tree so you can refresh what is stale.
+Documentation is a page in the app, not a file in the repository. Every doc
+this writes is a documentation page, and nothing here touches the working tree:
+run `git status --porcelain` when you start and again when you finish, and the
+two readings are the same.
 
-Leave everything **uncommitted** for human review. This skill takes no git action and opens no issues, branches, or PRs.
+## 1. Read the repository first
 
-## Parse arguments
+Its layout, its entry points, its own README. A documentation set written before
+reading the code describes a project that does not exist, and is worse than none
+because the next reader believes it.
 
-The launch embeds:
+## 2. Read what the project already holds
 
-- `--mode` — `create` or `update`. Required. Run the matching section below and ignore the other.
-- `--capabilities` — *(create)* comma-separated project shape, e.g. `python,typescript,duckdb`. When the launch omits it, omit it downstream too — the CLI seeds the catalog baseline.
-- `--docs-root` — *(update)* the installed docs tree to refresh status against.
+Call `documentation_coverage`. It returns every documentation page of the
+project with the `covers` globs it declares and whether it reads current, and
+`never_written`: the directories holding changed code no page covers. Open a
+page with `read` before deciding anything about it.
 
-Fail fast if `--mode` is missing or is neither `create` nor `update`.
+## 3. Decide what the set should hold
 
-## Mode: create
+Three audiences, kept apart:
 
-The recommended set is seeded by the installed CLI — **no agent reasoning is needed for the default**:
+- The cross-project principles — how code is written here, regardless of the
+  repository.
+- This project's own shape — its architecture, its boundaries, the decisions
+  behind them and what each cost.
+- What the product does, for a reader who will never open the code.
 
-```bash
-devwatch init-docs --mode create --capabilities <capabilities>
-```
+Write only what this repository needs. A page describing a stack it does not use
+is a page that will be wrong before anyone notices it was never right.
 
-It seeds into the current directory (the repo this terminal opened in) — do not pass a path positional. Pass the `--capabilities` value verbatim from the launch; omit the flag entirely when the launch did, so the CLI falls back to the catalog baseline (`general` docs + the `critical` rule). This copies the resolved docs into `documentation/general/`, the project / product scaffolds into `documentation/`, the matching rule files into `.claude/rules/`, and generates a starter `CLAUDE.md`. Existing files are skipped — pass `--force` only if the user explicitly asks for a refresh. Record the created vs skipped output.
+## 4. Write each page
 
-Then **adapt** the scaffolded docs to this repo's actual identity:
+Create it with `create_page`, `type_name` `documentation`, its body written as
+markdown and named as a reader would look it up. Give it a `category`, the area it files under, and keep one
+audience's pages out of another's category. Give it `covers`, each written
+`<repository>:<glob>`: the repository the code lives in, as `owner/name` the
+way `documentation_coverage` names it in `repos_read`, and a glob of the code
+it describes written from that repository's root, narrow enough that a change
+under it is one this page has to answer for. A glob is matched from the root and
+never from a subdirectory: `api/**` covers the top-level `api` directory, not
+every directory named `api`. A page describing code in several repositories carries
+covers for each. A page about a principle rather than one part of the code
+covers the code that principle governs. The create is refused without either,
+because a page covering nothing can never read stale, and a cover naming no
+repository is refused in a project holding several, because a glob with no
+repository matches the same-named files of every other one.
 
-- Read `./README.md` (if any) and the real project layout to learn the domain, stack, and conventions. If `documentation/general/documentation.md` was just seeded, follow its guidance.
-- **Prune** docs that clearly do not apply (e.g. a TypeScript doc set in a pure-Python CLI). State the reason for each removal.
-- **Adapt** placeholder language in the docs that stay — replace "the application" / "your project" with what this repo actually is.
-- **Fill `CLAUDE.md`** — project name, one-line stack summary, key directories, top rules, dev commands. Mark unknowns `TBD`; do not invent commands.
+Link docs to each other by wikilink, carrying the linked page's name exactly as
+it is titled: `[[Status Model]]`. A concept is explained on one page and linked
+from every other page that needs it, never explained twice. A wikilink resolves
+by that name alone, so search the project's pages with `search` before naming a
+page, both for the page a link should reach and for a name a page already
+carries.
 
-## Mode: update
+## 5. Say who each doc is for
 
-Re-derive the status of the installed tree and report it:
+Which skills and which rules need it, written as prose the reader can act on
+rather than as a declaration the page expects something to act on. Nothing reads
+a page to work out a reading list: a doc reaches an agent because it is in the
+bank and somebody bound it there to the consumer that must read it, one consumer
+at a time, and that binding is the whole of it.
 
-```bash
-devwatch init-docs --mode update --docs-root <docs-root>
-```
+So the audience you write down is what tells whoever binds the doc where it
+goes. A doc nothing is bound to is a doc nothing will ever open.
 
-The output classifies every catalog doc as `installed` / `update_ready` / `adapted` / `available` and lists the ones needing attention. Status is read fresh every call — there is no cached state to invalidate; running this *is* the re-analysis that refreshes the settings Documentation view. Applying an individual change is the human's call through that view's **Update** / **Keep mine** buttons — your job is to refresh the analysis and explain it, not to overwrite docs the user adapted. Read the report and:
+## 6. Refresh rather than rewrite
 
-- **Flag `update_ready` docs** — unedited copies that lag the current template; a safe fast-forward the user can apply with one click.
-- **Assess `adapted` docs** — locally edited, so they differ from the template. Read them, summarise what diverged, and recommend update-or-keep. Never overwrite without the user's say-so.
-- **Surface `available` docs** the repo could add for its stack.
+On a second pass, read a page before changing it. A doc still accurate is left
+alone — rewriting an accurate page to look busy is churn a reviewer has to read.
+One the code has moved on from is brought up to date with `edit_page_content`,
+or rewritten with `update_page_content` when all of it has to change.
+One whose code was renamed or relocated keeps its body and has its covers
+replaced with `update_documentation_covers`, each written
+`<repository>:<glob>`. A cover `documentation_coverage` lists under `untied`
+names no repository and matches no change; name its repository the same way. A
+cover it lists under `unmatched` matches no file its repository tracks, most
+often left behind by a move; replace it with the glob of where the code now is.
+A doc someone adapted is theirs;
+report what diverged and recommend, rather than overwriting their edit.
 
-Report the status summary and your recommendations.
+Change some passages of an existing page with `edit_page_content`: each edit is
+an `old` passage copied exactly from the markdown body `read` returns and the
+`new` markdown that replaces it, and nothing else on the page is sent or
+rewritten. It is the only write that reaches a page too large to send back
+whole. Keep `update_page_content` for a full rewrite of a page small enough to
+send whole: it replaces the whole body with what it is given, as markdown.
+Write it from the page's current body as `read` returns it, keeping the
+headings, lists and tables it holds. Either way, change what the change calls
+for and leave every passage it does not touch exactly as it was: a house style
+(dash or arrow substitutions, re-quoting, re-wrapping) is never applied across
+a page the change did not otherwise affect.
 
-## Boundary
+## Reporting back
 
-This skill seeds or refreshes documentation and stops. Leave the changes uncommitted for human review — no commits, no branches, no PRs, no issue creation.
+You are invoked either on demand — by a person who already knows what they want
+— or as one step of a run. The two report back differently, so establish which
+before doing anything.
+
+Call `worklist_claim_item` with no arguments.
+
+- `no_anchor` — you were invoked on demand. There is no unit to settle: do the
+  work above, then report what you produced to the person who asked, naming it
+  by issue number or path so they can open it.
+- `claimed: true` — you are a step of a run. Do the work above against the
+  claimed item's `title` and `attachments`, then settle with
+  `worklist_set_item_status` and the item's `item_uuid`: `passed` when the step
+  did what it says, `failed` with a `halt_reason` when it did not, and
+  `skipped` when the question no longer exists. A step that decided its work
+  fails says so with the reason, never with `passed`.
+- `claimed: false` with `already_running` — another session has it. Stop.
+
+A claimed step whose work stops for the person's decision — a proposal they
+must approve, a choice only they can make — does not settle at the pause. Call
+`worklist_set_item_status` with the `item_uuid`, `status: "waiting"` and a
+`question`: one line saying what the person must decide. That settles nothing:
+the step stays open and yours, and the run shows them the question. Once they
+have answered, do what the answer asks, then settle — never `passed` at the
+pause, which reads the step done before they have decided anything.
+
+A `skipped` settle also says what became of this step's work, as an `outcome`
+with that outcome's evidence. A skip naming none is refused, and so is one
+whose outcome has nothing behind it: you are the only one who knows, and a bare
+skip leaves every reader after you guessing which of the three it was.
+
+- `already_delivered` — the work is already done, in this repository or
+  another. Give `references`, one per place it landed: a commit as
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
+- `left_out` — the run decided not to do this work. Give `outcome_reason`, one
+  line saying why.
+- `not_needed` — the question turned out not to exist. Give `outcome_reason`,
+  one line saying why.
+
+A `halt_reason` is read by a person deciding what to do next, so write it as
+the blocker in words they can act on, not as an error string. Never leave a
+claimed unit `running`: a step that stops without settling is
+indistinguishable from one still in flight.

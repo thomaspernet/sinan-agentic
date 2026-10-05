@@ -1,90 +1,74 @@
 ---
-description: "Open the epic-level PR for an epic-rooted workflow."
-capability: core
+name: submit-epic-pr
+description: Open the epic's pull request into the development branch, once every child has landed and no proposal is already open for the branch.
+family: delivery
 ---
+Open the epic's pull request into the development branch.
 
-Open the epic PR for an epic-rooted workflow (#1884). Wraps the same `gh pr create` + closes-trailer body + `workflows.pr_number` write that used to run in-process — moved into a skill so the dashboard's inline terminal opens like every other workflow / step action.
+The epic, the integration branch and the development branch are the ones the
+launch names in *The run you were launched for*. A checkout can hold other
+epic branches and other proposals; none of them is this run's, and a proposal
+found for one of them does not make this step done.
 
-The readiness gate has already run on the server before this skill launched; if you got here, every child is closed on GitHub and present on the epic / shared branch. Do not re-prompt the user.
+## 1. Confirm every child has landed
 
-## Mandatory reads — do this first
+The launch lists the run's members with how the run settled each. A member
+settled `skipped` is neither waited for nor named as a blocker, whatever its
+issue or its branch reads: its line says which of the three it was — work
+already delivered, work left out of this epic, or work that turned out not to
+be needed — and none of the three is a child still to land. Every other member
+is a child that must have landed. One the run has not settled, one
+settled `failed`, or one whose branch has not merged into the integration
+branch means the epic is not ready to propose — settle `failed` naming the
+child. An integration branch that is not on origin, or an epic that is not this
+repository's, is a halt naming what was expected, never a proposal for what the
+checkout holds.
 
-Run:
+## 2. Check for a proposal already open
 
-    devwatch --repo "$REPO" doc-read --skill submit-epic-pr --display
+`gh pr list --head <integration-branch> --state open`, with the named branch.
+One open pull request per branch: a second proposal for one branch splits
+review across two threads. If one is open for the named branch, this step is
+already done.
 
-The output contains every doc you must read; treat it as if you opened each file directly. Do not proceed with the skill body until done.
+## 3. Open it
 
-## Parse arguments
+Open the pull request from the named integration branch into the named
+development branch.
+The body summarises what the epic changed and how a reviewer convinces
+themselves it works — the children's own titles, not a restatement of every
+commit. A member whose work was already delivered is listed with the
+references its line names, so a reviewer knows where to read it. A member the
+run left out, and one whose work turned out not to be needed, is listed under
+what the epic does not ship, with the reason its line gives, so a reviewer
+reads its absence as a decision rather than an oversight.
 
-`$ARGUMENTS` shape:
+Write nothing a reader outside this run cannot understand: no run identifiers,
+no phase names, no first-person agent voice.
 
-```
-<epic> --workflow-id <id> [--run <run_id>]
-```
+## Settling
 
-Examples:
+You were launched for one stage of this run as a whole, not for one document,
+so there is nothing to claim. What the run is working — its repository, its
+epic and its integration branch — is stated in the launch's own *The run you
+were launched for* block; read them there, never from the checkout, which can
+hold several epic branches and proposals that are not this run's. Every child
+of the run has already settled by the time this stage starts; the work below
+acts on what they landed.
 
-- `185 --workflow-id 18 --run 42` → open the epic PR for epic #185 on workflow 18, attach to agent-run 42.
+Settle with `worklist_set_stage_status`, which takes no uuid — the run and the
+stage rode in with the launch: `passed` when the stage did what it says;
+`failed` with a `halt_reason` when it could not — the reason in words a
+person can act on.
 
-Extract `EPIC` (positional, integer), `WORKFLOW_ID` (`--workflow-id <id>`), and `RUN_ID` (`--run <id>`).
+Give the settle a `note`: a few sentences in your own words for a person
+reading the issue later — what you found, what you chose, and what you left.
+It is stored verbatim against this attempt, so write prose, not a status
+string and not a commit message. It is optional — a settle with no note is
+valid — and it is not the `halt_reason`: the reason says what stopped the
+unit, the note says what the work was.
 
-If `WORKFLOW_ID` is missing, **stop** — this skill is only for workflow-bound submissions launched from the dashboard. The legacy CLI path (no workflow id) is for direct ad-hoc use, not the dashboard chip.
-
-## Detect repo
-
-```bash
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-```
-
-Pass `--repo "$REPO"` to every `devwatch` command.
-
-## Execution
-
-Hand the work to the existing CLI — it dispatches on workflow shape (EPIC_INTEGRATION vs SAME/batch), composes the closes-trailer body, runs `gh pr create`, writes `workflows.pr_number`, and updates the agent run row:
-
-```bash
-devwatch --repo "$REPO" submit-epic-pr "$EPIC" \
-  --workflow-id "$WORKFLOW_ID" \
-  --run-id "$RUN_ID"
-```
-
-Omit `--run-id` if no `RUN_ID` was parsed.
-
-The CLI prints the PR URL, the shipped-child list, and the agent-run id. Surface those lines to the user verbatim — they are the only acknowledgement the user gets that the click did something.
-
-### Fold in the workflow's reviewer notes
-
-After the ship PR is open, fold the workflow's accumulated step notes into its body so the reviewer opens it with the risks, decisions, and follow-ups the implementing agents recorded. This edits the PR body the CLI just wrote — no new posting mechanism.
-
-1. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to the notes section. The digest is assembled from notes earlier agents wrote, so it may carry banned tokens or personal data — review and redact before posting.
-
-2. Read the workflow's notes digest:
-
-   ```bash
-   devwatch --repo "$REPO" get-report --workflow "$WORKFLOW_ID"
-   ```
-
-   It prints a category-grouped markdown digest (`### Risks` / `### Decisions` / `### Follow-ups`), or nothing when there are no notes.
-
-3. **Empty digest → stop.** Leave the PR body exactly as the CLI wrote it; no section is added.
-
-4. Non-empty digest → append the reviewed digest to the PR body under a `## Reviewer notes` heading. Take the PR number from the CLI's `Epic PR #<n>` line, keep the existing body intact — the `Closes #N` trailers drive auto-close on release, so **never drop them** — and write it back:
-
-   ```bash
-   gh pr view <PR_NUMBER> --repo "$REPO" --json body -q .body > /tmp/epic-pr-body-$EPIC.md
-   printf '\n\n## Reviewer notes\n\n' >> /tmp/epic-pr-body-$EPIC.md
-   # append the reviewed digest (redacted per step 1) below the heading, then:
-   gh pr edit <PR_NUMBER> --repo "$REPO" --body-file /tmp/epic-pr-body-$EPIC.md
-   ```
-
-### What the CLI does (so you can explain failures)
-
-- **EPIC_INTEGRATION shape**: PR head = `epic/<N>-<slug>` (the epic integration branch), PR base = repo dev branch. Body lists `Closes #<root>` plus `Closes #<child>` per shipped child.
-- **SAME/batch shape**: PR head = `workflow.base_branch` (the shared branch every step landed on), PR base = repo dev branch. Body lists `Closes` lines for the root epic and every `done` step.
-
-Both shapes label the PR `epic` and write `workflows.pr_number` so the dashboard's `submit-workflow-pr` chip flips to `done` and **Merge PR** unblocks.
-
-## Boundary
-
-This skill opens the PR. It does not merge, does not run `/release`, and does not file follow-up issues. Tell the user the next step is to wait for CI green, then run `/merge-pr` (or click the workflow chip).
+A `halt_reason` is read by a person deciding what to do next, so write it as
+the blocker in words they can act on — not as an error string. Never leave the
+unit `running`: a step that stops without settling is indistinguishable from
+one still in flight.

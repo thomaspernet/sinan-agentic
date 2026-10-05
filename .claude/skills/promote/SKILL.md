@@ -1,10 +1,9 @@
 ---
-name: release
-description: Cut the release the promoted work ships, against the published history read live.
+name: promote
+description: Promote the merged work onto the next branch of the cascade, reusing the checks result its merge recorded.
 family: delivery
-capability: releasable
 ---
-Cut the release the promoted work ships.
+Promote the merged work onto the next branch of the cascade.
 
 ## 1. Confirm the checks result
 
@@ -26,32 +25,24 @@ while checks are declared — `pending`, `failing`, or no result recorded — is
 halt naming it. Do not run the check script, rerun a workflow, or read another
 commit's checks to stand in for the recorded result.
 
-## 2. Read what is already published
+## 2. Promote through the run
 
-`gh release list` — read it live rather than from anything cached, and decide
-from it and from the nature of the work that landed which part of the version
-advances: `major`, `minor` or `patch`.
+Call `worklist_promote`. It takes no arguments: the stage you were launched for
+names the tier it promotes onto. The app reads where the tier below stands,
+merges it onto the tier above, and records that commit on this stage in the
+same call — that record is what the stage's truth is read from, by asking
+whether the commit is contained in the tier. Do not promote with `git`, `gh` or
+a pull request yourself: a promotion made that way records nothing, and a stage
+whose record names no commit classifies as nothing promoted.
 
-## 3. Cut it through the run
+Promotion moves what is already there; it never rewrites history and never
+force-pushes. A promotion that finds nothing to move still records the commit
+it read — a re-run after a promotion that landed is a settled success, not a
+halt.
 
-Call `worklist_cut_release` with the tier this stage releases to and the bump
-you decided. The tier is not yours to choose: the stage you were launched for
-cuts for exactly one, and any other is refused naming both (#2642). The app
-derives the next version from the published history read live, cuts the
-release against the tier's branch, and records the tag on this stage in the
-same call — that record is what the stage's truth is read from, by probing
-the tag on origin. Do not cut with `gh` yourself: a tag cut that way records
-nothing. The app's own Ship view is the one exception
-— a cut there for the tier this stage stands at records on it too (#2641) —
-and it is no substitute for cutting here: it names no run.
-
-`changed: false` means the tag was already published — a re-run after a cut
-that landed — and the record names it: a settled success, not a halt.
-
-## 4. Confirm it
-
-Read the release back by the tag the call returned and confirm it points at
-the promoted branch's commit.
+A conflict at a promotion boundary means the tiers have diverged, which is a
+decision about intent — settle `failed` with what the call answered, rather
+than resolving it here.
 
 ## Settling
 

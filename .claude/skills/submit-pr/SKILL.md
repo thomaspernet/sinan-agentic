@@ -1,144 +1,60 @@
 ---
-description: "Submit the current branch as a PR."
-capability: core
+name: submit-pr
+description: Open the pull request a standalone run proposes, from the branch its work landed on into the development branch.
+family: delivery
 ---
+Open the pull request a standalone run proposes into the development branch.
 
-Wrap up a branch: commit, push, create PR, record trace.
+This run delivers one issue rather than an epic, so there are no children to
+confirm have landed — what the run's members wrote is the whole proposal. The
+repository and the development branch are the ones the launch names in *The
+run you were launched for*.
 
-## Mandatory reads — do this first
+## 1. Find the branch the work landed on
 
-Run:
+The run's own branch: the one its member implemented on, or the integration
+branch its member merged into where the run has one — the launch names it
+where the run has one. Read it rather than assume it — a proposal opened from
+the wrong branch proposes someone else's work.
 
-    devwatch --repo "$REPO" doc-read --skill submit-pr --display
+## 2. Check for a proposal already open
 
-The output contains every doc you must read; treat it as if you opened each file directly. Do not proceed with the skill body until done.
+`gh pr list --head <branch> --state open`. One open pull request per branch: a
+second proposal for one branch splits review across two threads. If one is
+open, this step is already done.
 
-## Parse arguments
+## 3. Open it
 
-Extract issue number and optional run ID from `$ARGUMENTS`:
-- `$ARGUMENTS` = `""` → ISSUE=(none), RUN_ID=(none)
-- `$ARGUMENTS` = `"42"` → ISSUE=42, RUN_ID=(none)
-- `$ARGUMENTS` = `"42 --run 7"` → ISSUE=42, RUN_ID=7
-- `$ARGUMENTS` = `"--run 7"` → ISSUE=(none), RUN_ID=7
+Open the pull request from that branch into the development branch, naming the
+issue it closes. The body says what changed and how a reviewer convinces
+themselves it works.
 
-If RUN_ID is present, forward it as `--run-id` to the `devwatch submit-pr` call.
+Write nothing a reader outside this run cannot understand: no run identifiers,
+no phase names, no first-person agent voice.
 
-## Detect repo
+## Settling
 
-Determine the target repository from the current working directory:
+You were launched for one stage of this run as a whole, not for one document,
+so there is nothing to claim. What the run is working — its repository, its
+epic and its integration branch — is stated in the launch's own *The run you
+were launched for* block; read them there, never from the checkout, which can
+hold several epic branches and proposals that are not this run's. Every child
+of the run has already settled by the time this stage starts; the work below
+acts on what they landed.
 
-```bash
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-```
+Settle with `worklist_set_stage_status`, which takes no uuid — the run and the
+stage rode in with the launch: `passed` when the stage did what it says;
+`failed` with a `halt_reason` when it could not — the reason in words a
+person can act on.
 
-Pass `--repo "$REPO"` to every `devwatch` command to ensure the correct repo is targeted.
+Give the settle a `note`: a few sentences in your own words for a person
+reading the issue later — what you found, what you chose, and what you left.
+It is stored verbatim against this attempt, so write prose, not a status
+string and not a commit message. It is optional — a settle with no note is
+valid — and it is not the `halt_reason`: the reason says what stopped the
+unit, the note says what the work was.
 
-## Checkout the correct branch
-
-If ISSUE is present, verify the current branch belongs to that issue:
-
-```bash
-git branch --show-current
-```
-
-The branch name must start with `fix/<ISSUE>-`, `feat/<ISSUE>-`, `refactor/<ISSUE>-`, `chore/<ISSUE>-`, `docs/<ISSUE>-`, or `ci-fix/<ISSUE>-`.
-
-If the current branch does **not** match, find and checkout the correct branch:
-
-```bash
-git branch -a | grep -E "(fix|feat|ci-fix)/<ISSUE>-"
-```
-
-Checkout the matching branch. If no matching branch exists, **stop** — tell the user no branch exists for issue #ISSUE.
-
-If ISSUE is not present, stay on the current branch.
-
-## Prerequisites
-
-Run `/check-code-quality` if not already done. Do not submit a PR that hasn't passed the quality gate.
-
-Check the issue history for context (run `devwatch issue-history --help` for all options):
-```bash
-devwatch --repo "$REPO" issue-history <ISSUE>
-```
-
-## Intelligence (what you decide)
-
-1. Review the diff: `git diff --stat` and `git diff`. Check: no secrets, no debug logs.
-2. Write a commit message: conventional prefix, explains the WHY.
-3. Write a PR summary: what changed and how to verify.
-4. Fold in the workflow's reviewer notes (PR body). Resolve the workflow id and read its accumulated step notes:
-
-   ```bash
-   WORKFLOW_ID=$(devwatch --repo "$REPO" workflow-get --issue <ISSUE> | jq -r '.id')
-   devwatch --repo "$REPO" get-report --workflow "$WORKFLOW_ID"
-   ```
-
-   `get-report` prints a category-grouped digest (`### Risks` / `### Decisions` / `### Follow-ups`) assembled from the notes earlier agents recorded, or nothing when there are no notes. When the digest is non-empty **and** this issue opens a standalone PR (no epic ancestor — an epic member merges into the integration branch with no PR; see **Member behaviour** below), append it to your `--summary` under a `## Reviewer notes` heading so it lands in the PR body. Omit the section entirely when the digest is empty, and skip it on the epic-member merge path — the workflow ship PR carries the digest via `/submit-epic-pr`. The digest is earlier agents' prose, so the GitHub-writing rules in **Execution** below apply to it: strip banned tokens and personal data before embedding. It is also why `--summary` goes through a quoted heredoc in **Execution** — the digest is prose you did not write and cannot sanitise by reading, and it routinely carries the backticks and `$` a hand-quoted string would execute.
-5. Choose labels: area labels (`area:backend`, `area:frontend`, etc.). Labels are best-effort — the CLI retries without them if they don't exist in the target repo.
-
-## Execution
-
-1. Apply the GitHub-writing rules from the mandatory-reads block (banned tokens, no personal data, per-artifact skeletons) to every title, body, and comment below.
-
-2. Emit the run report (advisory — a failed post must never fail the step). Write the fixed JSON skeleton, filling `notes` with PR facts reviewers should follow up on (`follow_up`) and any risk in this PR to watch (`risk`). Use an empty array (`[]`) when there is nothing worth recording. Post it **before** `submit-pr` below so the report exists when completion hooks fire.
-
-```bash
-cat > /tmp/devwatch-report-<ISSUE>.json <<'JSON'
-{
-  "schema_version": 1,
-  "notes": [
-    {"category": "follow_up", "text": "<anything reviewers should follow up after merge>"},
-    {"category": "risk", "text": "<a risk in this PR reviewers should watch>"}
-  ]
-}
-JSON
-
-devwatch --repo "$REPO" agent-report \
-  --run-id <RUN_ID> \
-  --file /tmp/devwatch-report-<ISSUE>.json \
-  || echo "  agent-report failed (advisory) — continuing"
-```
-Omit `--run-id` if RUN_ID is unavailable — the run is resolved from `DEVWATCH_AGENT_RUN_ID` instead.
-
-3. Submit the PR. The commit message and the summary are both your own prose — pass each through a **quoted heredoc** so it survives verbatim; an apostrophe or a `$` in a hand-quoted string is eaten by the shell, and a backtick is executed as a command:
-
-```bash
-MESSAGE=$(cat <<'MESSAGE_EOF'
-<your commit message>
-MESSAGE_EOF
-)
-
-SUMMARY=$(cat <<'SUMMARY_EOF'
-<your PR summary, plus the `## Reviewer notes` section when the digest is non-empty>
-SUMMARY_EOF
-)
-
-devwatch --repo "$REPO" submit-pr \
-  --message "$MESSAGE" \
-  --summary "$SUMMARY" \
-  --label "<label1>" --label "<label2>" \
-  --run-id <RUN_ID>
-```
-
-Omit `--run-id` if no RUN_ID was parsed from arguments.
-
-The CLI handles everything deterministically: branch detection, commit, push, PR creation, sync.
-
-### PR body auto-close contract
-
-The CLI prepends `Closes #<issue>` as the first line of the rendered PR body so GitHub auto-closes the linked issue on merge. Do **not** put `Closes #N` (or `Fixes` / `Resolves` variants) in `--message` — that lands in the PR title, where GitHub ignores it. Keep the magic word in the body, where the CLI puts it.
-
-## Workflow-rooted ship
-
-When the current issue is the root of a workflow (i.e. the workflow's `root_issue_number` equals this issue), the dashboard's Submit Workflow button and the `submit-workflow-pr` action route to the ship-PR backend (`devwatch submit-epic-pr <root> --workflow-id <id>`), not a per-member PR. The routing is driven by `workflows.root_issue_number` on the backend — there is no "step 1 is the epic" heuristic, and the root need not carry the `epic` label: a one-member plain-issue workflow ships the same way as a multi-member epic (#2666). For a member of a workflow, `/submit-pr` performs the local merge into the integration branch as described in the framework's pipeline; only the final ship PR goes through `submit-epic-pr`.
-
-### Member behaviour
-
-Every workflow runs the one integration-branch path (#2666): the member branch is merged locally into `epic/<root>-<slug>` and the member issue is **closed immediately** (short comment linking the merge commit). No per-member GitHub PR is opened. The ship PR runs CI once, for the whole integration branch.
-
-This path skips `gh pr create` — only the ship PR opens later via `submit-epic-pr` (one PR from `epic/<root>-<slug>` to the base branch).
-
-## Boundary
-
-This command does NOT merge the PR. Report the PR URL and stop.
+A `halt_reason` is read by a person deciding what to do next, so write it as
+the blocker in words they can act on — not as an error string. Never leave the
+unit `running`: a step that stops without settling is indistinguishable from
+one still in flight.

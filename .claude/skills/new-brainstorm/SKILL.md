@@ -1,104 +1,188 @@
 ---
-description: "Open a brainstorming session — an untracked folder under the project's brainstorm tree at <DD-MM-YY>/<slug>/ with a frontmatter README. Optionally pre-link it to an issue."
-capability: core
+name: new-brainstorm
+description: Open a brainstorming session — the pre-issue thinking space — and write the notes and the summary it exists to hold.
+family: writing
 ---
+Open a brainstorming session — the space the thinking happens in before there
+is an issue to file.
 
-Create a brainstorming session folder. Stop.
+A session is a page holding a summary, with one note per sub-topic of the
+thinking connected to it. On disk it is a `README.md`, a file per note beside
+it, and a `mockups/` folder. It is scratch: nothing here is committed, pushed
+or staged, and no branch carries it. That is the point — it is the thinking that produces
+the issues, not a change to the code.
 
-A brainstorming session is the pre-issue thinking space — the "why" that produced a feature or epic. It lives on disk under the project's configured brainstorm tree (`brainstorming.root`) at `<DD-MM-YY>/<slug>/` with a mandatory `README.md` carrying frontmatter (title, status, linked_issues). The brainstorm tree is a plain sibling folder, never git-tracked. The session is a folder so it can hold many files and subfolders as the thinking grows.
+The directory belongs to the mirror. Every file at the session's root is
+written out from what the app holds, and folder sync under the declared folder
+reads one put there by hand back the other way — as one of the session's own
+notes, named by the `# ` title you wrote at the top of it, on whatever pass
+comes next rather than now. A file whose directory answers with no session is
+left where it is and reported rather than read in as a page belonging to
+nothing, so a write that cannot join the session does not quietly land beside
+it. The call in step 5 writes the same note without the wait and without the
+pass, which is why the thinking goes in through it.
+`mockups/` is the one directory an agent writes into. No sync reads a file there
+back into the graph, so nothing you put in it becomes a page; the app lists the
+folder on the session and opens a file from it as a tab (#3406).
 
-This command only creates the scaffold. It does NOT open an issue. Use `/new-feature --from-brainstorm <session>` (or `/new-bug --from-brainstorm <session>`) when the brainstorming converges into something actionable.
+## 1. Establish what is being thought about
 
-## Mandatory reads — do this first
+The question or the pain that started this, and the rough shape of what it
+might produce — one feature, an epic, or an idea that gets dropped. If none of
+that can be said yet, there is nothing to open a session for; say so.
 
-Run:
+## 2. Name it
 
-    devwatch --repo "$REPO" doc-read --skill new-brainstorm --display
+Short, plain, and about the topic rather than the conclusion — the name
+becomes the folder on disk, so a name a reader would scan for is one they can
+also find. Name it for what is being worked out, not for the answer you expect
+to arrive at.
 
-The output contains every doc you must read; treat it as if you opened each file directly. Do not proceed with the skill body until done.
+## 3. Open it
 
-## Parse arguments
+`open_brainstorm_session` with that name. Opening is safe to repeat: the same
+name on the same day resolves the session already open rather than making a
+second one, so a session you are returning to is reached the same way it was
+started.
 
-Extract slug and optional flags from `$ARGUMENTS`:
-- `$ARGUMENTS` = `"dark-mode-rollout"` -> SLUG="dark-mode-rollout", EPIC=(none), ISSUE=(none), DESCRIPTION=(none)
-- `$ARGUMENTS` = `"dark-mode-rollout --description 'figure out theming primitives'"` -> SLUG="dark-mode-rollout", DESCRIPTION="figure out theming primitives"
-- `$ARGUMENTS` = `"dark-mode-rollout --epic 1234"` -> EPIC=1234 (pre-link to epic #1234)
-- `$ARGUMENTS` = `"dark-mode-rollout --issue 1234"` -> ISSUE=1234 (pre-link to feature #1234)
-- `$ARGUMENTS` = `"dark-mode-rollout --body-file /tmp/devwatch-brainstorm-body-XXX.json"` -> BODY_FILE="/tmp/..."
+It answers with the session's `summary_page_uuid`, the `directory` it was
+written into, and the `mockups_directory` beside it. A project that has already
+declared a brainstorm folder answers with both paths on this first call, and
+step 4 has nothing to do.
 
-`--epic` and `--issue` are mutually exclusive — a session pre-links to at most one issue at creation time. Use `/link-brainstorm <session> <issue>` later to add more.
+An `error` of `unresolved` is the one answer that opened nothing: whether a
+session already exists for this name today could not be settled, so opening
+would have made a second one for a topic that may already have had one. Do not
+call it again — the answer will be the same. Reach the session with
+`list_brainstorm_sessions`, which lists every session the project holds rather
+than only today's, and work in the one it names. If it lists nothing, say so to
+the person and stop: something the app reads is failing, and thinking written
+anywhere now is thinking written twice.
 
-SLUG must be kebab-case (`[a-z0-9-]+`). The CLI rejects anything else.
+## 4. Declare the folder, if the project has none
 
-**If `--body-file <PATH>` is present:** read the file with your Read tool — it is a JSON object with `{title, body}` keys. Use those as the starter README's title and body. Do NOT paste the file contents into Bash; read it with the Read tool.
+Both paths are null when the project has declared no brainstorm folder. The
+session is open in the graph, but nothing is on disk — so the thinking is
+written where nobody can open it, and no mockup can be put anywhere.
 
-## Detect repo
+Ask the person which folder this project's sessions live in. Once, and with a
+default they can accept in a word: `~/Brainstorms/<project name>`. Do not pick
+one for them and do not derive one from a folder the project happens to
+watch — it is where their thinking will live, and a session written under a
+path nobody agreed to is a session they will not look in.
 
-Determine the target repository from the current working directory:
+Declare their answer with `set_brainstorm_folder`, then call
+`open_brainstorm_session` again with the same name. The second call resolves
+the session already open rather than opening a second one, and this time it
+answers with the `directory` and the `mockups_directory` — which is what says
+the declaration took. A path that is not a directory on this machine is
+refused: say which path was refused and ask again, rather than trying another
+of your own.
 
-```bash
-REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
-```
+## 5. Write a note per sub-topic
 
-Pass `--repo "$REPO"` to every `devwatch` command to ensure the correct repo is targeted.
+`add_brainstorm_note` against the session's uuid, once per part of the
+thinking: `name` titles the note, and `content` is its body as markdown,
+written in the same call. One note per sub-topic rather than one long one —
+each is a separate thing a later conversion answers from, and each is written
+out as a file of its own in that same call — there is no mirror pass to make
+afterwards. `mirrored` says the file landed; `mirror_error` says which refusal
+it was when it did not, and the note is in the session either way.
 
-## Intelligence (what you decide)
+The notes are what the session's thinking *is*. Sub-topics written anywhere
+else do not become any of it: a session read back holds its notes, its summary
+and the entities gathered around it. A file left beside the README joins the
+session on the next sync pass rather than never, but until that pass it is
+thinking the conversion cannot see, and nothing tells you when the pass has
+run.
 
-The README is a **scaffold and index**, not a container for the whole session. It gives a reader scanning the folder a fast orientation; the detailed thinking lives in separate, topic-specific child files that grow over time. A session collapses into an unreadable wall of prose the moment the README tries to hold everything — keep it a summary that points outward.
+## 6. Write the summary
 
-1. Pick a good slug. Kebab-case, short, descriptive (`dark-mode-rollout`, not `dm` or `dark_mode`). Reflects the topic, not the conclusion.
-2. Author a starter README body as **summary + status + index**, not a body of prose:
-   - `## Summary` — one or two sentences: the question or pain that triggered the session, plus the rough shape of the expected output (single feature? epic? scrapped idea?). Weave `--description` in here if it was passed.
-   - `**Status:** draft` — a human-readable status line that mirrors the frontmatter; the human moves it forward as the session matures.
-   - `## Files` — the links/index section. A one-line note that detailed thinking lives in topic-specific files next to the README, followed by a small table listing each child file and its purpose. Seed the table with this `README.md` row plus the first child file you expect, so the convention is visible from the start.
-3. Do NOT pour the full Why / Open Questions / What's next prose into the README. As the thinking grows, write each sub-topic into its own small `.md` file inside the session folder (`open-questions.md`, `tooling.md`, `per-repo-plan.md`, …) and add a row for it under `## Files`. The README stays a short summary + index; the child files carry the detail.
-4. Non-markdown artifacts go in a subfolder, never loose in the session root — and HTML mockups have a fixed home: `<session>/mockups/<name>.html`. A mockup is pre-issue design thinking you open in a browser over a plain `file://` link; index it as a `mockups/<name>.html` row under `## Files` alongside the markdown notes. Don't hand-place it — `/mockup <slug>` resolves-or-creates the session and writes the file there. Images and diagrams the notes reference sit in their own subfolders (`diagrams/`, …) the same way.
-5. Pick a title for the frontmatter. Title-case, short — what a reader scanning a list of sessions would scan for.
+`update_page_content` against `summary_page_uuid`, its body as markdown. It
+writes the session out to disk as adding a note does, so the `README.md` holds
+what you just wrote; the same is true of rewriting a note, against that note's
+uuid. Keep it a summary: what
+triggered the session, what is still open, what would have to be true for it
+to converge — and a line per note saying what that note works out. The
+generated index lists the notes by name alone, so the narration of what each
+one holds is the summary's to carry, and it is what makes the index worth
+following. A summary that tries to hold the whole thinking instead is one
+nobody rereads.
 
-Pass the starter README content via a `--body-file` JSON file rather than `--body` on the command line so newlines round-trip cleanly:
+Name each note as a `[[Note Name]]` wiki-link, spelled exactly as you titled it
+in step 5. A link resolves by name into an edge to that note's page, so the
+summary reaches its notes in the graph rather than only mentioning them — which
+is what lets a reader arriving at the summary open the thinking it narrates,
+and what a later conversion follows. A note named in plain prose reaches
+nothing.
 
-```bash
-BODY_FILE=$(mktemp -t devwatch-brainstorm-body-XXXX.json)
-cat > "$BODY_FILE" <<'JSON'
-{
-  "title": "<title>",
-  "body": "## Summary\n\n<one or two sentences: what triggered the session and the rough shape of the output>\n\n**Status:** draft\n\n## Files\n\nDetailed thinking lives in topic-specific files next to this README — one per sub-topic, created as the thinking grows. Add each here as you create it.\n\n| File | Purpose |\n| --- | --- |\n| `README.md` | This file. Summary + status + index. |\n| `open-questions.md` | The unknowns this session needs to resolve. |\n"
-}
-JSON
-```
+A session you return to already holds a summary.
+Change some passages of an existing page with `edit_page_content`: each edit is
+an `old` passage copied exactly from the markdown body `read` returns and the
+`new` markdown that replaces it, and nothing else on the page is sent or
+rewritten. It is the only write that reaches a page too large to send back
+whole. Keep `update_page_content` for a full rewrite of a page small enough to
+send whole: it replaces the whole body with what it is given, as markdown.
+Write it from the page's current body as `read` returns it, keeping the
+headings, lists and tables it holds. Either way, change what the change calls
+for and leave every passage it does not touch exactly as it was: a house style
+(dash or arrow substitutions, re-quoting, re-wrapping) is never applied across
+a page the change did not otherwise affect.
 
-## Execution
+## 7. Report where it is
 
-```bash
-devwatch --repo "$REPO" new-brainstorm "$SLUG" \
-  --body-file "$BODY_FILE" \
-  [--epic $EPIC | --issue $ISSUE]
-```
+Name the directory so it can be opened. Then stop — a session is not an issue,
+and the thinking is not finished the moment it is written down. Filing a
+feature or a bug from it is a separate act, taken once the thinking converges.
 
-Add `--epic <N>` OR `--issue <N>` only if the user passed one (never both — they are mutually exclusive). The CLI:
+## Reporting back
 
-- Creates `<DD-MM-YY>/<SLUG>/README.md` under the project's resolved brainstorm tree (`brainstorming.root`), with frontmatter (title, status=draft, linked_issues=[N] when pre-linked, else `[]`). It prints the absolute folder path.
-- When `--epic` or `--issue` is set, appends a `brainstorm: documentation/project/brainstorming/<DD-MM-YY>/<SLUG>` line under the issue body's `Links:` block. This is the stable label form (decoupled from the physical location), so moving the tree out of the repo never rewrites the body links.
-- Fails cleanly if the folder already exists — overwriting a session is never an accident.
+You are invoked either on demand — by a person who already knows what they want
+— or as one step of a run. The two report back differently, so establish which
+before doing anything.
 
-Delete the body-file after the CLI succeeds:
+Call `worklist_claim_item` with no arguments.
 
-```bash
-rm -f "$BODY_FILE"
-```
+- `no_anchor` — you were invoked on demand. There is no unit to settle: do the
+  work above, then report what you produced to the person who asked, naming it
+  by issue number or path so they can open it.
+- `claimed: true` — you are a step of a run. Do the work above against the
+  claimed item's `title` and `attachments`, then settle with
+  `worklist_set_item_status` and the item's `item_uuid`: `passed` when the step
+  did what it says, `failed` with a `halt_reason` when it did not, and
+  `skipped` when the question no longer exists. A step that decided its work
+  fails says so with the reason, never with `passed`.
+- `claimed: false` with `already_running` — another session has it. Stop.
 
-## The session is scratch — never git-tracked
+A claimed step whose work stops for the person's decision — a proposal they
+must approve, a choice only they can make — does not settle at the pause. Call
+`worklist_set_item_status` with the `item_uuid`, `status: "waiting"` and a
+`question`: one line saying what the person must decide. That settles nothing:
+the step stays open and yours, and the run shows them the question. Once they
+have answered, do what the answer asks, then settle — never `passed` at the
+pause, which reads the step done before they have decided anything.
 
-The brainstorm tree is a plain sibling folder, not part of any code repo. The CLI wrote the session under the project's configured `brainstorming.root` (an untracked location outside the code tree). **Do NOT commit, push, or `git add` anything** — there is no branch to put it on and nothing to track. The session stays on disk as scratch; the dashboard brainstorm primitive scans the folder directly (no git involved).
+A `skipped` settle also says what became of this step's work, as an `outcome`
+with that outcome's evidence. A skip naming none is refused, and so is one
+whose outcome has nothing behind it: you are the only one who knows, and a bare
+skip leaves every reader after you guessing which of the three it was.
 
-Take no git action here. The CLI already printed the absolute session folder — use that path when you report back.
+- `already_delivered` — the work is already done, in this repository or
+  another. Give `references`, one per place it landed: a commit as
+  `owner/name@sha`, a pull request or issue as `owner/name#123`. Each must
+  already be on its repository's development branch, or, in this run's own
+  repository, on the run's integration branch when it has one: a commit
+  reachable from it, a pull request merged into it, an issue closed by a change
+  merged there. Work that sits on an unmerged branch is not delivered, and a
+  reference to it is refused by name. It is the one outcome that says
+  something shipped, and a run reads it to know this step delivered even
+  though nothing landed on its own branch.
+- `left_out` — the run decided not to do this work. Give `outcome_reason`, one
+  line saying why.
+- `not_needed` — the question turned out not to exist. Give `outcome_reason`,
+  one line saying why.
 
-## Boundary
-
-This command creates the session scaffold under the project's brainstorm tree and takes **no git action** — the brainstorm folder is untracked scratch. It does NOT open an issue and does NOT write code. Report the absolute session path (the folder the CLI printed) and ask: *"Want to expand it? Keep `<path>/README.md` a short summary + index, and push detailed thinking into topic-specific files next to it (`open-questions.md`, …), linking each under `## Files`. When the thinking converges, run `/new-feature --from-brainstorm <session>` (or `/new-bug --from-brainstorm <session>`)."*
-
-When you launched from a `--body-file`, delete the file after `devwatch new-brainstorm` succeeds:
-
-```bash
-rm -f "$BODY_FILE"
-```
+A `halt_reason` is read by a person deciding what to do next, so write it as
+the blocker in words they can act on, not as an error string. Never leave a
+claimed unit `running`: a step that stops without settling is
+indistinguishable from one still in flight.
