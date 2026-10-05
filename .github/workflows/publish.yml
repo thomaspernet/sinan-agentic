@@ -1,9 +1,15 @@
 name: Publish
 
 # A published, non-prerelease GitHub release tagged vX.Y.Z on main is what ships
-# the package to PyPI. Upload goes through PyPI Trusted Publishing (OIDC): the
-# publish job exchanges a short-lived GitHub token for an upload credential, so
-# no PyPI token is stored in the repository.
+# the package to PyPI. CI (tests and lint, from ci.yml) runs on the released
+# commit first, and nothing is built or uploaded unless it passes. Upload goes
+# through PyPI Trusted Publishing (OIDC): the publish job exchanges a
+# short-lived GitHub token for an upload credential, so no PyPI token is stored
+# in the repository.
+#
+# When CI fails here, the GitHub release still exists but nothing reaches PyPI.
+# To recover: fix the commit on dev, bump the patch version, promote, and
+# release again under the new tag.
 on:
   release:
     types: [published]
@@ -12,8 +18,14 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  # Prereleases are skipped here, and build and publish, which need this job,
+  # are skipped with it.
+  ci:
     if: ${{ !github.event.release.prerelease }}
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

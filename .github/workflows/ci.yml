@@ -5,9 +5,13 @@ on:
     branches: [dev, main]
   push:
     branches: [dev, main]
+  # Publish calls this workflow on the released commit before it builds.
+  workflow_call:
 
 # Cancel in-flight runs on the same branch when a new commit lands —
-# pre-merge runs are wasted compute once the branch moves.
+# pre-merge runs are wasted compute once the branch moves. Called from Publish,
+# the group resolves to ci-Publish-refs/tags/vX.Y.Z, so a release gate and a
+# branch run never cancel each other.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
