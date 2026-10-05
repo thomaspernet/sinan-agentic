@@ -33,7 +33,7 @@ A framework for building AI agents using the OpenAI Agents SDK. Fork this reposi
 ## Installation
 
 ```bash
-pip install git+https://github.com/thomaspernet/sinan-agentic.git
+pip install sinan-agentic-core
 export OPENAI_API_KEY="your-key"
 ```
 
@@ -582,7 +582,6 @@ Requires the `mcp` extra:
 
 ```bash
 pip install 'sinan-agentic-core[mcp]'
-# or: pip install git+https://github.com/thomaspernet/sinan-agentic.git#egg=sinan-agentic-core[mcp]
 ```
 
 ### YAML configuration

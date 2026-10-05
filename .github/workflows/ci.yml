@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [dev, master-staging, main]
+    branches: [dev, main]
   push:
-    branches: [dev, master-staging, main]
+    branches: [dev, main]
 
 # Cancel in-flight runs on the same branch when a new commit lands —
 # pre-merge runs are wasted compute once the branch moves.
