@@ -39,7 +39,7 @@ classifiers = [
 # ceiling is the major this package is written and tested against; raising it
 # is a deliberate change, made against a suite that runs on the new major.
 dependencies = [
-    "openai-agents>=0.21.1,<0.23",  # OpenAI Agents SDK — >=0.21.1 carries ModelSettings.timeout
+    "openai-agents>=0.21.1,<0.24",  # OpenAI Agents SDK — >=0.21.1 carries ModelSettings.timeout
     # The three ranges below match the ones openai-agents declares for itself.
     # They are shared dependencies: resolving openai-agents already forces them
     # on every consumer, so a wider range here would only describe a combination
