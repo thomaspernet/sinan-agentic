@@ -7,9 +7,18 @@ name: Publish
 # short-lived GitHub token for an upload credential, so no PyPI token is stored
 # in the repository.
 #
-# When CI fails here, the GitHub release still exists but nothing reaches PyPI.
-# To recover: fix the commit on dev, bump the patch version, promote, and
-# release again under the new tag.
+# The tag is the version. setuptools-scm reads vX.Y.Z off the released commit
+# when the package is built, so the release ships sinan-agentic-core==X.Y.Z and
+# no version string is edited by hand at any point.
+#
+# When a run fails, the GitHub release still exists but nothing reaches PyPI.
+# To recover:
+# - a transient failure (a runner, the network, PyPI itself): re-run the failed
+#   jobs of this workflow from the Actions tab — the tag and the version it
+#   yields are unchanged, so the same package is built and uploaded.
+# - a failure in the code (CI red on the released commit): fix it on dev,
+#   promote, and publish a new release under the next patch tag. Do not move
+#   the old tag; delete its GitHub release so it is not left marked Latest.
 on:
   release:
     types: [published]
@@ -28,24 +37,16 @@ jobs:
     needs: ci
     runs-on: ubuntu-latest
     steps:
+      # setuptools-scm derives the version from the release tag, so the
+      # checkout carries the full history and its tags.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
-      # PyPI never accepts the same version twice, so a tag that disagrees with
-      # the version being built stops here, before anything is uploaded.
-      - name: Check the release tag matches the package version
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
-          if [ "$RELEASE_TAG" != "v$version" ]; then
-            echo "::error::Release tag '$RELEASE_TAG' does not match pyproject.toml version 'v$version'"
-            exit 1
-          fi
 
       - name: Build sdist and wheel
         run: |

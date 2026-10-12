@@ -1,10 +1,12 @@
 [build-system]
-requires = ["setuptools>=77.0", "wheel"]
+requires = ["setuptools>=77.0", "setuptools-scm>=8", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "sinan-agentic-core"
-version = "0.16.1"
+# The release tag is the version: setuptools-scm reads ``vX.Y.Z`` off the tagged
+# commit at build time, so there is no version string here to bump or to drift.
+dynamic = ["version"]
 description = "State-of-the-art framework for building AI agents with OpenAI Agents SDK"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -67,6 +69,8 @@ dev = [
     "mypy>=1.0",
     "mcp>=1.19.0,<2",
     "types-PyYAML>=6.0",
+    # Run by ``tests/test_release_version.py`` to read the version a tag yields.
+    "setuptools-scm>=8",
     # The transport ``openai`` is built on. ``tests/conftest.py`` constructs the
     # ``httpx2.Request``/``Response`` pair ``APIStatusError`` reads back, so the
     # suite imports it directly and cannot rely on reaching it as a transitive:
@@ -88,6 +92,8 @@ exclude = ["workflows_core*", "tests*"]
 
 [tool.setuptools.package-data]
 sinan_agentic_core = ["py.typed"]
+
+[tool.setuptools_scm]
 
 [tool.black]
 line-length = 100
