@@ -9,7 +9,11 @@ name: Publish
 #
 # The tag is the version. setuptools-scm reads vX.Y.Z off the released commit
 # when the package is built, so the release ships sinan-agentic-core==X.Y.Z and
-# no version string is edited by hand at any point.
+# no version string is edited by hand at any point. Should setuptools-scm miss
+# the tag it falls back to a development version instead of failing, so the
+# build job reads the version back out of the built wheel and sdist and stops,
+# before anything is uploaded, unless it is the tag without its leading v
+# (.github/scripts/check_dist_version.py).
 #
 # When a run fails, the GitHub release still exists but nothing reaches PyPI.
 # To recover:
@@ -52,6 +56,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip build twine
           python -m build
+
+      # A version uploaded to PyPI can never be replaced, so a build that does
+      # not carry the release tag's version stops here, before anything is
+      # uploaded.
+      - name: Check the built version matches the release tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: python .github/scripts/check_dist_version.py "$RELEASE_TAG" dist/
 
       - name: Check distribution metadata
         run: twine check --strict dist/*
